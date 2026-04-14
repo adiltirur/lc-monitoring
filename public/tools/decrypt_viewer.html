@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Guest Appointment Decryptor</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; color: #333; }
+    .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
+    h1 { font-size: 22px; font-weight: 600; margin-bottom: 24px; color: #1a1a2e; }
+
+    .setup-card {
+      background: white;
+      border-radius: 12px;
+      padding: 24px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      margin-bottom: 16px;
+      display: flex;
+      gap: 20px;
+      align-items: flex-end;
+      flex-wrap: wrap;
+    }
+
+    .field { display: flex; flex-direction: column; gap: 6px; }
+    .field label { font-size: 12px; font-weight: 600; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+
+    .drop-zone {
+      width: 280px;
+      height: 80px;
+      border: 2px dashed #ccc;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      font-size: 14px;
+      color: #888;
+      text-align: center;
+      padding: 8px;
+    }
+    .drop-zone:hover, .drop-zone.drag-over { border-color: #4f46e5; background: #f0f0ff; color: #4f46e5; }
+    .drop-zone.loaded { border-color: #16a34a; background: #f0fdf4; color: #16a34a; }
+
+    .key-input {
+      width: 340px;
+      height: 40px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 0 12px;
+      font-size: 14px;
+      font-family: monospace;
+      letter-spacing: 1px;
+    }
+    .key-input:focus { outline: none; border-color: #4f46e5; }
+
+    .key-counter { font-size: 11px; color: #999; margin-top: 2px; }
+    .key-counter.valid { color: #16a34a; }
+    .key-counter.invalid { color: #dc2626; }
+
+    .btn {
+      height: 40px;
+      padding: 0 20px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s, opacity 0.2s;
+    }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary { background: #4f46e5; color: white; }
+    .btn-primary:hover:not(:disabled) { background: #4338ca; }
+    .btn-export { background: #16a34a; color: white; }
+    .btn-export:hover:not(:disabled) { background: #15803d; }
+
+    /* Stats bar */
+    .stats-bar {
+      display: none;
+      gap: 12px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    .stat-card {
+      background: white;
+      border-radius: 10px;
+      padding: 14px 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.07);
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 140px;
+    }
+    .stat-label { font-size: 11px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.4px; }
+    .stat-value { font-size: 26px; font-weight: 700; color: #1a1a2e; }
+    .stat-sub { font-size: 12px; color: #aaa; }
+    .stat-card.green .stat-value { color: #16a34a; }
+    .stat-card.red .stat-value { color: #dc2626; }
+    .stat-card.blue .stat-value { color: #4f46e5; }
+    .stat-card.orange .stat-value { color: #d97706; }
+
+    /* Export panel */
+    .export-panel {
+      display: none;
+      background: white;
+      border-radius: 12px;
+      padding: 20px 24px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      margin-bottom: 16px;
+    }
+    .export-panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .export-panel-header h3 { font-size: 14px; font-weight: 700; color: #333; }
+    .col-groups { display: flex; gap: 32px; flex-wrap: wrap; }
+    .col-group h4 { font-size: 11px; font-weight: 700; color: #999; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 8px; }
+    .col-checkboxes { display: flex; flex-direction: column; gap: 6px; }
+    .col-check {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .col-check input[type=checkbox] { width: 15px; height: 15px; cursor: pointer; accent-color: #4f46e5; }
+    .badge-dec {
+      display: inline-block;
+      font-size: 9px;
+      font-weight: 700;
+      background: #4f46e5;
+      color: white;
+      border-radius: 3px;
+      padding: 1px 4px;
+      margin-left: 4px;
+      vertical-align: middle;
+      text-transform: uppercase;
+    }
+    .export-actions { display: flex; gap: 10px; align-items: center; margin-top: 16px; }
+    .link-btn { font-size: 13px; color: #4f46e5; background: none; border: none; cursor: pointer; text-decoration: underline; }
+
+    .status-bar {
+      display: none;
+      background: white;
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-bottom: 16px;
+      font-size: 14px;
+      border-left: 4px solid #4f46e5;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }
+    .status-bar.error { border-left-color: #dc2626; color: #dc2626; }
+    .status-bar.success { border-left-color: #16a34a; }
+
+    .search-bar {
+      background: white;
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-bottom: 16px;
+      display: none;
+      align-items: center;
+      gap: 12px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }
+    .search-bar input {
+      flex: 1;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 14px;
+    }
+    .search-bar input:focus { outline: none; border-color: #4f46e5; }
+    .row-count { font-size: 13px; color: #888; white-space: nowrap; }
+
+    .table-wrap {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      overflow: auto;
+      display: none;
+      max-height: 600px;
+    }
+
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th {
+      background: #f8f9fa;
+      padding: 10px 12px;
+      text-align: left;
+      font-size: 11px;
+      font-weight: 700;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      border-bottom: 2px solid #e5e7eb;
+      white-space: nowrap;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      cursor: pointer;
+      user-select: none;
+    }
+    th:hover { background: #eef0f3; }
+    th.sort-asc::after { content: ' ↑'; }
+    th.sort-desc::after { content: ' ↓'; }
+
+    td {
+      padding: 8px 12px;
+      border-bottom: 1px solid #f0f0f0;
+      max-width: 220px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    tr:hover td { background: #fafafe; }
+    tr:last-child td { border-bottom: none; }
+
+    td.decrypted { color: #1a6b3c; font-weight: 500; }
+    td.failed { color: #dc2626; font-style: italic; }
+    td.empty { color: #bbb; }
+
+    input[type="file"] { display: none; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>Guest Appointment Decryptor</h1>
+
+  <!-- Setup -->
+  <div class="setup-card">
+    <div class="field">
+      <label>CSV File</label>
+      <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+        Drop CSV here or click to browse
+      </div>
+      <input type="file" id="fileInput" accept=".csv">
+    </div>
+
+    <div class="field">
+      <label>Encryption Key (32 chars)</label>
+      <input type="password" class="key-input" id="keyInput" placeholder="Enter 32-character key" maxlength="64">
+      <span class="key-counter" id="keyCounter">0 / 32</span>
+    </div>
+
+    <div class="field">
+      <button class="btn btn-primary" id="decryptBtn" disabled>Decrypt</button>
+    </div>
+  </div>
+
+  <!-- Status -->
+  <div class="status-bar" id="statusBar"></div>
+
+  <!-- Stats -->
+  <div class="stats-bar" id="statsBar">
+    <div class="stat-card blue">
+      <span class="stat-label">Total Rows</span>
+      <span class="stat-value" id="statTotal">0</span>
+    </div>
+    <div class="stat-card green">
+      <span class="stat-label">Decrypted OK</span>
+      <span class="stat-value" id="statSuccess">0</span>
+    </div>
+    <div class="stat-card green">
+      <span class="stat-label">Email Present</span>
+      <span class="stat-value" id="statEmailPresent">0</span>
+      <span class="stat-sub" id="statEmailPresentPct"></span>
+    </div>
+    <div class="stat-card red">
+      <span class="stat-label">Email Empty</span>
+      <span class="stat-value" id="statEmailEmpty">0</span>
+      <span class="stat-sub" id="statEmailEmptyPct"></span>
+    </div>
+    <div class="stat-card orange">
+      <span class="stat-label">No Encrypted Data</span>
+      <span class="stat-value" id="statNoEnc">0</span>
+    </div>
+    <div class="stat-card red">
+      <span class="stat-label">Decrypt Failed</span>
+      <span class="stat-value" id="statFailed">0</span>
+    </div>
+  </div>
+
+  <!-- Export Panel -->
+  <div class="export-panel" id="exportPanel">
+    <div class="export-panel-header">
+      <h3>Export Options — choose columns</h3>
+    </div>
+    <div class="col-groups">
+      <div class="col-group">
+        <h4>Original Columns</h4>
+        <div class="col-checkboxes" id="origColChecks"></div>
+      </div>
+      <div class="col-group">
+        <h4>Decrypted Fields</h4>
+        <div class="col-checkboxes" id="decColChecks"></div>
+      </div>
+    </div>
+    <div class="export-actions">
+      <button class="btn btn-export" id="exportBtn">Download CSV</button>
+      <button class="link-btn" id="selectAllBtn">Select all</button>
+      <button class="link-btn" id="selectNoneBtn">Deselect all</button>
+      <button class="link-btn" id="selectDecOnly">Decrypted fields only</button>
+    </div>
+  </div>
+
+  <!-- Search -->
+  <div class="search-bar" id="searchBar">
+    <input type="text" id="searchInput" placeholder="Search any column...">
+    <span class="row-count" id="rowCount"></span>
+  </div>
+
+  <!-- Table -->
+  <div class="table-wrap" id="tableWrap">
+    <table id="dataTable">
+      <thead id="tableHead"></thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+  let parsedRows = [];
+  let allRows = [];
+  let csvFileName = '';
+  let sortCol = -1;
+  let sortDir = 1;
+
+  const DEC_FIELDS  = ['_firstName','_lastName','_email_dec','_phoneNumber','_dob','_gender'];
+  const DEC_LABELS  = ['firstName','lastName','email (decrypted)','phoneNumber','dob','gender'];
+  const DEC_EXPORTS = ['firstName','lastName','email_dec','phoneNumber','dob','gender'];
+
+  const DE_TZ = 'Europe/Berlin';
+  const TIME_COLS = ['createdAt', 'modifiedAt', 'startTime'];
+
+  function toGermanTime(val) {
+    if (!val || !val.trim()) return val;
+    const d = new Date(val.trim());
+    if (isNaN(d.getTime())) return val;
+    return new Intl.DateTimeFormat('de-DE', {
+      timeZone: DE_TZ,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false,
+    }).format(d).replace(',', '');
+  }
+
+  // ─── Drag & Drop ────────────────────────────────────────────
+  const dropZone = document.getElementById('dropZone');
+  const fileInput = document.getElementById('fileInput');
+
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    handleFile(e.dataTransfer.files[0]);
+  });
+  fileInput.addEventListener('change', e => handleFile(e.target.files[0]));
+
+  function handleFile(file) {
+    if (!file) return;
+    csvFileName = file.name;
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: result => {
+        parsedRows = result.data;
+        dropZone.textContent = `✓ ${file.name} (${parsedRows.length} rows)`;
+        dropZone.classList.add('loaded');
+        updateDecryptBtn();
+      }
+    });
+  }
+
+  // ─── Key input ───────────────────────────────────────────────
+  const keyInput = document.getElementById('keyInput');
+  const keyCounter = document.getElementById('keyCounter');
+
+  keyInput.addEventListener('input', () => {
+    const len = keyInput.value.length;
+    keyCounter.textContent = `${len} / 32`;
+    keyCounter.className = 'key-counter' + (len === 32 ? ' valid' : len > 32 ? ' invalid' : '');
+    updateDecryptBtn();
+  });
+
+  function updateDecryptBtn() {
+    document.getElementById('decryptBtn').disabled = !(parsedRows.length > 0 && keyInput.value.length === 32);
+  }
+
+  // ─── Decryption ───────────────────────────────────────────────
+  async function importKey(keyStr) {
+    const keyBytes = new TextEncoder().encode(keyStr);
+    return crypto.subtle.importKey('raw', keyBytes, { name: 'AES-CBC' }, false, ['decrypt']);
+  }
+
+  function base64urlToBytes(b64url) {
+    let b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4 !== 0) b64 += '=';
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  }
+
+  async function decryptValue(cryptoKey, encryptedText) {
+    const raw = base64urlToBytes(encryptedText.trim());
+    const iv = raw.length >= 32 ? raw.slice(0, 16) : new Uint8Array(16);
+    const ciphertext = raw.length >= 32 ? raw.slice(16) : raw;
+    const decrypted = await crypto.subtle.decrypt({ name: 'AES-CBC', iv }, cryptoKey, ciphertext);
+    return new TextDecoder().decode(decrypted);
+  }
+
+  // ─── Main decrypt ─────────────────────────────────────────────
+  document.getElementById('decryptBtn').addEventListener('click', async () => {
+    const statusBar = document.getElementById('statusBar');
+    statusBar.className = 'status-bar';
+    statusBar.style.display = 'block';
+    statusBar.textContent = 'Decrypting...';
+
+    let cryptoKey;
+    try {
+      cryptoKey = await importKey(keyInput.value);
+    } catch (e) {
+      statusBar.className = 'status-bar error';
+      statusBar.textContent = 'Failed to import key: ' + e.message;
+      return;
+    }
+
+    let success = 0, failed = 0, noEnc = 0, emailPresent = 0, emailEmpty = 0;
+    allRows = [];
+
+    for (const row of parsedRows) {
+      const enc = row['encryptedUserInfo'];
+      const newRow = { ...row, _firstName: '', _lastName: '', _email_dec: '', _phoneNumber: '', _dob: '', _gender: '', _status: 'empty' };
+
+      if (enc && enc.trim()) {
+        try {
+          const json = await decryptValue(cryptoKey, enc);
+          const obj = JSON.parse(json);
+          newRow._firstName    = obj.firstName    || obj.first_name    || '';
+          newRow._lastName     = obj.lastName     || obj.last_name     || '';
+          newRow._email_dec    = obj.email        || '';
+          newRow._phoneNumber  = obj.phoneNumber  || obj.phone_number  || obj.phone || '';
+          newRow._dob          = obj.dob          || obj.dateOfBirth   || obj.date_of_birth || '';
+          newRow._gender       = obj.gender       || '';
+          newRow._status       = 'ok';
+          success++;
+          if (newRow._email_dec) emailPresent++; else emailEmpty++;
+        } catch (e) {
+          newRow._status = 'failed';
+          failed++;
+        }
+      } else {
+        noEnc++;
+      }
+      allRows.push(newRow);
+    }
+
+    statusBar.className = 'status-bar success';
+    statusBar.textContent = `Decrypted ${success} rows successfully.${failed > 0 ? ' ' + failed + ' failed.' : ''}${noEnc > 0 ? ' ' + noEnc + ' had no encrypted data.' : ''}`;
+
+    renderStats(success, failed, noEnc, emailPresent, emailEmpty);
+    buildExportPanel();
+    renderTable(allRows);
+
+    document.getElementById('searchBar').style.display = 'flex';
+    document.getElementById('searchInput').value = '';
+  });
+
+  // ─── Stats ────────────────────────────────────────────────────
+  function renderStats(success, failed, noEnc, emailPresent, emailEmpty) {
+    const total = allRows.length;
+    const pct = n => total > 0 ? Math.round(n / total * 100) + '%' : '';
+    document.getElementById('statTotal').textContent        = total;
+    document.getElementById('statSuccess').textContent      = success;
+    document.getElementById('statEmailPresent').textContent = emailPresent;
+    document.getElementById('statEmailEmpty').textContent   = emailEmpty;
+    document.getElementById('statNoEnc').textContent        = noEnc;
+    document.getElementById('statFailed').textContent       = failed;
+    document.getElementById('statEmailPresentPct').textContent = pct(emailPresent) + ' of total';
+    document.getElementById('statEmailEmptyPct').textContent   = pct(emailEmpty)   + ' of total';
+    document.getElementById('statsBar').style.display = 'flex';
+  }
+
+  // ─── Export Panel ─────────────────────────────────────────────
+  function origCols() {
+    return parsedRows.length > 0 ? Object.keys(parsedRows[0]).filter(k => k !== 'encryptedUserInfo') : [];
+  }
+
+  function buildExportPanel() {
+    const origDiv = document.getElementById('origColChecks');
+    const decDiv  = document.getElementById('decColChecks');
+    origDiv.innerHTML = '';
+    decDiv.innerHTML  = '';
+
+    origCols().forEach(col => {
+      origDiv.appendChild(makeCheck('orig_' + col, col, true));
+    });
+
+    DEC_LABELS.forEach((label, i) => {
+      const el = makeCheck('dec_' + i, label, true);
+      el.querySelector('span').innerHTML += '<span class="badge-dec">NEW</span>';
+      decDiv.appendChild(el);
+    });
+
+    document.getElementById('exportPanel').style.display = 'block';
+  }
+
+  function makeCheck(id, label, checked) {
+    const wrap = document.createElement('label');
+    wrap.className = 'col-check';
+    wrap.innerHTML = `<input type="checkbox" id="${id}" ${checked ? 'checked' : ''}><span>${label}</span>`;
+    return wrap;
+  }
+
+  document.getElementById('selectAllBtn').addEventListener('click', () => {
+    document.querySelectorAll('#exportPanel input[type=checkbox]').forEach(cb => cb.checked = true);
+  });
+  document.getElementById('selectNoneBtn').addEventListener('click', () => {
+    document.querySelectorAll('#exportPanel input[type=checkbox]').forEach(cb => cb.checked = false);
+  });
+  document.getElementById('selectDecOnly').addEventListener('click', () => {
+    document.querySelectorAll('#origColChecks input[type=checkbox]').forEach(cb => cb.checked = false);
+    document.querySelectorAll('#decColChecks input[type=checkbox]').forEach(cb => cb.checked = true);
+  });
+
+  document.getElementById('exportBtn').addEventListener('click', () => {
+    if (!allRows.length) return;
+
+    const oCols = origCols();
+    const selectedOrig = oCols.filter((col, i) => {
+      const cb = document.getElementById('orig_' + col);
+      return cb && cb.checked;
+    });
+    const selectedDecIdx = DEC_LABELS.map((_, i) => {
+      const cb = document.getElementById('dec_' + i);
+      return cb && cb.checked ? i : -1;
+    }).filter(i => i >= 0);
+
+    const headers = [
+      ...selectedOrig,
+      ...selectedDecIdx.map(i => DEC_EXPORTS[i]),
+    ];
+
+    const csvRows = [headers.map(h => `"${h}"`).join(',')];
+    allRows.forEach(row => {
+      const vals = [
+        ...selectedOrig.map(col => {
+          const raw = String(row[col] || '');
+          const v = TIME_COLS.includes(col) ? toGermanTime(raw) : raw;
+          return `"${v.replace(/"/g, '""')}"`;
+        }),
+        ...selectedDecIdx.map(i => `"${String(row[DEC_FIELDS[i]] || '').replace(/"/g, '""')}"`)
+      ];
+      csvRows.push(vals.join(','));
+    });
+
+    const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = csvFileName.replace('.csv', '') + '_decrypted.csv';
+    a.click();
+  });
+
+  // ─── Table ────────────────────────────────────────────────────
+  function renderTable(rows) {
+    const tableWrap = document.getElementById('tableWrap');
+    if (!rows.length) { tableWrap.style.display = 'none'; return; }
+
+    const cols = origCols();
+    const thead = document.getElementById('tableHead');
+    thead.innerHTML = '';
+    const tr = document.createElement('tr');
+
+    cols.forEach((col, i) => {
+      const th = document.createElement('th');
+      th.textContent = col;
+      th.addEventListener('click', () => sortTable(i, col, false));
+      tr.appendChild(th);
+    });
+    DEC_LABELS.forEach((label, i) => {
+      const th = document.createElement('th');
+      th.innerHTML = label + '<span style="display:inline-block;font-size:9px;font-weight:700;background:#4f46e5;color:white;border-radius:3px;padding:1px 4px;margin-left:4px;text-transform:uppercase;">NEW</span>';
+      th.addEventListener('click', () => sortTable(cols.length + i, DEC_FIELDS[i], true));
+      tr.appendChild(th);
+    });
+    thead.appendChild(tr);
+
+    buildBodyRows(rows, cols);
+    tableWrap.style.display = 'block';
+    updateRowCount(rows.length);
+  }
+
+  function buildBodyRows(rows, cols) {
+    if (!cols) cols = origCols();
+    const tbody = document.getElementById('tableBody');
+    tbody.innerHTML = '';
+    rows.forEach(row => {
+      const tr = document.createElement('tr');
+      cols.forEach(col => {
+        const td = document.createElement('td');
+        const raw = row[col] || '';
+        const val = TIME_COLS.includes(col) ? toGermanTime(raw) : raw;
+        td.textContent = val;
+        td.title = val;
+        if (!val) td.className = 'empty';
+        tr.appendChild(td);
+      });
+      DEC_FIELDS.forEach(f => {
+        const td = document.createElement('td');
+        if (row._status === 'failed') {
+          td.textContent = 'decrypt failed';
+          td.className = 'failed';
+        } else {
+          const val = row[f] || '';
+          td.textContent = val;
+          td.title = val;
+          td.className = val ? 'decrypted' : 'empty';
+        }
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+  }
+
+  document.getElementById('searchInput').addEventListener('input', function () {
+    const q = this.value.toLowerCase();
+    const filtered = !q ? allRows : allRows.filter(row =>
+      Object.values(row).some(v => String(v).toLowerCase().includes(q))
+    );
+    buildBodyRows(filtered);
+    updateRowCount(filtered.length);
+  });
+
+  function updateRowCount(n) {
+    document.getElementById('rowCount').textContent = `${n} row${n !== 1 ? 's' : ''}`;
+  }
+
+  function sortTable(colIndex, colKey, isDecrypted) {
+    const cols = origCols();
+    if (sortCol === colIndex) sortDir *= -1; else { sortCol = colIndex; sortDir = 1; }
+    const ths = document.querySelectorAll('#tableHead th');
+    ths.forEach(th => th.classList.remove('sort-asc', 'sort-desc'));
+    ths[colIndex].classList.add(sortDir === 1 ? 'sort-asc' : 'sort-desc');
+    const fieldKey = isDecrypted ? DEC_FIELDS[colIndex - cols.length] : colKey;
+    allRows.sort((a, b) => {
+      const av = String(a[fieldKey] || '').toLowerCase();
+      const bv = String(b[fieldKey] || '').toLowerCase();
+      return av < bv ? -sortDir : av > bv ? sortDir : 0;
+    });
+    const q = document.getElementById('searchInput').value.toLowerCase();
+    const filtered = !q ? allRows : allRows.filter(row =>
+      Object.values(row).some(v => String(v).toLowerCase().includes(q))
+    );
+    buildBodyRows(filtered);
+  }
+</script>
+</body>
+</html>

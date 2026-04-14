@@ -1,0 +1,1480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LillianCare Debugger</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; color: #333; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+    /* Warning banner */
+    .warn-banner { background: #fef3c7; border-bottom: 1px solid #f59e0b; padding: 6px 20px; font-size: 12px; color: #92400e; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+    .warn-banner strong { font-weight: 700; }
+
+    /* DB Config panel */
+    .config-panel { background: white; border-bottom: 1px solid #e5e7eb; padding: 10px 20px; flex-shrink: 0; }
+    .config-toggle { display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
+    .config-toggle h2 { font-size: 13px; font-weight: 700; color: #1a1a2e; }
+    .conn-status { width: 8px; height: 8px; border-radius: 50%; background: #ccc; flex-shrink: 0; }
+    .conn-status.connected { background: #16a34a; }
+    .conn-status.error { background: #dc2626; }
+    .conn-label { font-size: 12px; color: #888; }
+    .chevron { font-size: 11px; color: #aaa; margin-left: auto; }
+
+    .config-body { display: none; margin-top: 12px; }
+    .config-body.open { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+    .cf { display: flex; flex-direction: column; gap: 4px; }
+    .cf label { font-size: 11px; font-weight: 600; color: #777; text-transform: uppercase; letter-spacing: 0.4px; }
+    .cf select, .cf input { height: 34px; border: 1px solid #ddd; border-radius: 6px; padding: 0 10px; font-size: 13px; outline: none; }
+    .cf select:focus, .cf input:focus { border-color: #4f46e5; }
+    .cf input { width: 160px; }
+    .cf select { width: 160px; }
+    .btn { height: 34px; padding: 0 14px; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary { background: #4f46e5; color: white; }
+    .btn-primary:hover:not(:disabled) { background: #4338ca; }
+    .btn-success { background: #16a34a; color: white; }
+    .btn-success:hover:not(:disabled) { background: #15803d; }
+    .btn-danger { background: #dc2626; color: white; }
+    .btn-danger:hover:not(:disabled) { background: #b91c1c; }
+    .btn-ghost { background: #f3f4f6; color: #555; }
+    .btn-ghost:hover { background: #e5e7eb; }
+    .btn-sm { height: 28px; padding: 0 10px; font-size: 12px; }
+
+    /* Main layout */
+    .main { display: flex; flex: 1; overflow: hidden; }
+
+    /* Sidebar */
+    .sidebar { width: 200px; background: #1a1a2e; flex-shrink: 0; display: flex; flex-direction: column; overflow-y: auto; }
+    .sidebar-logo { padding: 16px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+    .sidebar-logo h1 { font-size: 14px; font-weight: 700; color: white; line-height: 1.3; }
+    .sidebar-logo span { font-size: 11px; color: rgba(255,255,255,0.4); }
+    .nav-section { padding: 8px 0; }
+    .nav-label { font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.3); text-transform: uppercase; letter-spacing: 0.8px; padding: 6px 16px 4px; }
+    .nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 16px; cursor: pointer; font-size: 13px; color: rgba(255,255,255,0.65); transition: background 0.1s; border-radius: 0; }
+    .nav-item:hover { background: rgba(255,255,255,0.06); color: white; }
+    .nav-item.active { background: #4f46e5; color: white; }
+    .nav-item .icon { font-size: 15px; flex-shrink: 0; }
+
+    /* Content area */
+    .content { flex: 1; overflow-y: auto; padding: 20px; }
+
+    /* Cards & tables */
+    .card { background: white; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.07); margin-bottom: 14px; }
+    .card-header { padding: 14px 16px; border-bottom: 1px solid #f0f0f0; display: flex; align-items: center; gap: 10px; }
+    .card-header h3 { font-size: 14px; font-weight: 700; flex: 1; }
+    .card-body { padding: 14px 16px; }
+
+    .filter-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+    .fld { display: flex; flex-direction: column; gap: 4px; }
+    .fld label { font-size: 11px; font-weight: 600; color: #777; text-transform: uppercase; letter-spacing: 0.4px; }
+    .fld input, .fld select { height: 34px; border: 1px solid #ddd; border-radius: 6px; padding: 0 10px; font-size: 13px; outline: none; }
+    .fld input:focus, .fld select:focus { border-color: #4f46e5; }
+    .fld input { min-width: 150px; }
+
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { background: #f8f9fa; padding: 9px 12px; text-align: left; font-size: 11px; font-weight: 700; color: #666; text-transform: uppercase; letter-spacing: 0.4px; border-bottom: 2px solid #e5e7eb; white-space: nowrap; }
+    td { padding: 8px 12px; border-bottom: 1px solid #f3f3f3; vertical-align: top; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #fafafe; }
+    tr.expandable { cursor: pointer; }
+    tr.expanded td { background: #f0f0ff !important; }
+    .expand-row td { background: #f8f8ff; padding: 0; }
+    .expand-inner { padding: 16px; border-top: 2px solid #4f46e5; }
+
+    /* Badges & status */
+    .badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+    .badge-green { background: #dcfce7; color: #166534; }
+    .badge-red { background: #fee2e2; color: #991b1b; }
+    .badge-blue { background: #dbeafe; color: #1e40af; }
+    .badge-orange { background: #fed7aa; color: #9a3412; }
+    .badge-grey { background: #f3f4f6; color: #6b7280; }
+    .badge-indigo { background: #e0e7ff; color: #3730a3; }
+    .badge-yellow { background: #fef9c3; color: #713f12; }
+
+    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+    .dot-green { background: #16a34a; }
+    .dot-red { background: #dc2626; }
+    .dot-orange { background: #d97706; }
+    .dot-grey { background: #9ca3af; }
+
+    /* Log levels */
+    .log-debug { color: #9ca3af; }
+    .log-info { color: #3b82f6; }
+    .log-warning { color: #d97706; }
+    .log-error { color: #dc2626; }
+    .log-fatal { color: #dc2626; font-weight: 700; background: #fef2f2; }
+
+    /* Stats bar */
+    .stats-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+    .stat-card { background: white; border-radius: 10px; padding: 12px 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.07); min-width: 120px; }
+    .stat-label { font-size: 11px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.4px; }
+    .stat-value { font-size: 24px; font-weight: 700; color: #1a1a2e; margin-top: 2px; }
+    .stat-card.blue .stat-value { color: #4f46e5; }
+    .stat-card.green .stat-value { color: #16a34a; }
+    .stat-card.red .stat-value { color: #dc2626; }
+
+    /* Pagination */
+    .pagination { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid #f0f0f0; font-size: 13px; }
+    .pagination .info { color: #888; flex: 1; }
+    .page-btn { height: 30px; min-width: 30px; padding: 0 8px; border: 1px solid #ddd; border-radius: 6px; background: white; font-size: 13px; cursor: pointer; }
+    .page-btn:hover { background: #f3f4f6; }
+    .page-btn.active { background: #4f46e5; color: white; border-color: #4f46e5; }
+    .page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* User detail */
+    .back-btn { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #4f46e5; cursor: pointer; margin-bottom: 14px; font-weight: 600; }
+    .back-btn:hover { text-decoration: underline; }
+    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .detail-section h4 { font-size: 12px; font-weight: 700; color: #888; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 10px; }
+    .field-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #f5f5f5; }
+    .field-row:last-child { border-bottom: none; }
+    .field-key { font-size: 12px; color: #888; width: 140px; flex-shrink: 0; }
+    .field-val { font-size: 13px; flex: 1; font-weight: 500; }
+    .field-input { height: 30px; border: 1px solid #ddd; border-radius: 5px; padding: 0 8px; font-size: 13px; width: 100%; outline: none; }
+    .field-input:focus { border-color: #4f46e5; }
+    .field-input.changed { border-color: #d97706; background: #fffbeb; }
+
+    /* Query runner */
+    .sql-editor { width: 100%; min-height: 140px; font-family: 'Monaco', 'Menlo', monospace; font-size: 13px; border: 1px solid #ddd; border-radius: 8px; padding: 12px; outline: none; resize: vertical; line-height: 1.6; }
+    .sql-editor:focus { border-color: #4f46e5; }
+    .query-actions { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+    .write-mode-toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #666; margin-left: auto; }
+    .write-mode-toggle input { accent-color: #dc2626; }
+
+    /* AI Query */
+    .chat-messages { min-height: 200px; max-height: 420px; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+    .msg { display: flex; flex-direction: column; gap: 4px; }
+    .msg-user { align-items: flex-end; }
+    .msg-bubble { padding: 10px 14px; border-radius: 10px; font-size: 13px; max-width: 90%; line-height: 1.5; }
+    .msg-user .msg-bubble { background: #4f46e5; color: white; border-bottom-right-radius: 3px; }
+    .msg-ai .msg-bubble { background: #f3f4f6; color: #333; border-bottom-left-radius: 3px; }
+    .sql-block { background: #1e1e2e; color: #cdd6f4; font-family: monospace; font-size: 12px; border-radius: 8px; padding: 12px; margin-top: 8px; white-space: pre-wrap; word-break: break-all; }
+    .sql-actions { display: flex; gap: 6px; margin-top: 6px; }
+    .chat-input-row { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #f0f0f0; align-items: flex-end; }
+    .chat-input { flex: 1; border: 1px solid #ddd; border-radius: 8px; padding: 8px 12px; font-size: 13px; font-family: inherit; resize: none; outline: none; min-height: 38px; max-height: 120px; }
+    .chat-input:focus { border-color: #4f46e5; }
+
+    /* Misc */
+    .empty-state { padding: 40px; text-align: center; color: #aaa; font-size: 14px; }
+    .error-msg { background: #fee2e2; color: #991b1b; border-radius: 8px; padding: 10px 14px; font-size: 13px; margin-bottom: 10px; }
+    .loading { padding: 30px; text-align: center; color: #888; font-size: 14px; }
+    .stack-pre { font-family: monospace; font-size: 11px; background: #1e1e2e; color: #f8f8f2; padding: 10px; border-radius: 6px; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; margin-top: 6px; }
+    .sub-tabs { display: flex; gap: 0; border-bottom: 2px solid #e5e7eb; margin-bottom: 14px; }
+    .sub-tab { padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; color: #888; border-bottom: 2px solid transparent; margin-bottom: -2px; }
+    .sub-tab.active { color: #4f46e5; border-bottom-color: #4f46e5; }
+    .page-title { font-size: 20px; font-weight: 700; color: #1a1a2e; margin-bottom: 16px; }
+    textarea[readonly], input[readonly] { background: #f9fafb; color: #555; }
+  </style>
+</head>
+<body>
+
+<!-- Warning banner -->
+<div class="warn-banner">
+  <strong>⚠ LOCAL DEV TOOL</strong> — Do not expose to the internet. All data stays on your machine.
+  <span id="connLabel" class="conn-label" style="margin-left:auto"></span>
+</div>
+
+<!-- DB Config panel -->
+<div class="config-panel">
+  <div class="config-toggle" onclick="toggleConfig()">
+    <div class="conn-status" id="connStatus"></div>
+    <h2>Database Connection</h2>
+    <span class="chevron" id="configChevron">▼</span>
+  </div>
+  <div class="config-body" id="configBody">
+    <div class="cf">
+      <label>Environment</label>
+      <select id="cfPreset" onchange="applyPreset()">
+        <option value="dev">Development</option>
+        <option value="staging">Staging</option>
+        <option value="production">Production</option>
+        <option value="custom">Custom</option>
+      </select>
+    </div>
+    <div class="cf"><label>Host</label><input id="cfHost" value="localhost"></div>
+    <div class="cf"><label>Port</label><input id="cfPort" value="8090" style="width:80px"></div>
+    <div class="cf"><label>Database</label><input id="cfDb" value="lillian_care_core"></div>
+    <div class="cf"><label>User</label><input id="cfUser" value="postgres"></div>
+    <div class="cf"><label>Password</label><input id="cfPass" type="password" placeholder="Enter password"></div>
+    <div class="cf" style="gap:6px;flex-direction:row;align-items:flex-end">
+      <button class="btn btn-ghost" onclick="testConnection()">Test</button>
+      <button class="btn btn-primary" onclick="saveConnection()">Connect</button>
+    </div>
+  </div>
+</div>
+
+<!-- Main layout -->
+<div class="main">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-logo">
+      <h1>LC Debugger</h1>
+      <span>LillianCare</span>
+    </div>
+    <div class="nav-section">
+      <div class="nav-label">Logs</div>
+      <div class="nav-item" data-view="session-logs" onclick="navigate('session-logs')"><span class="icon">📋</span> Session Logs</div>
+      <div class="nav-item" data-view="admin-audit" onclick="navigate('admin-audit')"><span class="icon">🛡️</span> Admin Audit</div>
+      <div class="nav-item" data-view="notifications" onclick="navigate('notifications')"><span class="icon">🔔</span> Notifications</div>
+    </div>
+    <div class="nav-section">
+      <div class="nav-label">Data</div>
+      <div class="nav-item" data-view="users" onclick="navigate('users')"><span class="icon">👤</span> Users</div>
+      <div class="nav-item" data-view="bookings" onclick="navigate('bookings')"><span class="icon">📅</span> Bookings</div>
+    </div>
+    <div class="nav-section">
+      <div class="nav-label">Operations</div>
+      <div class="nav-item" data-view="send-notification" onclick="navigate('send-notification')"><span class="icon">📣</span> Send Notification</div>
+      <div class="nav-item" data-view="future-calls" onclick="navigate('future-calls')"><span class="icon">⏰</span> Future Calls</div>
+      <div class="nav-item" data-view="health" onclick="navigate('health')"><span class="icon">💚</span> Server Health</div>
+      <div class="nav-item" data-view="api-keys" onclick="navigate('api-keys')"><span class="icon">🔑</span> API Keys</div>
+    </div>
+    <div class="nav-section">
+      <div class="nav-label">Tools</div>
+      <div class="nav-item" data-view="query-runner" onclick="navigate('query-runner')"><span class="icon">💻</span> Query Runner</div>
+      <div class="nav-item" data-view="ai-query" onclick="navigate('ai-query')"><span class="icon">🤖</span> AI Assistant</div>
+      <div class="nav-item" data-view="csv-decrypt" onclick="navigate('csv-decrypt')"><span class="icon">🔓</span> CSV Decryptor</div>
+    <div class="nav-section">
+      <div class="nav-label">Monitoring</div>
+      <div class="nav-item" data-view="monitoring" onclick="navigate('monitoring')"><span class="icon">🛰️</span> AWS Monitor</div>
+    </div>
+    </div>
+  </div>
+
+  <!-- Content -->
+  <div class="content" id="content">
+    <div class="empty-state">Select a tool from the sidebar to get started.</div>
+  </div>
+</div>
+
+<script>
+// ─── Constants ───────────────────────────────────────────────────────────────
+const DE_TZ = 'Europe/Berlin';
+const PRESETS = {
+  dev:        { host: 'localhost',                    port: '8090', db: 'lillian_care_core', user: 'postgres' },
+  staging:    { host: 'database-staging.lillian.care', port: '5432', db: 'serverpod',         user: 'postgres' },
+  production: { host: 'database.lillian.care',         port: '5432', db: 'serverpod',         user: 'postgres' },
+};
+
+const APT_STATUS = ['proposed','pending','booked','arrived','fulfilled','cancelled','noshow','enteredInError','checkedIn','waitlist','rescheduled'];
+const APT_STATUS_BADGE = ['badge-grey','badge-yellow','badge-green','badge-blue','badge-indigo','badge-red','badge-red','badge-red','badge-green','badge-orange','badge-orange'];
+
+const NOTIF_TYPES = ['accountVerified','aptRescheduledByPraxis','aptCancelledByPraxis','aptBookedByPraxis','aptReminder','newDocument','unknown'];
+const NOTIF_BADGE  = ['badge-indigo','badge-orange','badge-red','badge-blue','badge-blue','badge-green','badge-grey'];
+
+const LOG_LEVELS = ['DEBUG','INFO','WARNING','ERROR','FATAL'];
+const LOG_CLASSES = ['log-debug','log-info','log-warning','log-error','log-fatal'];
+
+// ─── German time formatter ────────────────────────────────────────────────────
+function deTime(val) {
+  if (!val) return '—';
+  const d = new Date(val);
+  if (isNaN(d)) return val;
+  return new Intl.DateTimeFormat('de-DE', {
+    timeZone: DE_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }).format(d).replace(',', '');
+}
+
+function escHtml(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function dur(ms) {
+  if (ms === null || ms === undefined) return '—';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms/1000).toFixed(2)}s`;
+}
+
+// ─── Env config (passwords + decrypt key from server .env) ───────────────────
+let envConfig = null;
+fetch('/api/env-config').then(r => r.json()).then(c => { envConfig = c; }).catch(() => {});
+
+// ─── DB Config ────────────────────────────────────────────────────────────────
+function getCfg() {
+  return JSON.parse(localStorage.getItem('lc_db') || '{"host":"localhost","port":"8090","db":"lillian_care_core","user":"postgres","pass":""}');
+}
+
+function dbHeaders(extra = {}) {
+  const c = getCfg();
+  return { 'Content-Type': 'application/json', 'x-db-host': c.host, 'x-db-port': c.port, 'x-db-name': c.db, 'x-db-user': c.user, 'x-db-password': c.pass, ...extra };
+}
+
+async function apiFetch(path, opts = {}) {
+  const res = await fetch(path, { headers: dbHeaders(), ...opts });
+  return res.json();
+}
+
+async function apiPost(path, body) {
+  const res = await fetch(path, { method: 'POST', headers: dbHeaders(), body: JSON.stringify(body) });
+  return res.json();
+}
+
+async function apiPatch(path, body) {
+  const res = await fetch(path, { method: 'PATCH', headers: dbHeaders(), body: JSON.stringify(body) });
+  return res.json();
+}
+
+// ─── Config panel ─────────────────────────────────────────────────────────────
+function toggleConfig() {
+  const body = document.getElementById('configBody');
+  const ch = document.getElementById('configChevron');
+  const open = body.classList.toggle('open');
+  ch.textContent = open ? '▲' : '▼';
+}
+
+function applyPreset() {
+  const val = document.getElementById('cfPreset').value;
+  const p = PRESETS[val];
+  if (!p) return;
+  document.getElementById('cfHost').value = p.host;
+  document.getElementById('cfPort').value = p.port;
+  document.getElementById('cfDb').value = p.db;
+  document.getElementById('cfUser').value = p.user;
+  document.getElementById('cfPass').value = (envConfig && envConfig.passwords[val]) || '';
+  if (envConfig && envConfig.decryptKeys[val]) {
+    localStorage.setItem('bk_dec_key', envConfig.decryptKeys[val]);
+  }
+}
+
+async function testConnection() {
+  const cfg = readConfigForm();
+  try {
+    const res = await fetch('/api/connection-test', { headers: { 'x-db-host': cfg.host, 'x-db-port': cfg.port, 'x-db-name': cfg.db, 'x-db-user': cfg.user, 'x-db-password': cfg.pass } });
+    const data = await res.json();
+    if (data.ok) alert('✅ Connection successful!');
+    else alert('❌ Connection failed: ' + data.error);
+  } catch(e) { alert('❌ ' + e.message); }
+}
+
+function readConfigForm() {
+  return { host: document.getElementById('cfHost').value, port: document.getElementById('cfPort').value, db: document.getElementById('cfDb').value, user: document.getElementById('cfUser').value, pass: document.getElementById('cfPass').value };
+}
+
+function saveConnection() {
+  const cfg = readConfigForm();
+  localStorage.setItem('lc_db', JSON.stringify(cfg));
+  document.getElementById('connLabel').textContent = `${cfg.host}:${cfg.port}/${cfg.db}`;
+  toggleConfig();
+  setConnStatus('connected');
+  const view = window.location.hash.replace('#','') || 'session-logs';
+  navigate(view);
+}
+
+function setConnStatus(state) {
+  const el = document.getElementById('connStatus');
+  el.className = 'conn-status ' + (state || '');
+}
+
+function loadConfigFromStorage() {
+  const cfg = getCfg();
+  document.getElementById('cfHost').value = cfg.host || 'localhost';
+  document.getElementById('cfPort').value = cfg.port || '8090';
+  document.getElementById('cfDb').value = cfg.db || 'lillian_care_core';
+  document.getElementById('cfUser').value = cfg.user || 'postgres';
+  document.getElementById('cfPass').value = cfg.pass || '';
+  document.getElementById('connLabel').textContent = `${cfg.host}:${cfg.port}/${cfg.db}`;
+}
+
+// ─── Router ───────────────────────────────────────────────────────────────────
+function navigate(view) {
+  window.location.hash = view;
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  const active = document.querySelector(`[data-view="${view}"]`);
+  if (active) active.classList.add('active');
+  const content = document.getElementById('content');
+  if (view === 'session-logs') renderSessionLogs(content);
+  else if (view === 'admin-audit') renderAdminAudit(content);
+  else if (view === 'notifications') renderNotifications(content);
+  else if (view === 'users') renderUsers(content);
+  else if (view === 'bookings') renderBookings(content);
+  else if (view === 'query-runner') renderQueryRunner(content);
+  else if (view === 'ai-query') renderAIQuery(content);
+  else if (view === 'csv-decrypt') renderCsvDecrypt(content);
+  else if (view === 'send-notification') renderSendNotification(content);
+  else if (view === 'future-calls') renderFutureCalls(content);
+  else if (view === 'health') renderHealth(content);
+  else if (view === 'api-keys') renderApiKeys(content);
+  else if (view === 'monitoring') renderMonitoring(content);
+}
+
+// ─── Pagination helper ────────────────────────────────────────────────────────
+function renderPagination(el, data, onPage) {
+  const { total, page, pageSize } = data;
+  const totalPages = Math.ceil(total / pageSize);
+  const start = (page - 1) * pageSize + 1;
+  const end = Math.min(page * pageSize, total);
+  el.innerHTML = `
+    <div class="pagination">
+      <span class="info">Showing ${start}–${end} of ${total} rows</span>
+      <button class="page-btn" ${page <= 1 ? 'disabled' : ''} onclick="(${onPage.toString()})(${page - 1})">‹</button>
+      ${[...Array(Math.min(totalPages, 5))].map((_, i) => {
+        const p = page <= 3 ? i+1 : page - 2 + i;
+        if (p < 1 || p > totalPages) return '';
+        return `<button class="page-btn ${p === page ? 'active' : ''}" onclick="(${onPage.toString()})(${p})">${p}</button>`;
+      }).join('')}
+      <button class="page-btn" ${page >= totalPages ? 'disabled' : ''} onclick="(${onPage.toString()})(${page + 1})">›</button>
+    </div>`;
+}
+
+// ─── Session Logs ─────────────────────────────────────────────────────────────
+let slFilters = {}, slEndpoints = [];
+const slCache = {};
+
+async function renderSessionLogs(el, page = 1) {
+  el.innerHTML = `<div class="page-title">Session Logs</div><div class="loading">Loading...</div>`;
+  try {
+    if (!slEndpoints.length) {
+      slEndpoints = await apiFetch('/api/session-logs/endpoints');
+    }
+    const p = new URLSearchParams({ ...slFilters, page, pageSize: 50 });
+    const data = await apiFetch(`/api/session-logs?${p}`);
+    setConnStatus('connected');
+
+    el.innerHTML = `
+      <div class="page-title">Session Logs</div>
+      <div class="card">
+        <div class="card-body">
+          <div class="filter-row">
+            <div class="fld"><label>Endpoint</label>
+              <select id="slEndpoint" onchange="slFilters.endpoint=this.value">
+                <option value="">All</option>
+                ${slEndpoints.map(e => `<option value="${escHtml(e)}" ${slFilters.endpoint===e?'selected':''}>${escHtml(e)}</option>`).join('')}
+              </select>
+            </div>
+            <div class="fld"><label>Method</label><input id="slMethod" placeholder="method" value="${escHtml(slFilters.method||'')}" oninput="slFilters.method=this.value" style="width:140px"></div>
+            <div class="fld"><label>From</label><input type="datetime-local" id="slFrom" value="${slFilters.dateFrom||''}" oninput="slFilters.dateFrom=this.value"></div>
+            <div class="fld"><label>To</label><input type="datetime-local" id="slTo" value="${slFilters.dateTo||''}" oninput="slFilters.dateTo=this.value"></div>
+            <div class="fld"><label>&nbsp;</label>
+              <label style="display:flex;align-items:center;gap:6px;height:34px;font-size:13px;cursor:pointer">
+                <input type="checkbox" ${slFilters.errorsOnly?'checked':''} onchange="slFilters.errorsOnly=this.checked"> Errors only
+              </label>
+            </div>
+            <div class="fld"><label>&nbsp;</label>
+              <div style="display:flex;gap:6px">
+                <button class="btn btn-primary" onclick="renderSessionLogs(document.getElementById('content'))">Apply</button>
+                <button class="btn btn-ghost" onclick="slFilters={};renderSessionLogs(document.getElementById('content'))">Clear</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th></th><th>Time</th><th>Endpoint</th><th>Method</th><th>Duration</th><th>Queries</th><th>User ID</th><th>Status</th></tr></thead>
+            <tbody id="slBody"></tbody>
+          </table>
+        </div>
+        <div id="slPaging"></div>
+      </div>`;
+
+    const tbody = document.getElementById('slBody');
+    data.rows.forEach(row => {
+      const hasError = !!row.error;
+      const isSlow = row.slow;
+      const statusDot = hasError ? 'dot-red' : isSlow ? 'dot-orange' : 'dot-green';
+      const tr = document.createElement('tr');
+      tr.className = 'expandable';
+      tr.innerHTML = `
+        <td><span class="dot ${statusDot}"></span></td>
+        <td>${deTime(row.time)}</td>
+        <td title="${escHtml(row.endpoint)}">${escHtml(row.endpoint) || '—'}</td>
+        <td>${escHtml(row.method) || '—'}</td>
+        <td>${dur(row.duration)}</td>
+        <td>${row.numQueries ?? '—'}</td>
+        <td>${row.authenticatedUserId || '—'}</td>
+        <td>${hasError ? `<span class="badge badge-red">Error</span>` : isSlow ? `<span class="badge badge-orange">Slow</span>` : `<span class="badge badge-green">OK</span>`}</td>`;
+      tr.addEventListener('click', () => toggleSessionDetail(tr, row.id));
+      tbody.appendChild(tr);
+    });
+
+    renderPagination(document.getElementById('slPaging'), data, (p) => renderSessionLogs(document.getElementById('content'), p));
+  } catch(e) {
+    setConnStatus('error');
+    el.innerHTML = `<div class="page-title">Session Logs</div><div class="error-msg">${escHtml(e.message)}</div>`;
+  }
+}
+
+async function toggleSessionDetail(tr, id) {
+  const existing = tr.nextElementSibling;
+  if (existing && existing.classList.contains('expand-row')) {
+    existing.remove(); tr.classList.remove('expanded'); return;
+  }
+  tr.classList.add('expanded');
+  const expandTr = document.createElement('tr');
+  expandTr.className = 'expand-row';
+  expandTr.innerHTML = `<td colspan="8"><div class="expand-inner"><em>Loading...</em></div></td>`;
+  tr.after(expandTr);
+
+  const details = slCache[id] || await apiFetch(`/api/session-logs/${id}/details`);
+  slCache[id] = details;
+
+  const { session, logs, queries } = details;
+  expandTr.innerHTML = `<td colspan="8"><div class="expand-inner">
+    ${session?.error ? `
+    <div style="margin-bottom:14px">
+      <div style="font-size:12px;font-weight:700;color:#888;text-transform:uppercase;margin-bottom:6px">Crash Reason</div>
+      <div class="stack-pre">${escHtml(session.error)}${session.stackTrace ? '\n\n' + escHtml(session.stackTrace) : ''}</div>
+    </div>` : ''}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div>
+        <div style="font-size:12px;font-weight:700;color:#888;text-transform:uppercase;margin-bottom:8px">Log Entries (${logs.length})</div>
+        ${logs.length ? logs.map(l => `
+          <div class="${LOG_CLASSES[l.logLevel] || ''}" style="font-size:12px;margin-bottom:6px">
+            <strong>[${LOG_LEVELS[l.logLevel]||l.logLevel}]</strong> ${deTime(l.time)} — ${escHtml(l.message)}
+            ${l.error ? `<div class="stack-pre">${escHtml(l.error)}${l.stackTrace ? '\n\n'+escHtml(l.stackTrace) : ''}</div>` : ''}
+          </div>`).join('') : '<div style="color:#aaa;font-size:13px">No log entries</div>'}
+      </div>
+      <div>
+        <div style="font-size:12px;font-weight:700;color:#888;text-transform:uppercase;margin-bottom:8px">Query Log (${queries.length})</div>
+        ${queries.length ? `<table style="font-size:12px"><thead><tr><th>Query</th><th>Duration</th><th>Rows</th><th>Slow</th></tr></thead><tbody>
+          ${queries.map(q => `<tr>
+            <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis" title="${escHtml(q.query)}">${escHtml(q.query)}</td>
+            <td>${dur(q.duration)}</td>
+            <td>${q.numRows ?? '—'}</td>
+            <td>${q.slow ? '⚠️' : ''}</td>
+          </tr>`).join('')}
+        </tbody></table>` : '<div style="color:#aaa;font-size:13px">No queries</div>'}
+      </div>
+    </div>
+  </div></td>`;
+}
+
+// ─── Admin Audit Log ──────────────────────────────────────────────────────────
+let aaFilters = {};
+
+async function renderAdminAudit(el, page = 1) {
+  el.innerHTML = `<div class="page-title">Admin Audit Log</div><div class="loading">Loading...</div>`;
+  try {
+    const p = new URLSearchParams({ ...aaFilters, page, pageSize: 50 });
+    const data = await apiFetch(`/api/admin-audit?${p}`);
+    setConnStatus('connected');
+
+    el.innerHTML = `
+      <div class="page-title">Admin Audit Log</div>
+      <div class="card">
+        <div class="card-body">
+          <div class="filter-row">
+            <div class="fld"><label>Action</label><input placeholder="action" value="${escHtml(aaFilters.action||'')}" oninput="aaFilters.action=this.value"></div>
+            <div class="fld"><label>User</label><input placeholder="name" value="${escHtml(aaFilters.userName||'')}" oninput="aaFilters.userName=this.value"></div>
+            <div class="fld"><label>Praxis</label><input placeholder="praxisId" value="${escHtml(aaFilters.praxisId||'')}" oninput="aaFilters.praxisId=this.value"></div>
+            <div class="fld"><label>From</label><input type="datetime-local" value="${aaFilters.dateFrom||''}" oninput="aaFilters.dateFrom=this.value"></div>
+            <div class="fld"><label>To</label><input type="datetime-local" value="${aaFilters.dateTo||''}" oninput="aaFilters.dateTo=this.value"></div>
+            <div class="fld"><label>&nbsp;</label>
+              <div style="display:flex;gap:6px">
+                <button class="btn btn-primary" onclick="renderAdminAudit(document.getElementById('content'))">Apply</button>
+                <button class="btn btn-ghost" onclick="aaFilters={};renderAdminAudit(document.getElementById('content'))">Clear</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table><thead><tr><th>Time</th><th>User</th><th>Email</th><th>Action</th><th>Praxis</th><th>Changes</th></tr></thead>
+          <tbody>
+            ${data.rows.map(r => `<tr>
+              <td style="white-space:nowrap">${deTime(r.createdAt)}</td>
+              <td>${escHtml(r.userName)}</td>
+              <td>${escHtml(r.userEmail)}</td>
+              <td><span class="badge badge-blue">${escHtml(r.action)}</span></td>
+              <td>${escHtml(r.praxisId)||'—'}</td>
+              <td title="${escHtml(r.changes)}" style="max-width:300px;overflow:hidden;text-overflow:ellipsis">${escHtml(r.changes)||'—'}</td>
+            </tr>`).join('')}
+          </tbody></table>
+        </div>
+        <div id="aaPaging"></div>
+      </div>`;
+    renderPagination(document.getElementById('aaPaging'), data, (p) => renderAdminAudit(document.getElementById('content'), p));
+  } catch(e) { setConnStatus('error'); el.innerHTML = `<div class="page-title">Admin Audit Log</div><div class="error-msg">${escHtml(e.message)}</div>`; }
+}
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+let nfFilters = {};
+
+async function renderNotifications(el, page = 1) {
+  el.innerHTML = `<div class="page-title">Notifications</div><div class="loading">Loading...</div>`;
+  try {
+    const p = new URLSearchParams({ ...nfFilters, page, pageSize: 50 });
+    const data = await apiFetch(`/api/notifications?${p}`);
+    setConnStatus('connected');
+
+    el.innerHTML = `
+      <div class="page-title">Notifications</div>
+      <div class="card">
+        <div class="card-body">
+          <div class="filter-row">
+            <div class="fld"><label>Type</label>
+              <select oninput="nfFilters.type=this.value">
+                <option value="">All</option>
+                ${NOTIF_TYPES.map((t,i) => `<option value="${i}" ${String(nfFilters.type)===String(i)?'selected':''}>${t}</option>`).join('')}
+              </select>
+            </div>
+            <div class="fld"><label>User ID</label><input placeholder="userId" value="${escHtml(nfFilters.userId||'')}" oninput="nfFilters.userId=this.value" style="width:100px"></div>
+            <div class="fld"><label>From</label><input type="datetime-local" value="${nfFilters.dateFrom||''}" oninput="nfFilters.dateFrom=this.value"></div>
+            <div class="fld"><label>To</label><input type="datetime-local" value="${nfFilters.dateTo||''}" oninput="nfFilters.dateTo=this.value"></div>
+            <div class="fld"><label>&nbsp;</label>
+              <div style="display:flex;gap:6px">
+                <button class="btn btn-primary" onclick="renderNotifications(document.getElementById('content'))">Apply</button>
+                <button class="btn btn-ghost" onclick="nfFilters={};renderNotifications(document.getElementById('content'))">Clear</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table><thead><tr><th>Time</th><th>User</th><th>Type</th><th>Title</th><th>Body</th><th>New</th></tr></thead>
+          <tbody>
+            ${data.rows.map(r => `<tr>
+              <td style="white-space:nowrap">${deTime(r.createdAt)}</td>
+              <td style="white-space:nowrap">
+                ${r.firstName ? `<div style="font-weight:600">${escHtml(r.firstName)} ${escHtml(r.lastName)}</div>` : ''}
+                <div style="font-size:11px;color:#888">${escHtml(r.userEmail||r.userId||'')}</div>
+              </td>
+              <td><span class="badge ${NOTIF_BADGE[r.type]||'badge-grey'}">${NOTIF_TYPES[r.type]||r.type}</span></td>
+              <td title="${escHtml(r.title)}">${escHtml(r.title)}</td>
+              <td title="${escHtml(r.body)}" style="max-width:200px;overflow:hidden;text-overflow:ellipsis">${escHtml(r.body)}</td>
+              <td>${r.isNew ? '🔵' : ''}</td>
+            </tr>`).join('')}
+          </tbody></table>
+        </div>
+        <div id="nfPaging"></div>
+      </div>`;
+    renderPagination(document.getElementById('nfPaging'), data, (p) => renderNotifications(document.getElementById('content'), p));
+  } catch(e) { setConnStatus('error'); el.innerHTML = `<div class="page-title">Notifications</div><div class="error-msg">${escHtml(e.message)}</div>`; }
+}
+
+// ─── Users ────────────────────────────────────────────────────────────────────
+let usFilters = {};
+
+async function renderUsers(el, page = 1) {
+  el.innerHTML = `<div class="page-title">Users</div><div class="loading">Loading...</div>`;
+  try {
+    const p = new URLSearchParams({ ...usFilters, page, pageSize: 50 });
+    const data = await apiFetch(`/api/users?${p}`);
+    setConnStatus('connected');
+
+    el.innerHTML = `
+      <div class="page-title">Users</div>
+      <div class="card">
+        <div class="card-body">
+          <div class="filter-row">
+            <div class="fld"><label>Search</label><input id="usQ" placeholder="name / email / phone / ID" value="${escHtml(usFilters.q||'')}" oninput="usFilters.q=this.value" style="width:260px" onkeydown="if(event.key==='Enter')renderUsers(document.getElementById('content'))"></div>
+            <div class="fld"><label>Praxis</label><input placeholder="lc_10" value="${escHtml(usFilters.praxisId||'')}" oninput="usFilters.praxisId=this.value" style="width:120px"></div>
+            <div class="fld"><label>&nbsp;</label>
+              <div style="display:flex;gap:6px">
+                <button class="btn btn-primary" onclick="renderUsers(document.getElementById('content'))">Search</button>
+                <button class="btn btn-ghost" onclick="usFilters={};renderUsers(document.getElementById('content'))">Clear</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table><thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Phone</th><th>Praxis</th><th>Verified</th><th>Created</th><th></th></tr></thead>
+          <tbody>
+            ${data.rows.map(r => `<tr>
+              <td style="color:#888;font-size:12px">${r.id}</td>
+              <td style="font-weight:600">${escHtml(r.firstName)} ${escHtml(r.lastName)}</td>
+              <td>${escHtml(r.email)}</td>
+              <td>${escHtml(r.phoneNumber)||'—'}</td>
+              <td>${escHtml(r.praxisId)||'—'}</td>
+              <td>${r.isVerified ? '<span class="badge badge-green">✓</span>' : '<span class="badge badge-grey">No</span>'}</td>
+              <td style="white-space:nowrap;font-size:12px">${deTime(r.createdAt)}</td>
+              <td><button class="btn btn-ghost btn-sm" onclick="renderUserDetail(document.getElementById('content'), ${r.id})">View</button></td>
+            </tr>`).join('')}
+          </tbody></table>
+        </div>
+        <div id="usPaging"></div>
+      </div>`;
+    renderPagination(document.getElementById('usPaging'), data, (p) => renderUsers(document.getElementById('content'), p));
+    document.getElementById('usQ')?.focus();
+  } catch(e) { setConnStatus('error'); el.innerHTML = `<div class="page-title">Users</div><div class="error-msg">${escHtml(e.message)}</div>`; }
+}
+
+async function renderUserDetail(el, userId) {
+  el.innerHTML = `<div class="loading">Loading user...</div>`;
+  try {
+    const d = await apiFetch(`/api/users/${userId}`);
+    const u = d.user;
+    const changed = {};
+
+    const EDITABLE = ['firstName','lastName','email','phoneNumber','street','city','postalCode','newEmail','newPhone'];
+
+    function renderFields() {
+      const ALL_FIELDS = ['id','email','firstName','lastName','phoneNumber','gender','dob','consent','praxisId','mfaActivated','street','city','postalCode','isVerified','lcAccountId','pmsPatientId','verifiedBy','verifiedOn','verifiedByDocument','verifiedByPraxisId','createdAt','modifiedAt'];
+      return ALL_FIELDS.map(k => {
+        const val = u[k];
+        const isEdit = EDITABLE.includes(k);
+        const raw = val === null || val === undefined ? '' : (val instanceof Date ? val.toISOString() : String(val));
+        const display = (k === 'createdAt' || k === 'modifiedAt' || k === 'dob' || k === 'verifiedOn') ? deTime(raw) : raw;
+        return `<div class="field-row">
+          <span class="field-key">${k}</span>
+          ${isEdit
+            ? `<input class="field-input" data-key="${k}" value="${escHtml(display)}" oninput="markChanged('${k}', this.value)">`
+            : `<span class="field-val">${escHtml(display) || '<span style="color:#bbb">—</span>'}</span>`}
+        </div>`;
+      }).join('');
+    }
+
+    el.innerHTML = `
+      <div class="back-btn" onclick="renderUsers(document.getElementById('content'))">← Back to Users</div>
+      <div class="page-title">${escHtml(u.firstName)} ${escHtml(u.lastName)}</div>
+      <div class="detail-grid">
+        <div>
+          <div class="card">
+            <div class="card-header"><h3>User Info</h3>
+        ${!u.isVerified ? `<button class="btn btn-ghost btn-sm" onclick="verifyUser(${userId})" style="margin-right:6px">✓ Verify User</button>` : `<span class="badge badge-green" style="margin-right:8px">✓ Verified</span>`}
+        <button class="btn btn-success btn-sm" id="saveBtn" onclick="saveUserChanges(${userId})" disabled>Save Changes</button>
+      </div>
+            <div class="card-body" id="userFields">${renderFields()}</div>
+          </div>
+        </div>
+        <div>
+          <div class="card" style="margin-bottom:14px">
+            <div class="card-header"><h3>Insurance</h3></div>
+            <div class="card-body">
+              ${d.insurance ? Object.entries(d.insurance).map(([k,v]) => `<div class="field-row"><span class="field-key">${k}</span><span class="field-val">${escHtml(String(v??''))||'—'}</span></div>`).join('') : '<div style="color:#aaa">No insurance info</div>'}
+            </div>
+          </div>
+          <div class="card" style="margin-bottom:14px">
+            <div class="card-header"><h3>Family Members (${d.family.length})</h3></div>
+            <div class="card-body">
+              ${d.family.length ? d.family.map(f => `<div class="field-row"><span class="field-key">${escHtml(f.firstName)} ${escHtml(f.lastName)}</span><span class="field-val" style="color:#888;font-size:12px">${deTime(f.dob)} · ${escHtml(f.insuranceType||'')}</span></div>`).join('') : '<div style="color:#aaa">No family members</div>'}
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h3>Appointments (${d.appointments.length})</h3></div>
+            <div class="card-body">
+              ${d.appointments.length ? d.appointments.map(a => `<div class="field-row">
+                <span class="field-key" style="font-size:12px;color:#888">${deTime(a.createdAt)}</span>
+                <span><span class="badge ${APT_STATUS_BADGE[a.status]||'badge-grey'}">${APT_STATUS[a.status]||a.status}</span> <span style="font-size:12px">${escHtml(a.category)}</span></span>
+              </div>`).join('') : '<div style="color:#aaa">No appointments</div>'}
+            </div>
+          </div>
+        </div>
+      </div>`;
+
+    window._userChanged = changed;
+    window._userId = userId;
+    window._origUser = { ...u };
+  } catch(e) { el.innerHTML = `<div class="error-msg">${escHtml(e.message)}</div>`; }
+}
+
+function markChanged(key, val) {
+  if (!window._userChanged) return;
+  window._userChanged[key] = val;
+  const inputs = document.querySelectorAll('.field-input');
+  inputs.forEach(i => {
+    if (i.dataset.key) i.classList.toggle('changed', window._userChanged[i.dataset.key] !== undefined && window._userChanged[i.dataset.key] !== String(window._origUser[i.dataset.key]||''));
+  });
+  document.getElementById('saveBtn').disabled = !Object.keys(window._userChanged).length;
+}
+
+async function saveUserChanges(userId) {
+  const updates = {};
+  document.querySelectorAll('.field-input[data-key]').forEach(i => {
+    const orig = String(window._origUser[i.dataset.key] ?? '');
+    if (i.value !== orig) updates[i.dataset.key] = i.value;
+  });
+  if (!Object.keys(updates).length) return;
+  if (!confirm(`Update ${Object.keys(updates).join(', ')} for user ${userId}?`)) return;
+  try {
+    const result = await apiPatch(`/api/users/${userId}`, updates);
+    if (result.error) { alert('Error: ' + result.error); return; }
+    alert('✅ Saved');
+    renderUserDetail(document.getElementById('content'), userId);
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+// ─── AES-256-CBC decryption (same algorithm as the server) ───────────────────
+async function importAesKey(keyStr) {
+  const bytes = new TextEncoder().encode(keyStr);
+  return crypto.subtle.importKey('raw', bytes, { name: 'AES-CBC' }, false, ['decrypt']);
+}
+
+function b64urlToBytes(s) {
+  let b64 = s.replace(/-/g, '+').replace(/_/g, '/');
+  while (b64.length % 4) b64 += '=';
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function aesDecrypt(cryptoKey, encText) {
+  const raw = b64urlToBytes(encText.trim());
+  const iv = raw.length >= 32 ? raw.slice(0, 16) : new Uint8Array(16);
+  const cipher = raw.length >= 32 ? raw.slice(16) : raw;
+  const plain = await crypto.subtle.decrypt({ name: 'AES-CBC', iv }, cryptoKey, cipher);
+  return new TextDecoder().decode(plain);
+}
+
+// ─── Bookings ─────────────────────────────────────────────────────────────────
+let bkFilters = {}, bkTab = 'registered';
+
+async function renderBookings(el, page = 1) {
+  el.innerHTML = `<div class="page-title">Bookings</div><div class="loading">Loading...</div>`;
+  try {
+    const endpoint = bkTab === 'registered' ? '/api/bookings' : '/api/guest-bookings';
+    const p = new URLSearchParams({ ...bkFilters, page, pageSize: 50 });
+    const data = await apiFetch(`${endpoint}?${p}`);
+    setConnStatus('connected');
+
+    el.innerHTML = `
+      <div class="page-title">Bookings</div>
+      <div class="card">
+        <div class="card-body">
+          <div class="filter-row">
+            <div class="fld"><label>Date From</label><input type="date" value="${bkFilters.dateFrom||''}" oninput="bkFilters.dateFrom=this.value?this.value+'T00:00:00':''"></div>
+            <div class="fld"><label>Date To</label><input type="date" value="${bkFilters.dateTo||''}" oninput="bkFilters.dateTo=this.value?this.value+'T23:59:59':''"></div>
+            <div class="fld"><label>Praxis</label><input placeholder="lc_10" value="${bkFilters.praxisId||''}" oninput="bkFilters.praxisId=this.value" style="width:120px"></div>
+            <div class="fld"><label>Status</label>
+              <select oninput="bkFilters.status=this.value">
+                <option value="">All</option>
+                ${APT_STATUS.map((s,i) => `<option value="${i}" ${String(bkFilters.status)===String(i)?'selected':''}>${s}</option>`).join('')}
+              </select>
+            </div>
+            <div class="fld"><label>Category</label><input placeholder="category" value="${bkFilters.category||''}" oninput="bkFilters.category=this.value" style="width:130px"></div>
+            <div class="fld"><label>&nbsp;</label>
+              <div style="display:flex;gap:6px">
+                <button class="btn btn-primary" onclick="renderBookings(document.getElementById('content'))">Apply</button>
+                <button class="btn btn-ghost" onclick="bkFilters={};renderBookings(document.getElementById('content'))">Clear</button>
+              </div>
+            </div>
+            <div class="fld" id="bkKeyField" style="display:${bkTab==='guest'?'flex':'none'}">
+              <label>Decryption Key (32 chars)</label>
+              <div style="display:flex;gap:6px;align-items:center">
+                <input type="password" id="bkDecKey" placeholder="Paste 32-char key" style="width:220px;font-family:monospace" value="${escHtml(localStorage.getItem('bk_dec_key')||'')}" oninput="localStorage.setItem('bk_dec_key',this.value)">
+                <span id="bkKeyLen" style="font-size:11px;color:#aaa">${(localStorage.getItem('bk_dec_key')||'').length}/32</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="sub-tabs">
+        <div class="sub-tab ${bkTab==='registered'?'active':''}" onclick="bkTab='registered';renderBookings(document.getElementById('content'))">Registered (app_user_appointment)</div>
+        <div class="sub-tab ${bkTab==='guest'?'active':''}" onclick="bkTab='guest';renderBookings(document.getElementById('content'))">Guest Appointments</div>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table><thead><tr>
+            ${bkTab === 'registered'
+              ? '<th>Created</th><th>Start Time</th><th>Patient</th><th>Email</th><th>Category</th><th>Status</th><th>Praxis</th><th>PMS ID</th>'
+              : '<th>Created</th><th>Start Time</th><th>Email</th><th>Category</th><th>Status</th><th>Praxis</th><th>Patient Info</th>'}
+          </tr></thead><tbody>
+            ${data.rows.map((r, ri) => bkTab === 'registered' ? `<tr>
+              <td style="font-size:12px;white-space:nowrap">${deTime(r.createdAt)}</td>
+              <td style="font-size:12px;white-space:nowrap">${deTime(r.startTime)}</td>
+              <td style="font-weight:600">${escHtml(r.firstName||'')} ${escHtml(r.lastName||'')}</td>
+              <td style="font-size:12px">${escHtml(r.email)||'—'}</td>
+              <td>${escHtml(r.category)}</td>
+              <td><span class="badge ${APT_STATUS_BADGE[r.status]||'badge-grey'}">${APT_STATUS[r.status]||r.status}</span></td>
+              <td>${escHtml(r.praxisId)}</td>
+              <td style="font-size:11px;color:#888">${escHtml(r.pmsAppointmentId)||'—'}</td>
+            </tr>` : `<tr>
+              <td style="font-size:12px;white-space:nowrap">${deTime(r.createdAt)}</td>
+              <td style="font-size:12px;white-space:nowrap">${deTime(r.startTime)}</td>
+              <td>${escHtml(r.email)||'—'}</td>
+              <td>${escHtml(r.category)}</td>
+              <td><span class="badge ${APT_STATUS_BADGE[r.status]||'badge-grey'}">${APT_STATUS[r.status]||r.status}</span></td>
+              <td>${escHtml(r.praxisId)}</td>
+              <td id="bkCell_${ri}">
+                ${r.encryptedUserInfo
+                  ? `<button class="btn btn-ghost btn-sm" onclick="decryptGuestRow(${ri}, '${escHtml(r.encryptedUserInfo)}')">🔐 Decrypt</button>`
+                  : '—'}
+              </td>
+            </tr>`).join('')}
+          </tbody></table>
+        </div>
+        <div id="bkPaging"></div>
+      </div>`;
+    renderPagination(document.getElementById('bkPaging'), data, (p) => renderBookings(document.getElementById('content'), p));
+
+    // Wire up key input live counter and show/hide based on tab
+    const keyField = document.getElementById('bkKeyField');
+    const keyInput = document.getElementById('bkDecKey');
+    const keyLen = document.getElementById('bkKeyLen');
+    if (keyField) keyField.style.display = bkTab === 'guest' ? 'flex' : 'none';
+    if (keyInput && keyLen) {
+      keyInput.addEventListener('input', () => {
+        const l = keyInput.value.length;
+        keyLen.textContent = `${l}/32`;
+        keyLen.style.color = l === 32 ? '#16a34a' : l > 32 ? '#dc2626' : '#aaa';
+        localStorage.setItem('bk_dec_key', keyInput.value);
+      });
+    }
+  } catch(e) { setConnStatus('error'); el.innerHTML = `<div class="page-title">Bookings</div><div class="error-msg">${escHtml(e.message)}</div>`; }
+}
+
+async function decryptGuestRow(rowIndex, encryptedText) {
+  const keyInput = document.getElementById('bkDecKey');
+  const key = keyInput ? keyInput.value : localStorage.getItem('bk_dec_key') || '';
+  const cell = document.getElementById(`bkCell_${rowIndex}`);
+  if (!cell) return;
+
+  if (key.length !== 32) {
+    cell.innerHTML = `<span style="color:#dc2626;font-size:12px">Enter a 32-char key above</span>`;
+    keyInput?.focus();
+    return;
+  }
+
+  cell.innerHTML = `<span style="color:#aaa;font-size:12px">Decrypting...</span>`;
+  try {
+    const cryptoKey = await importAesKey(key);
+    const json = await aesDecrypt(cryptoKey, encryptedText);
+    const obj = JSON.parse(json);
+    const name = [obj.firstName || obj.first_name, obj.lastName || obj.last_name].filter(Boolean).join(' ');
+    const email = obj.email || '';
+    const phone = obj.phoneNumber || obj.phone_number || obj.phone || '';
+    const dob = obj.dob || obj.dateOfBirth || '';
+    cell.innerHTML = `
+      <div style="font-size:12px;line-height:1.8">
+        ${name ? `<div><strong>${escHtml(name)}</strong></div>` : ''}
+        ${email ? `<div style="color:#4f46e5">${escHtml(email)}</div>` : ''}
+        ${phone ? `<div style="color:#555">${escHtml(phone)}</div>` : ''}
+        ${dob ? `<div style="color:#888">DOB: ${escHtml(dob)}</div>` : ''}
+      </div>`;
+  } catch(e) {
+    cell.innerHTML = `<span style="color:#dc2626;font-size:12px" title="${escHtml(e.message)}">Decrypt failed</span>`;
+  }
+}
+
+// ─── Query Runner ─────────────────────────────────────────────────────────────
+let qrHistory = JSON.parse(localStorage.getItem('qr_history') || '[]');
+let qrWriteMode = false;
+
+const PRESET_QUERIES = [
+  { label: 'Users registered today', sql: `SELECT id, "firstName", "lastName", email, "phoneNumber", "praxisId", "createdAt" AT TIME ZONE 'Europe/Berlin' as "createdAt_DE"\nFROM app_user_info\nWHERE "createdAt" >= NOW() - INTERVAL '1 day'\nORDER BY "createdAt" DESC` },
+  { label: 'Appointments on a date', sql: `SELECT a.id, a.category, a.status, a."startTime", a."praxisId", u."firstName", u."lastName", u.email\nFROM app_user_appointment a\nLEFT JOIN app_user_info u ON u.id = a."userId"\nWHERE DATE(a."createdAt" AT TIME ZONE 'Europe/Berlin') = '2026-01-01'\nORDER BY a."createdAt" DESC` },
+  { label: 'Failed API sessions (24h)', sql: `SELECT id, "time" AT TIME ZONE 'Europe/Berlin' as "time_DE", endpoint, method, duration, error\nFROM serverpod_session_log\nWHERE error IS NOT NULL AND "time" >= NOW() - INTERVAL '24 hours'\nORDER BY "time" DESC LIMIT 100` },
+  { label: 'Users by praxis', sql: `SELECT "praxisId", COUNT(*) as user_count\nFROM app_user_info\nGROUP BY "praxisId"\nORDER BY user_count DESC` },
+  { label: 'Cancelled appointments (7 days)', sql: `SELECT a."createdAt" AT TIME ZONE 'Europe/Berlin', a.category, a."praxisId", u."firstName", u."lastName", u.email\nFROM app_user_appointment a\nLEFT JOIN app_user_info u ON u.id = a."userId"\nWHERE a.status = 5 AND a."createdAt" >= NOW() - INTERVAL '7 days'\nORDER BY a."createdAt" DESC` },
+  { label: 'Guest appointments this week', sql: `SELECT id, category, status, "praxisId", email, "startTime", "isBookedFromPraxis", "createdAt" AT TIME ZONE 'Europe/Berlin'\nFROM guest_appointment\nWHERE "createdAt" >= date_trunc('week', NOW() AT TIME ZONE 'Europe/Berlin') AT TIME ZONE 'Europe/Berlin'\nORDER BY "createdAt" DESC` },
+  { label: 'Recent admin actions', sql: `SELECT "userName", "userEmail", action, "praxisId", "createdAt" AT TIME ZONE 'Europe/Berlin'\nFROM admin_audit_log\nORDER BY "createdAt" DESC LIMIT 50` },
+  { label: 'Slow queries (>1s)', sql: `SELECT sl."time" AT TIME ZONE 'Europe/Berlin', sl.endpoint, sl.method, ql.query, ql.duration, ql."numRows"\nFROM serverpod_query_log ql\nJOIN serverpod_session_log sl ON sl.id = ql."sessionLogId"\nWHERE ql.slow = true OR ql.duration > 1000\nORDER BY ql.duration DESC LIMIT 50` },
+];
+
+function renderQueryRunner(el) {
+  el.innerHTML = `
+    <div class="page-title">Query Runner</div>
+    <div class="card">
+      <div class="card-body">
+        <div style="display:flex;gap:8px;margin-bottom:8px">
+          <select id="qrPreset" onchange="document.getElementById('qrSql').value=PRESET_QUERIES[this.value].sql;this.value=''" style="flex:1;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:13px;outline:none">
+            <option value="">— Preset queries —</option>
+            ${PRESET_QUERIES.map((q,i) => `<option value="${i}">${escHtml(q.label)}</option>`).join('')}
+          </select>
+          ${qrHistory.length ? `<select id="qrHist" onchange="document.getElementById('qrSql').value=qrHistory[this.value];this.value=''" style="flex:1;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:13px;outline:none">
+            <option value="">— History —</option>
+            ${qrHistory.map((q,i) => `<option value="${i}">${escHtml(q.substring(0,60))}...</option>`).join('')}
+          </select>` : ''}
+        </div>
+        <textarea class="sql-editor" id="qrSql" placeholder="SELECT * FROM app_user_info LIMIT 10"></textarea>
+        <div class="query-actions">
+          <button class="btn btn-primary" onclick="runQuery()">▶ Run</button>
+          <button class="btn btn-ghost" onclick="document.getElementById('qrSql').value=''">Clear</button>
+          <span style="font-size:12px;color:#888;margin-left:4px">Ctrl+Enter to run</span>
+          <label class="write-mode-toggle">
+            <input type="checkbox" id="writeMode" onchange="qrWriteMode=this.checked">
+            <span style="${qrWriteMode?'color:#dc2626;font-weight:700':''}">Write mode ${qrWriteMode?'ON ⚠️':'(off)'}</span>
+          </label>
+        </div>
+      </div>
+    </div>
+    <div id="qrResult"></div>`;
+
+  document.getElementById('qrSql').addEventListener('keydown', e => {
+    if (e.ctrlKey && e.key === 'Enter') runQuery();
+  });
+}
+
+async function runQuery() {
+  const sql = document.getElementById('qrSql').value.trim();
+  if (!sql) return;
+  const resultEl = document.getElementById('qrResult');
+  resultEl.innerHTML = `<div class="loading">Running...</div>`;
+
+  try {
+    const data = await apiPost('/api/query', { sql, allowMutations: qrWriteMode });
+    if (data.error) {
+      resultEl.innerHTML = `<div class="error-msg">${escHtml(data.error)}</div>`; return;
+    }
+
+    qrHistory = [sql, ...qrHistory.filter(q => q !== sql)].slice(0, 20);
+    localStorage.setItem('qr_history', JSON.stringify(qrHistory));
+
+    if (!data.rows.length) { resultEl.innerHTML = `<div class="card"><div class="empty-state">Query returned 0 rows</div></div>`; return; }
+
+    const cols = Object.keys(data.rows[0]);
+    resultEl.innerHTML = `
+      <div class="card">
+        <div class="card-header"><h3>Results</h3><span style="font-size:13px;color:#888">${data.count} rows</span></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>${cols.map(c => `<th>${escHtml(c)}</th>`).join('')}</tr></thead>
+            <tbody>${data.rows.map(r => `<tr>${cols.map(c => `<td title="${escHtml(String(r[c]??''))}">${escHtml(String(r[c]??''))||'<span style="color:#bbb">null</span>'}</td>`).join('')}</tr>`).join('')}</tbody>
+          </table>
+        </div>
+      </div>`;
+  } catch(e) { resultEl.innerHTML = `<div class="error-msg">${escHtml(e.message)}</div>`; }
+}
+
+// ─── AI Query Builder ─────────────────────────────────────────────────────────
+let aiMessages = [];
+const AI_MODEL = 'eu.anthropic.claude-sonnet-4-5-20250929-v1:0';
+
+function renderAIQuery(el) {
+  aiMessages = [];
+  el.innerHTML = `
+    <div class="page-title">AI Assistant</div>
+    <div style="font-size:13px;color:#888;margin-bottom:14px">Describe what you want to find or do in plain language. The AI will generate SQL you can review and run.</div>
+    <div class="card">
+      <div class="chat-messages" id="chatMessages">
+        <div class="msg msg-ai">
+          <div class="msg-bubble">Hi! I know your full database schema. Ask me something like:<br><br>
+          • "find all bookings for March 2nd"<br>
+          • "show users who registered this week for praxis lc_10"<br>
+          • "how many cancelled appointments per praxis last month"</div>
+        </div>
+      </div>
+      <div class="chat-input-row">
+        <textarea class="chat-input" id="aiInput" placeholder="Describe what you want..." rows="1" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAiMessage()}"></textarea>
+        <button class="btn btn-primary" onclick="sendAiMessage()">Send</button>
+      </div>
+    </div>`;
+}
+
+async function sendAiMessage() {
+  const input = document.getElementById('aiInput');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+
+  aiMessages.push({ role: 'user', content: text });
+  const chatEl = document.getElementById('chatMessages');
+
+  chatEl.innerHTML += `<div class="msg msg-user"><div class="msg-bubble">${escHtml(text)}</div></div>`;
+  chatEl.innerHTML += `<div class="msg msg-ai" id="aiTyping"><div class="msg-bubble" style="color:#aaa">Generating SQL...</div></div>`;
+  chatEl.scrollTop = chatEl.scrollHeight;
+
+  try {
+    const data = await apiPost('/api/ai/query', { messages: aiMessages, modelId: AI_MODEL });
+    document.getElementById('aiTyping')?.remove();
+
+    if (data.error) {
+      chatEl.innerHTML += `<div class="msg msg-ai"><div class="msg-bubble" style="color:#dc2626">Error: ${escHtml(data.error)}</div></div>`;
+    } else {
+      const sql = data.sql;
+      aiMessages.push({ role: 'assistant', content: sql });
+      const msgId = 'ai_' + Date.now();
+      chatEl.innerHTML += `
+        <div class="msg msg-ai">
+          <div class="msg-bubble">
+            Here's the query:
+            <div class="sql-block">${escHtml(sql)}</div>
+            <div class="sql-actions">
+              <button class="btn btn-primary btn-sm" onclick="runAiSql('${msgId}')">▶ Run</button>
+              <button class="btn btn-ghost btn-sm" onclick="copyToQueryRunner('${msgId}')">Open in Query Runner</button>
+            </div>
+          </div>
+        </div>
+        <div id="${msgId}_result"></div>`;
+      window['_ai_sql_' + msgId] = sql;
+    }
+  } catch(e) {
+    document.getElementById('aiTyping')?.remove();
+    chatEl.innerHTML += `<div class="msg msg-ai"><div class="msg-bubble" style="color:#dc2626">Error: ${escHtml(e.message)}</div></div>`;
+  }
+  chatEl.scrollTop = chatEl.scrollHeight;
+}
+
+async function runAiSql(msgId) {
+  const sql = window['_ai_sql_' + msgId];
+  const resultEl = document.getElementById(msgId + '_result');
+  if (!resultEl || !sql) return;
+  resultEl.innerHTML = `<div class="loading" style="padding:10px">Running...</div>`;
+
+  try {
+    const data = await apiPost('/api/query', { sql, allowMutations: false });
+    if (data.error) { resultEl.innerHTML = `<div class="error-msg">${escHtml(data.error)}</div>`; return; }
+    if (!data.rows.length) { resultEl.innerHTML = `<div style="padding:8px;font-size:13px;color:#888">0 rows returned</div>`; return; }
+    const cols = Object.keys(data.rows[0]);
+    resultEl.innerHTML = `
+      <div class="card" style="margin-bottom:10px">
+        <div style="padding:8px 12px;font-size:12px;color:#888">${data.count} rows</div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>${cols.map(c => `<th>${escHtml(c)}</th>`).join('')}</tr></thead>
+            <tbody>${data.rows.slice(0,100).map(r => `<tr>${cols.map(c => `<td title="${escHtml(String(r[c]??''))}">${escHtml(String(r[c]??''))||'<span style="color:#bbb">null</span>'}</td>`).join('')}</tr>`).join('')}</tbody>
+          </table>
+        </div>
+      </div>`;
+    document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
+  } catch(e) { resultEl.innerHTML = `<div class="error-msg">${escHtml(e.message)}</div>`; }
+}
+
+function copyToQueryRunner(msgId) {
+  const sql = window['_ai_sql_' + msgId];
+  navigate('query-runner');
+  setTimeout(() => { const el = document.getElementById('qrSql'); if (el) el.value = sql; }, 100);
+}
+
+// ─── AWS Monitor ─────────────────────────────────────────────────────────────
+function renderMonitoring(el) {
+  el.innerHTML = `<div style="margin:-20px;height:calc(100vh - 100px)"><iframe src="/monitoring.html" style="width:100%;height:100%;border:none;border-radius:0"></iframe></div>`;
+}
+
+// ─── CSV Decryptor ────────────────────────────────────────────────────────────
+function renderCsvDecrypt(el) {
+  el.innerHTML = `
+    <div class="page-title">CSV Decryptor</div>
+    <iframe src="/tools/decrypt_viewer.html" style="width:100%;height:calc(100vh - 200px);border:none;border-radius:10px;background:white"></iframe>`;
+}
+
+// ─── Verify User ─────────────────────────────────────────────────────────────
+async function verifyUser(userId) {
+  const verifiedBy = prompt('Verified by (name):', 'Debugger');
+  if (verifiedBy === null) return;
+  const doc = prompt('Document type:', 'manual');
+  if (doc === null) return;
+  const docNumber = prompt('Document number:', 'manual');
+  if (docNumber === null) return;
+  try {
+    const res = await apiPost(`/api/users/${userId}/verify`, { verifiedBy, verifiedByDocument: doc, verifiedByDocumentNumber: docNumber });
+    if (res.error) { alert('Error: ' + res.error); return; }
+    alert('✅ User verified');
+    renderUserDetail(document.getElementById('content'), userId);
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+// ─── Send Notification ────────────────────────────────────────────────────────
+let fcmConfigured = false;
+
+async function renderSendNotification(el) {
+  el.innerHTML = `<div class="page-title">Send Notification</div><div class="loading">Loading...</div>`;
+  const cfg = await apiFetch('/api/fcm/config');
+  fcmConfigured = cfg.configured;
+
+  el.innerHTML = `
+    <div class="page-title">Send Notification</div>
+
+    ${!fcmConfigured ? `
+    <div class="card" style="margin-bottom:14px;border-left:4px solid #f59e0b">
+      <div class="card-header"><h3>⚙️ Firebase Setup Required</h3></div>
+      <div class="card-body">
+        <p style="font-size:13px;color:#666;margin-bottom:12px">Paste your Firebase service account JSON to enable push notifications. Get it from Firebase Console → Project Settings → Service Accounts → Generate new private key.</p>
+        <textarea id="fcmJson" placeholder='{"type":"service_account","project_id":"..."}' style="width:100%;min-height:120px;font-family:monospace;font-size:12px;border:1px solid #ddd;border-radius:8px;padding:10px;outline:none;resize:vertical"></textarea>
+        <div style="margin-top:10px">
+          <button class="btn btn-primary" onclick="saveFcmConfig()">Save Configuration</button>
+        </div>
+      </div>
+    </div>` : `
+    <div class="card" style="margin-bottom:14px;border-left:4px solid #16a34a">
+      <div class="card-body" style="display:flex;align-items:center;gap:10px">
+        <span class="dot dot-green"></span>
+        <span style="font-size:13px">Firebase configured — project: <strong>${escHtml(cfg.projectId)}</strong></span>
+        <button class="btn btn-ghost btn-sm" onclick="clearFcmConfig()">Change</button>
+      </div>
+    </div>`}
+
+    <div class="card" style="${!fcmConfigured ? 'opacity:0.5;pointer-events:none' : ''}">
+      <div class="card-header"><h3>Compose Notification</h3></div>
+      <div class="card-body" style="display:flex;flex-direction:column;gap:12px">
+        <div class="filter-row" style="align-items:flex-start">
+          <div class="fld" style="flex:1">
+            <label>Find User</label>
+            <div style="display:flex;gap:8px">
+              <input id="snUserSearch" placeholder="name / email / phone" style="flex:1;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:13px;outline:none" onkeydown="if(event.key==='Enter')searchNotifUser()">
+              <button class="btn btn-ghost" onclick="searchNotifUser()">Search</button>
+            </div>
+            <div id="snUserResults" style="margin-top:8px"></div>
+          </div>
+        </div>
+
+        <div id="snTokenSection" style="display:none">
+          <div style="font-size:12px;font-weight:700;color:#888;text-transform:uppercase;margin-bottom:8px">Device Tokens</div>
+          <div id="snTokenList"></div>
+        </div>
+
+        <div class="fld">
+          <label>Title</label>
+          <input id="snTitle" placeholder="Notification title" style="width:100%;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:13px;outline:none">
+        </div>
+        <div class="fld">
+          <label>Body</label>
+          <textarea id="snBody" placeholder="Notification message" style="width:100%;min-height:80px;border:1px solid #ddd;border-radius:6px;padding:10px;font-size:13px;outline:none;resize:vertical;font-family:inherit"></textarea>
+        </div>
+        <div>
+          <button class="btn btn-primary" id="snSendBtn" onclick="sendNotification()" disabled>📣 Send Notification</button>
+        </div>
+        <div id="snResult"></div>
+      </div>
+    </div>`;
+}
+
+async function saveFcmConfig() {
+  const json = document.getElementById('fcmJson').value.trim();
+  if (!json) { alert('Paste your service account JSON first'); return; }
+  try {
+    const res = await fetch('/api/fcm/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ serviceAccount: json }) });
+    const data = await res.json();
+    if (data.error) { alert('Error: ' + data.error); return; }
+    renderSendNotification(document.getElementById('content'));
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function clearFcmConfig() {
+  await fetch('/api/fcm/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ serviceAccount: '{}' }) });
+  renderSendNotification(document.getElementById('content'));
+}
+
+let snSelectedTokens = [];
+
+async function searchNotifUser() {
+  const q = document.getElementById('snUserSearch').value.trim();
+  if (!q) return;
+  const data = await apiFetch(`/api/users?q=${encodeURIComponent(q)}&pageSize=5`);
+  const resultsEl = document.getElementById('snUserResults');
+  if (!data.rows.length) { resultsEl.innerHTML = `<div style="font-size:13px;color:#aaa">No users found</div>`; return; }
+  resultsEl.innerHTML = data.rows.map(u => `
+    <div onclick="selectNotifUser(${u.id}, '${escHtml(u.firstName)} ${escHtml(u.lastName)}')" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;cursor:pointer;border:1px solid #e5e7eb;margin-bottom:4px;background:white" onmouseover="this.style.background='#f5f5ff'" onmouseout="this.style.background='white'">
+      <div>
+        <div style="font-size:13px;font-weight:600">${escHtml(u.firstName)} ${escHtml(u.lastName)}</div>
+        <div style="font-size:12px;color:#888">${escHtml(u.email)} · ${escHtml(u.praxisId||'')}</div>
+      </div>
+    </div>`).join('');
+}
+
+async function selectNotifUser(userId, name) {
+  document.getElementById('snUserResults').innerHTML = `<div style="font-size:13px;color:#16a34a;font-weight:600">✓ ${escHtml(name)}</div>`;
+  const tokens = await apiFetch(`/api/users/${userId}/tokens`);
+  const tokenSection = document.getElementById('snTokenSection');
+  const tokenList = document.getElementById('snTokenList');
+  snSelectedTokens = tokens.map(t => t.token);
+  tokenSection.style.display = 'block';
+  if (!tokens.length) {
+    tokenList.innerHTML = `<div style="font-size:13px;color:#aaa">No device tokens found for this user</div>`;
+    document.getElementById('snSendBtn').disabled = true;
+    return;
+  }
+  tokenList.innerHTML = tokens.map((t, i) => `
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;padding:6px 0;cursor:pointer">
+      <input type="checkbox" checked data-token="${escHtml(t.token)}" onchange="updateSnTokens()">
+      <span class="badge ${t.platform === 'ios' ? 'badge-blue' : t.platform === 'android' ? 'badge-green' : 'badge-grey'}">${escHtml(t.platform)}</span>
+      <span style="color:#888;font-size:11px">${escHtml(t.deviceId)} · last used ${deTime(t.lastUsedAt)}</span>
+    </label>`).join('');
+  document.getElementById('snSendBtn').disabled = false;
+}
+
+function updateSnTokens() {
+  snSelectedTokens = [...document.querySelectorAll('#snTokenList input[type=checkbox]:checked')].map(cb => cb.dataset.token);
+  document.getElementById('snSendBtn').disabled = !snSelectedTokens.length;
+}
+
+async function sendNotification() {
+  const title = document.getElementById('snTitle').value.trim();
+  const body = document.getElementById('snBody').value.trim();
+  if (!title || !body) { alert('Title and body are required'); return; }
+  if (!snSelectedTokens.length) { alert('No tokens selected'); return; }
+  if (!confirm(`Send "${title}" to ${snSelectedTokens.length} device(s)?`)) return;
+
+  document.getElementById('snSendBtn').disabled = true;
+  const resultEl = document.getElementById('snResult');
+  resultEl.innerHTML = `<div style="font-size:13px;color:#888">Sending...</div>`;
+
+  try {
+    const data = await apiPost('/api/fcm/send', { tokens: snSelectedTokens, title, body });
+    if (data.error) { resultEl.innerHTML = `<div class="error-msg">${escHtml(data.error)}</div>`; }
+    else {
+      resultEl.innerHTML = `<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:12px;font-size:13px">
+        ✅ Sent to <strong>${data.sent}</strong> device(s)${data.failed ? ` · <span style="color:#dc2626">${data.failed} failed</span>` : ''}
+        ${data.results.map(r => `<div style="font-size:12px;margin-top:4px;color:${r.ok?'#888':'#dc2626'}">...${r.token}: ${r.ok ? 'OK' : r.error}</div>`).join('')}
+      </div>`;
+    }
+  } catch(e) { resultEl.innerHTML = `<div class="error-msg">${escHtml(e.message)}</div>`; }
+  document.getElementById('snSendBtn').disabled = false;
+}
+
+// ─── Future Calls ─────────────────────────────────────────────────────────────
+async function renderFutureCalls(el, page = 1) {
+  el.innerHTML = `<div class="page-title">Future Calls</div><div class="loading">Loading...</div>`;
+  try {
+    const data = await apiFetch(`/api/future-calls?page=${page}&pageSize=100`);
+    setConnStatus('connected');
+
+    const now = new Date();
+    const overdue = data.rows.filter(r => new Date(r.time) < now).length;
+    const upcoming = data.rows.length - overdue;
+
+    el.innerHTML = `
+      <div class="page-title">Future Calls</div>
+      <div class="stats-row">
+        <div class="stat-card blue"><div class="stat-label">Total</div><div class="stat-value">${data.total}</div></div>
+        <div class="stat-card red"><div class="stat-label">Overdue</div><div class="stat-value">${overdue}</div></div>
+        <div class="stat-card green"><div class="stat-label">Upcoming</div><div class="stat-value">${upcoming}</div></div>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table><thead><tr><th>Scheduled Time</th><th>Name</th><th>Identifier</th><th>Server</th><th>Status</th><th></th></tr></thead>
+          <tbody id="fcBody">
+            ${data.rows.map(r => {
+              const isOverdue = new Date(r.time) < now;
+              return `<tr>
+                <td style="white-space:nowrap${isOverdue ? ';color:#dc2626;font-weight:600' : ''}">${deTime(r.time)}</td>
+                <td style="font-weight:500">${escHtml(r.name)}</td>
+                <td style="font-size:12px;color:#888">${escHtml(r.identifier||'—')}</td>
+                <td style="font-size:12px;color:#888">${escHtml(r.serverId)}</td>
+                <td>${isOverdue ? '<span class="badge badge-orange">Overdue</span>' : '<span class="badge badge-blue">Scheduled</span>'}</td>
+                <td><button class="btn btn-ghost btn-sm" style="color:#dc2626" onclick="cancelFutureCall(${r.id}, this)">Cancel</button></td>
+              </tr>`;
+            }).join('')}
+          </tbody></table>
+        </div>
+        <div id="fcPaging"></div>
+      </div>`;
+    renderPagination(document.getElementById('fcPaging'), data, (p) => renderFutureCalls(document.getElementById('content'), p));
+  } catch(e) { setConnStatus('error'); el.innerHTML = `<div class="page-title">Future Calls</div><div class="error-msg">${escHtml(e.message)}</div>`; }
+}
+
+async function cancelFutureCall(id, btn) {
+  if (!confirm('Cancel this scheduled task?')) return;
+  btn.disabled = true;
+  try {
+    const res = await fetch(`/api/future-calls/${id}`, { method: 'DELETE', headers: dbHeaders() });
+    const data = await res.json();
+    if (data.error) { alert('Error: ' + data.error); btn.disabled = false; return; }
+    btn.closest('tr').style.opacity = '0.4';
+    btn.textContent = 'Cancelled';
+  } catch(e) { alert(e.message); btn.disabled = false; }
+}
+
+// ─── Server Health ────────────────────────────────────────────────────────────
+async function renderHealth(el) {
+  el.innerHTML = `<div class="page-title">Server Health</div><div class="loading">Loading...</div>`;
+  try {
+    const data = await apiFetch('/api/health');
+    setConnStatus('connected');
+
+    // Group metrics by name, take latest value
+    const latest = {};
+    for (const m of data.metrics) {
+      if (!latest[m.name] || new Date(m.timestamp) > new Date(latest[m.name].timestamp)) latest[m.name] = m;
+    }
+    const conn = data.connections[0];
+
+    el.innerHTML = `
+      <div class="page-title">Server Health</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+        <div class="card">
+          <div class="card-header"><h3>Health Metrics</h3></div>
+          <div class="card-body">
+            ${Object.values(latest).length ? Object.values(latest).map(m => `
+              <div class="field-row">
+                <span class="field-key" style="text-transform:none">${escHtml(m.name)}</span>
+                <span style="display:flex;align-items:center;gap:8px">
+                  <span class="dot ${m.isHealthy ? 'dot-green' : 'dot-red'}"></span>
+                  <span class="field-val">${m.value.toFixed(2)}</span>
+                  <span style="font-size:11px;color:#aaa">${deTime(m.timestamp)}</span>
+                </span>
+              </div>`).join('') : '<div style="color:#aaa">No metrics available</div>'}
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header"><h3>DB Connection Pool</h3></div>
+          <div class="card-body">
+            ${conn ? `
+              <div class="field-row"><span class="field-key">Active</span><span class="field-val" style="color:#4f46e5;font-size:20px;font-weight:700">${conn.active}</span></div>
+              <div class="field-row"><span class="field-key">Idle</span><span class="field-val" style="color:#16a34a;font-size:20px;font-weight:700">${conn.idle}</span></div>
+              <div class="field-row"><span class="field-key">Closing</span><span class="field-val" style="color:#d97706;font-size:20px;font-weight:700">${conn.closing}</span></div>
+              <div class="field-row"><span class="field-key">Server</span><span class="field-val" style="font-size:13px">${escHtml(conn.serverId)}</span></div>
+              <div class="field-row"><span class="field-key">Last updated</span><span class="field-val" style="font-size:12px;color:#888">${deTime(conn.timestamp)}</span></div>
+            ` : '<div style="color:#aaa">No connection data</div>'}
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header"><h3>Metric History</h3><button class="btn btn-ghost btn-sm" onclick="renderHealth(document.getElementById('content'))">↻ Refresh</button></div>
+        <div class="table-wrap">
+          <table><thead><tr><th>Time</th><th>Name</th><th>Server</th><th>Healthy</th><th>Value</th></tr></thead>
+          <tbody>
+            ${data.metrics.slice(0, 50).map(m => `<tr>
+              <td style="font-size:12px;white-space:nowrap">${deTime(m.timestamp)}</td>
+              <td>${escHtml(m.name)}</td>
+              <td style="font-size:12px;color:#888">${escHtml(m.serverId)}</td>
+              <td>${m.isHealthy ? '<span class="dot dot-green"></span>' : '<span class="dot dot-red"></span>'}</td>
+              <td>${m.value.toFixed(3)}</td>
+            </tr>`).join('')}
+          </tbody></table>
+        </div>
+      </div>`;
+  } catch(e) { setConnStatus('error'); el.innerHTML = `<div class="page-title">Server Health</div><div class="error-msg">${escHtml(e.message)}</div>`; }
+}
+
+// ─── API Keys ─────────────────────────────────────────────────────────────────
+const API_KEY_STATUS = { 0: ['Active', 'badge-green'], 1: ['Inactive', 'badge-grey'], 2: ['Expired', 'badge-red'] };
+
+async function renderApiKeys(el) {
+  el.innerHTML = `<div class="page-title">API Keys</div><div class="loading">Loading...</div>`;
+  try {
+    const rows = await apiFetch('/api/api-keys');
+    setConnStatus('connected');
+
+    el.innerHTML = `
+      <div class="page-title">API Keys</div>
+      <div class="card">
+        <div class="table-wrap">
+          <table><thead><tr><th>Customer</th><th>Status</th><th>Usage</th><th>Last Used</th><th>Expires</th><th>Permissions</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${rows.map(r => {
+              const [label, cls] = API_KEY_STATUS[r.status] || ['Unknown', 'badge-grey'];
+              const perms = typeof r.permissions === 'object' ? Object.entries(r.permissions).filter(([,v])=>v).map(([k])=>k).join(', ') : String(r.permissions);
+              return `<tr>
+                <td>
+                  <div style="font-weight:600">${escHtml(r.customerName)}</div>
+                  <div style="font-size:11px;color:#888">${escHtml(r.customerUUID)}</div>
+                </td>
+                <td><span class="badge ${cls}">${label}</span></td>
+                <td style="font-weight:600">${r.usageCount.toLocaleString()}</td>
+                <td style="font-size:12px;white-space:nowrap">${deTime(r.lastUsedAt)}</td>
+                <td style="font-size:12px;white-space:nowrap${new Date(r.expiresAt) < new Date() ? ';color:#dc2626' : ''}">${deTime(r.expiresAt)}</td>
+                <td style="font-size:12px;color:#888;max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${escHtml(perms)}">${escHtml(perms)||'—'}</td>
+                <td>
+                  ${r.status === 0
+                    ? `<button class="btn btn-ghost btn-sm" style="color:#dc2626" onclick="setApiKeyStatus(${r.id}, 1, this)">Disable</button>`
+                    : `<button class="btn btn-ghost btn-sm" style="color:#16a34a" onclick="setApiKeyStatus(${r.id}, 0, this)">Enable</button>`}
+                </td>
+              </tr>`;
+            }).join('')}
+          </tbody></table>
+        </div>
+      </div>`;
+  } catch(e) { setConnStatus('error'); el.innerHTML = `<div class="page-title">API Keys</div><div class="error-msg">${escHtml(e.message)}</div>`; }
+}
+
+async function setApiKeyStatus(id, status, btn) {
+  const action = status === 0 ? 'enable' : 'disable';
+  if (!confirm(`Are you sure you want to ${action} this API key?`)) return;
+  btn.disabled = true;
+  try {
+    const res = await fetch(`/api/api-keys/${id}/status`, { method: 'PATCH', headers: dbHeaders(), body: JSON.stringify({ status }) });
+    const data = await res.json();
+    if (data.error) { alert('Error: ' + data.error); btn.disabled = false; return; }
+    renderApiKeys(document.getElementById('content'));
+  } catch(e) { alert(e.message); btn.disabled = false; }
+}
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+loadConfigFromStorage();
+const initView = window.location.hash.replace('#', '') || 'session-logs';
+navigate(initView);
+</script>
+</body>
+</html>

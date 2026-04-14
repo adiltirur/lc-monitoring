@@ -1,0 +1,1727 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LC Monitor</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #0a0e17;
+  color: #c8d8e8;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background-image:
+    linear-gradient(rgba(0,255,136,0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,255,136,0.025) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* ─── Header ─── */
+.hdr {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 20px;
+  height: 48px;
+  background: rgba(10,14,23,0.95);
+  border-bottom: 1px solid rgba(0,255,136,0.15);
+  flex-shrink: 0;
+  backdrop-filter: blur(8px);
+}
+.hdr-brand {
+  font-size: 13px;
+  font-weight: 700;
+  color: #00ff88;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  font-family: monospace;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.hdr-brand::before {
+  content: '';
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #00ff88;
+  box-shadow: 0 0 8px #00ff88;
+  animation: pulse-green 2s ease-in-out infinite;
+}
+.tabs {
+  display: flex;
+  gap: 2px;
+  flex: 1;
+  justify-content: center;
+}
+.tab-btn {
+  padding: 6px 16px;
+  background: transparent;
+  border: 1px solid rgba(0,255,136,0.12);
+  border-radius: 4px;
+  color: rgba(200,216,232,0.5);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  cursor: pointer;
+  font-family: monospace;
+  transition: all 0.15s;
+}
+.tab-btn:hover { border-color: rgba(0,255,136,0.35); color: #00ff88; }
+.tab-btn.active {
+  background: rgba(0,255,136,0.1);
+  border-color: #00ff88;
+  color: #00ff88;
+  box-shadow: 0 0 10px rgba(0,255,136,0.15);
+}
+.hdr-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  white-space: nowrap;
+}
+.hdr-clock {
+  font-family: monospace;
+  font-size: 12px;
+  color: #3a8a6a;
+}
+.db-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-family: monospace;
+  color: #3a8a6a;
+}
+.db-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: #3a5a4a;
+}
+.db-dot.ok { background: #00ff88; box-shadow: 0 0 6px #00ff88; }
+.db-dot.none { background: #ff3366; box-shadow: 0 0 6px #ff3366; }
+
+/* ─── Tab panels ─── */
+.tab-panels { flex: 1; overflow: hidden; position: relative; }
+.tab-panel {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  padding: 16px 20px;
+  display: none;
+}
+.tab-panel.active { display: block; }
+.tab-panel::-webkit-scrollbar { width: 4px; }
+.tab-panel::-webkit-scrollbar-track { background: #0a0e17; }
+.tab-panel::-webkit-scrollbar-thumb { background: rgba(0,255,136,0.2); border-radius: 2px; }
+
+/* ─── Shared panel styles ─── */
+.section-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: rgba(0,255,136,0.5);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.section-title::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: rgba(0,255,136,0.1);
+}
+
+.panel {
+  background: rgba(13,17,23,0.8);
+  border: 1px solid rgba(0,255,136,0.12);
+  border-radius: 8px;
+  padding: 14px;
+  position: relative;
+  overflow: hidden;
+}
+.panel::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(0,255,136,0.3), transparent);
+}
+
+/* ─── Stats bar ─── */
+.stats-bar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.stat-card {
+  background: rgba(13,17,23,0.8);
+  border: 1px solid rgba(0,255,136,0.12);
+  border-radius: 6px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.stat-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: rgba(0,255,136,0.4);
+  font-family: monospace;
+}
+.stat-value {
+  font-size: 22px;
+  font-weight: 700;
+  font-family: monospace;
+  color: #00d4ff;
+  line-height: 1;
+}
+.stat-sub {
+  font-size: 10px;
+  color: rgba(200,216,232,0.35);
+  font-family: monospace;
+}
+
+/* ─── Service grid ─── */
+.service-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.svc-card {
+  background: rgba(13,17,23,0.9);
+  border: 1px solid rgba(0,255,136,0.1);
+  border-radius: 6px;
+  padding: 12px;
+  transition: border-color 0.2s;
+}
+.svc-card:hover { border-color: rgba(0,255,136,0.25); }
+.svc-card.state-running { border-left: 3px solid #00ff88; }
+.svc-card.state-available { border-left: 3px solid #00ff88; }
+.svc-card.state-active { border-left: 3px solid #00ff88; }
+.svc-card.state-stopped { border-left: 3px solid #ff3366; }
+.svc-card.state-error { border-left: 3px solid #ff3366; }
+.svc-card.state-unknown { border-left: 3px solid #3a5a6a; }
+.svc-card.state-deployed { border-left: 3px solid #00d4ff; }
+.svc-card.state-s3 { border-left: 3px solid #ffaa00; }
+
+.svc-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: #c8d8e8;
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.svc-meta {
+  font-size: 10px;
+  color: rgba(200,216,232,0.4);
+  font-family: monospace;
+  line-height: 1.6;
+}
+.svc-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-family: monospace;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 6px;
+}
+.dot-status {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dot-green { background: #00ff88; box-shadow: 0 0 6px #00ff88; animation: pulse-green 2.5s ease-in-out infinite; }
+.dot-red { background: #ff3366; box-shadow: 0 0 6px #ff3366; }
+.dot-blue { background: #00d4ff; box-shadow: 0 0 6px #00d4ff; }
+.dot-amber { background: #ffaa00; }
+.dot-grey { background: #3a5a6a; }
+
+@keyframes pulse-green {
+  0%, 100% { opacity: 1; box-shadow: 0 0 4px #00ff88; }
+  50% { opacity: 0.7; box-shadow: 0 0 12px #00ff88, 0 0 20px rgba(0,255,136,0.3); }
+}
+
+/* ─── Refresh btn ─── */
+.refresh-btn {
+  background: transparent;
+  border: 1px solid rgba(0,255,136,0.2);
+  border-radius: 4px;
+  color: rgba(0,255,136,0.6);
+  font-size: 10px;
+  font-family: monospace;
+  font-weight: 700;
+  letter-spacing: 1px;
+  padding: 4px 10px;
+  cursor: pointer;
+  text-transform: uppercase;
+  transition: all 0.15s;
+}
+.refresh-btn:hover { border-color: #00ff88; color: #00ff88; background: rgba(0,255,136,0.05); }
+.refresh-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+/* ─── Loading / Error states ─── */
+.loading-state, .error-state, .empty-state {
+  padding: 40px;
+  text-align: center;
+  font-family: monospace;
+  font-size: 12px;
+}
+.loading-state { color: rgba(0,255,136,0.5); }
+.error-state { color: #ff3366; }
+.empty-state { color: rgba(200,216,232,0.3); }
+.spinner {
+  display: inline-block;
+  width: 16px; height: 16px;
+  border: 2px solid rgba(0,255,136,0.15);
+  border-top-color: #00ff88;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  vertical-align: middle;
+  margin-right: 8px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ─── Metrics tab ─── */
+.metrics-controls {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.ctrl-group { display: flex; flex-direction: column; gap: 4px; }
+.ctrl-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: rgba(0,255,136,0.4);
+  font-family: monospace;
+}
+.ctrl-select {
+  background: rgba(13,17,23,0.9);
+  border: 1px solid rgba(0,255,136,0.2);
+  border-radius: 4px;
+  color: #c8d8e8;
+  font-size: 12px;
+  font-family: monospace;
+  padding: 6px 10px;
+  height: 32px;
+  outline: none;
+  cursor: pointer;
+  min-width: 160px;
+}
+.ctrl-select:focus { border-color: #00ff88; }
+.time-btns { display: flex; gap: 4px; }
+.time-btn {
+  background: transparent;
+  border: 1px solid rgba(0,255,136,0.15);
+  border-radius: 3px;
+  color: rgba(200,216,232,0.45);
+  font-size: 10px;
+  font-family: monospace;
+  padding: 5px 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+  height: 32px;
+}
+.time-btn:hover { border-color: rgba(0,255,136,0.35); color: #00ff88; }
+.time-btn.active { background: rgba(0,255,136,0.1); border-color: #00ff88; color: #00ff88; }
+.charts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  gap: 12px;
+}
+.chart-card {
+  background: rgba(13,17,23,0.9);
+  border: 1px solid rgba(0,255,136,0.1);
+  border-radius: 8px;
+  padding: 14px;
+}
+.chart-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: rgba(0,212,255,0.6);
+  font-family: monospace;
+  margin-bottom: 10px;
+}
+canvas.metric-chart {
+  width: 100%;
+  height: 120px;
+  display: block;
+}
+
+/* ─── Live logs tab ─── */
+.log-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.sse-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-family: monospace;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid rgba(0,255,136,0.2);
+}
+.sse-status.connected { color: #00ff88; border-color: rgba(0,255,136,0.3); }
+.sse-status.disconnected { color: #ff3366; border-color: rgba(255,51,102,0.3); }
+.sse-status.connecting { color: #ffaa00; border-color: rgba(255,170,0,0.3); }
+.log-filter-input {
+  background: rgba(13,17,23,0.9);
+  border: 1px solid rgba(0,255,136,0.15);
+  border-radius: 4px;
+  color: #c8d8e8;
+  font-size: 11px;
+  font-family: monospace;
+  padding: 5px 10px;
+  height: 30px;
+  outline: none;
+  width: 180px;
+}
+.log-filter-input:focus { border-color: rgba(0,255,136,0.4); }
+.log-filter-select {
+  background: rgba(13,17,23,0.9);
+  border: 1px solid rgba(0,255,136,0.15);
+  border-radius: 4px;
+  color: #c8d8e8;
+  font-size: 11px;
+  font-family: monospace;
+  padding: 0 8px;
+  height: 30px;
+  outline: none;
+  cursor: pointer;
+}
+.log-stream {
+  background: rgba(5,8,14,0.95);
+  border: 1px solid rgba(0,255,136,0.1);
+  border-radius: 6px;
+  height: calc(100vh - 200px);
+  overflow-y: auto;
+  font-family: 'JetBrains Mono', 'SF Mono', 'Monaco', monospace;
+  font-size: 11px;
+  position: relative;
+}
+.log-stream::-webkit-scrollbar { width: 4px; }
+.log-stream::-webkit-scrollbar-track { background: #05080e; }
+.log-stream::-webkit-scrollbar-thumb { background: rgba(0,255,136,0.15); }
+.log-entry {
+  display: flex;
+  gap: 8px;
+  padding: 5px 12px;
+  border-bottom: 1px solid rgba(0,255,136,0.04);
+  cursor: pointer;
+  animation: slideIn 0.25s ease-out;
+  transition: background 0.1s;
+  align-items: flex-start;
+}
+.log-entry:hover { background: rgba(0,255,136,0.03); }
+.log-entry.expanded { background: rgba(0,255,136,0.05); }
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(-6px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.log-ts { color: rgba(58,90,106,0.9); flex-shrink: 0; width: 84px; }
+.log-level { flex-shrink: 0; width: 42px; font-weight: 700; text-align: center; }
+.level-error { color: #ff3366; }
+.level-fatal { color: #ff0044; }
+.level-warning { color: #ffaa00; }
+.level-info { color: #00d4ff; }
+.level-debug { color: rgba(200,216,232,0.3); }
+.log-source { color: rgba(0,212,255,0.5); flex-shrink: 0; width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.log-msg { color: rgba(200,216,232,0.75); flex: 1; word-break: break-all; }
+.log-detail {
+  padding: 8px 12px 12px 36px;
+  font-size: 10px;
+  color: rgba(200,216,232,0.5);
+  background: rgba(0,0,0,0.2);
+  border-bottom: 1px solid rgba(0,255,136,0.06);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.log-stream-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: rgba(200,216,232,0.2);
+  font-family: monospace;
+  font-size: 12px;
+  gap: 8px;
+}
+
+/* ─── Errors tab ─── */
+.errors-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+@media (max-width: 800px) { .errors-grid { grid-template-columns: 1fr; } }
+.err-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  font-family: monospace;
+}
+.err-table th {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: rgba(0,255,136,0.4);
+  padding: 6px 8px;
+  text-align: left;
+  border-bottom: 1px solid rgba(0,255,136,0.1);
+}
+.err-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(0,255,136,0.05);
+  color: rgba(200,216,232,0.7);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.err-table tr:hover td { background: rgba(0,255,136,0.03); }
+.err-count { color: #ff3366; font-weight: 700; }
+.err-endpoint { color: #00d4ff; }
+
+.recent-errors { margin-top: 12px; }
+.err-row {
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(0,255,136,0.05);
+  cursor: pointer;
+  font-size: 11px;
+  font-family: monospace;
+  transition: background 0.1s;
+}
+.err-row:hover { background: rgba(255,51,102,0.04); }
+.err-row-header { display: flex; gap: 10px; align-items: center; }
+.err-time { color: rgba(58,90,106,0.8); width: 145px; flex-shrink: 0; }
+.err-ep { color: #00d4ff; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.err-dur { color: rgba(255,170,0,0.6); width: 60px; text-align: right; flex-shrink: 0; }
+.err-msg { color: #ff6680; font-size: 10px; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.err-detail {
+  padding: 8px 12px;
+  font-size: 10px;
+  color: rgba(200,216,232,0.5);
+  background: rgba(255,51,102,0.03);
+  border-bottom: 1px solid rgba(255,51,102,0.08);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+  display: none;
+}
+
+/* ─── Alarms tab ─── */
+.alarms-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 10px;
+}
+.alarm-card {
+  background: rgba(13,17,23,0.9);
+  border: 1px solid rgba(0,255,136,0.1);
+  border-radius: 6px;
+  padding: 14px;
+  transition: all 0.2s;
+}
+.alarm-card.alarm-ok { border-color: rgba(0,255,136,0.2); }
+.alarm-card.alarm-alarm {
+  border-color: rgba(255,51,102,0.5);
+  animation: alarm-blink 2s ease-in-out infinite;
+}
+.alarm-card.alarm-insufficient { border-color: rgba(58,90,106,0.3); }
+@keyframes alarm-blink {
+  0%, 100% { border-color: rgba(255,51,102,0.4); box-shadow: none; }
+  50% { border-color: rgba(255,51,102,0.8); box-shadow: 0 0 12px rgba(255,51,102,0.2); }
+}
+.alarm-name {
+  font-size: 11px;
+  font-weight: 700;
+  font-family: monospace;
+  color: #c8d8e8;
+  margin-bottom: 6px;
+  word-break: break-word;
+}
+.alarm-state-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  font-family: monospace;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  margin-bottom: 8px;
+}
+.badge-alarm { background: rgba(255,51,102,0.15); color: #ff3366; }
+.badge-ok { background: rgba(0,255,136,0.1); color: #00ff88; }
+.badge-insufficient { background: rgba(58,90,106,0.2); color: #3a8a9a; }
+.alarm-meta {
+  font-size: 10px;
+  color: rgba(200,216,232,0.35);
+  font-family: monospace;
+  line-height: 1.7;
+}
+.alarm-reason {
+  font-size: 10px;
+  color: rgba(255,102,128,0.6);
+  font-family: monospace;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255,51,102,0.1);
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+/* ─── PMS Downtime ─── */
+.downtime-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.downtime-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: rgba(5,8,14,0.5);
+  border-radius: 4px;
+  border: 1px solid rgba(255,170,0,0.1);
+  font-family: monospace;
+  font-size: 11px;
+}
+.dt-time { color: rgba(58,90,106,0.8); width: 180px; flex-shrink: 0; }
+.dt-dur {
+  color: #ffaa00;
+  font-weight: 700;
+  width: 100px;
+}
+.dt-bar {
+  flex: 1;
+  height: 4px;
+  background: rgba(255,170,0,0.08);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.dt-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #ffaa00, #ff6600);
+  border-radius: 2px;
+  transition: width 0.5s ease;
+}
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header class="hdr">
+  <div class="hdr-brand">⬡ LC MONITOR</div>
+  <nav class="tabs">
+    <button class="tab-btn active" id="tab-overview" onclick="showTab('overview')">Overview</button>
+    <button class="tab-btn" id="tab-metrics" onclick="showTab('metrics')">Metrics</button>
+    <button class="tab-btn" id="tab-logs" onclick="showTab('logs')">Live Logs</button>
+    <button class="tab-btn" id="tab-errors" onclick="showTab('errors')">Errors</button>
+    <button class="tab-btn" id="tab-alarms" onclick="showTab('alarms')">Alarms</button>
+  </nav>
+  <div class="hdr-right">
+    <div class="db-status"><div class="db-dot" id="dbDot"></div><span id="dbLabel">no db</span></div>
+    <div class="hdr-clock" id="clock">--:--:--</div>
+  </div>
+</header>
+
+<!-- Tab panels -->
+<div class="tab-panels">
+
+  <!-- OVERVIEW -->
+  <div class="tab-panel active" id="panel-overview">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div class="section-title" style="margin-bottom:0;flex:1">Infrastructure Status</div>
+      <button class="refresh-btn" id="overviewRefreshBtn" onclick="loadOverview(true)">↻ Refresh</button>
+    </div>
+    <div class="stats-bar" id="statsBar"></div>
+    <div id="overviewContent"><div class="loading-state"><span class="spinner"></span>Loading infrastructure...</div></div>
+  </div>
+
+  <!-- METRICS -->
+  <div class="tab-panel" id="panel-metrics">
+    <div class="metrics-controls">
+      <div class="ctrl-group">
+        <div class="ctrl-label">Service</div>
+        <select class="ctrl-select" id="metricService" onchange="onMetricServiceChange()">
+          <option value="ec2">EC2 Instances</option>
+          <option value="rds">RDS Databases</option>
+          <option value="alb">Load Balancers</option>
+          <option value="redis">ElastiCache Redis</option>
+        </select>
+      </div>
+      <div class="ctrl-group">
+        <div class="ctrl-label">Instance</div>
+        <select class="ctrl-select" id="metricInstance"></select>
+      </div>
+      <div class="ctrl-group">
+        <div class="ctrl-label">Time Range</div>
+        <div class="time-btns">
+          <button class="time-btn active" data-hours="1" onclick="setTimeRange(this,1)">1H</button>
+          <button class="time-btn" data-hours="6" onclick="setTimeRange(this,6)">6H</button>
+          <button class="time-btn" data-hours="24" onclick="setTimeRange(this,24)">24H</button>
+          <button class="time-btn" data-hours="168" onclick="setTimeRange(this,168)">7D</button>
+        </div>
+      </div>
+      <div class="ctrl-group" style="justify-content:flex-end">
+        <div class="ctrl-label">&nbsp;</div>
+        <button class="refresh-btn" onclick="loadMetrics()">Load Metrics</button>
+      </div>
+    </div>
+    <div id="metricsContent"><div class="empty-state">Select a service and click Load Metrics</div></div>
+  </div>
+
+  <!-- LIVE LOGS -->
+  <div class="tab-panel" id="panel-logs">
+    <div class="log-controls">
+      <div class="sse-status connecting" id="sseStatus">
+        <div class="dot-status dot-amber"></div>
+        <span>Connecting...</span>
+      </div>
+      <input class="log-filter-input" id="logSearch" placeholder="Search logs..." oninput="filterLogs()">
+      <select class="log-filter-select" id="logLevelFilter" onchange="filterLogs()">
+        <option value="">All Levels</option>
+        <option value="error">Errors Only</option>
+        <option value="warning">Warnings+</option>
+        <option value="info">Info+</option>
+      </select>
+      <button class="refresh-btn" id="pauseBtn" onclick="togglePause()">⏸ Pause</button>
+      <button class="refresh-btn" onclick="clearLogs()">✕ Clear</button>
+      <span style="font-size:10px;font-family:monospace;color:rgba(200,216,232,0.3)" id="logCount">0 entries</span>
+    </div>
+    <div class="log-stream" id="logStream">
+      <div class="log-stream-empty" id="logStreamEmpty">
+        <div>◎</div>
+        <div>Waiting for logs...</div>
+        <div style="color:rgba(200,216,232,0.1);font-size:10px">Connect to a DB in the top panel, then switch to this tab</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ERRORS -->
+  <div class="tab-panel" id="panel-errors">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div class="section-title" style="margin-bottom:0;flex:1">Error Tracker — Last 24h</div>
+      <button class="refresh-btn" onclick="loadErrors()">↻ Refresh</button>
+    </div>
+    <div id="errorsContent"><div class="loading-state"><span class="spinner"></span>Loading...</div></div>
+  </div>
+
+  <!-- ALARMS -->
+  <div class="tab-panel" id="panel-alarms">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div class="section-title" style="margin-bottom:0;flex:1">CloudWatch Alarms</div>
+      <button class="refresh-btn" onclick="loadAlarms()">↻ Refresh</button>
+    </div>
+    <div id="alarmsContent"><div class="loading-state"><span class="spinner"></span>Loading...</div></div>
+  </div>
+
+</div>
+
+<script>
+// ─── State ───────────────────────────────────────────────────────────────────
+let activeTab = 'overview';
+let infraData = null;
+let logEntries = [];
+let logPaused = false;
+let eventSource = null;
+let metricTimeHours = 1;
+let dbCfg = {};
+const MAX_LOG_ENTRIES = 500;
+
+// ─── Init ────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  loadDbConfig();
+  startClock();
+  loadOverview();
+  loadAlarms();
+});
+
+function loadDbConfig() {
+  try {
+    dbCfg = JSON.parse(localStorage.getItem('lc_db') || '{}');
+    const dot = document.getElementById('dbDot');
+    const lbl = document.getElementById('dbLabel');
+    if (dbCfg.host && dbCfg.host !== 'localhost') {
+      dot.className = 'db-dot ok';
+      lbl.textContent = dbCfg.host.split('.')[0];
+    } else if (dbCfg.host === 'localhost') {
+      dot.className = 'db-dot ok';
+      lbl.textContent = 'localhost';
+    } else {
+      dot.className = 'db-dot none';
+      lbl.textContent = 'no db';
+    }
+  } catch(e) {
+    dbCfg = {};
+  }
+}
+
+function startClock() {
+  const update = () => {
+    document.getElementById('clock').textContent = new Date().toLocaleTimeString('de-DE', { hour12: false });
+  };
+  update();
+  setInterval(update, 1000);
+}
+
+// ─── Tab navigation ───────────────────────────────────────────────────────────
+function showTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById(`tab-${tab}`).classList.add('active');
+  document.getElementById(`panel-${tab}`).classList.add('active');
+
+  if (tab === 'logs') {
+    if (!eventSource) startSSE();
+  } else if (tab === 'errors') {
+    loadErrors();
+  } else if (tab === 'alarms') {
+    loadAlarms();
+  } else if (tab === 'metrics') {
+    populateMetricInstances();
+  }
+}
+
+// ─── Overview ────────────────────────────────────────────────────────────────
+async function loadOverview(force) {
+  const btn = document.getElementById('overviewRefreshBtn');
+  btn.disabled = true;
+  if (force) infraData = null;
+
+  try {
+    const res = await fetch('/api/monitor/infra/overview');
+    infraData = await res.json();
+    if (infraData.error) throw new Error(infraData.error);
+    renderOverview(infraData);
+  } catch(e) {
+    document.getElementById('overviewContent').innerHTML =
+      `<div class="error-state">⚠ Failed to load infrastructure: ${e.message}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '↻ Refresh';
+  }
+}
+
+function renderOverview(d) {
+  const running = d.ec2.filter(i => i.state === 'running').length;
+  const rdsUp = d.rds.filter(i => i.status === 'available').length;
+  const redisUp = d.redis.filter(i => i.status === 'available').length;
+  const albActive = d.alb.filter(i => i.state === 'active').length;
+
+  document.getElementById('statsBar').innerHTML = `
+    <div class="stat-card">
+      <div class="stat-label">EC2 Running</div>
+      <div class="stat-value" style="color:${running===d.ec2.length?'#00ff88':'#ffaa00'}">${running}</div>
+      <div class="stat-sub">of ${d.ec2.length} instances</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">RDS Available</div>
+      <div class="stat-value" style="color:${rdsUp===d.rds.length?'#00ff88':'#ffaa00'}">${rdsUp}</div>
+      <div class="stat-sub">of ${d.rds.length} databases</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Redis Available</div>
+      <div class="stat-value" style="color:${redisUp===d.redis.length?'#00ff88':'#ffaa00'}">${redisUp}</div>
+      <div class="stat-sub">of ${d.redis.length} clusters</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Load Balancers</div>
+      <div class="stat-value" style="color:#00d4ff">${albActive}</div>
+      <div class="stat-sub">of ${d.alb.length} active</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">CloudFront</div>
+      <div class="stat-value" style="color:#00d4ff">${d.cloudfront.length}</div>
+      <div class="stat-sub">distributions</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">S3 Buckets</div>
+      <div class="stat-value" style="color:#ffaa00">${d.s3.length}</div>
+      <div class="stat-sub">buckets</div>
+    </div>
+  `;
+
+  let html = '';
+
+  // EC2
+  html += `<div class="section-title">EC2 Instances</div>`;
+  html += `<div class="service-grid">`;
+  for (const i of d.ec2) {
+    const stateClass = i.state === 'running' ? 'state-running' : i.state === 'stopped' ? 'state-stopped' : 'state-unknown';
+    const dotClass = i.state === 'running' ? 'dot-green' : i.state === 'stopped' ? 'dot-red' : 'dot-grey';
+    const stateColor = i.state === 'running' ? '#00ff88' : i.state === 'stopped' ? '#ff3366' : '#3a8a9a';
+    html += `
+      <div class="svc-card ${stateClass}">
+        <div class="svc-name">${esc(i.name)}</div>
+        <div class="svc-meta">
+          ${esc(i.id)}<br>
+          ${esc(i.type)} · ${esc(i.az || '')}<br>
+          ${i.publicIp ? esc(i.publicIp) : (i.privateIp ? esc(i.privateIp) : 'no public IP')}
+        </div>
+        <div class="svc-status" style="color:${stateColor}">
+          <div class="dot-status ${dotClass}"></div>${i.state}
+        </div>
+      </div>`;
+  }
+  html += `</div>`;
+
+  // RDS
+  html += `<div class="section-title">RDS Databases</div>`;
+  html += `<div class="service-grid">`;
+  for (const db of d.rds) {
+    const ok = db.status === 'available';
+    html += `
+      <div class="svc-card ${ok ? 'state-available' : 'state-error'}">
+        <div class="svc-name">${esc(db.id)}</div>
+        <div class="svc-meta">
+          ${esc(db.engine)} ${esc(db.engineVersion || '')}<br>
+          ${esc(db.class)}<br>
+          ${db.storage}GB · ${db.multiAz ? 'Multi-AZ' : 'Single-AZ'}
+        </div>
+        <div class="svc-status" style="color:${ok ? '#00ff88' : '#ff3366'}">
+          <div class="dot-status ${ok ? 'dot-green' : 'dot-red'}"></div>${db.status}
+        </div>
+      </div>`;
+  }
+  html += `</div>`;
+
+  // Redis
+  html += `<div class="section-title">ElastiCache Redis</div>`;
+  html += `<div class="service-grid">`;
+  for (const r of d.redis) {
+    const ok = r.status === 'available';
+    html += `
+      <div class="svc-card ${ok ? 'state-available' : 'state-error'}">
+        <div class="svc-name">${esc(r.id)}</div>
+        <div class="svc-meta">
+          Redis ${esc(r.engineVersion || '')}<br>
+          ${esc(r.nodeType)}<br>
+          ${r.nodes.length} node${r.nodes.length !== 1 ? 's' : ''}
+        </div>
+        <div class="svc-status" style="color:${ok ? '#00ff88' : '#ff3366'}">
+          <div class="dot-status ${ok ? 'dot-green' : 'dot-red'}"></div>${r.status}
+        </div>
+      </div>`;
+  }
+  html += `</div>`;
+
+  // ALB
+  html += `<div class="section-title">Load Balancers</div>`;
+  html += `<div class="service-grid">`;
+  for (const lb of d.alb) {
+    const ok = lb.state === 'active';
+    html += `
+      <div class="svc-card ${ok ? 'state-active' : 'state-error'}">
+        <div class="svc-name">${esc(lb.name)}</div>
+        <div class="svc-meta">
+          ${esc(lb.type)} · ${esc(lb.scheme)}<br>
+          <span style="color:rgba(0,212,255,0.4);font-size:9px">${esc(lb.dns)}</span>
+        </div>
+        <div class="svc-status" style="color:${ok ? '#00ff88' : '#ff3366'}">
+          <div class="dot-status ${ok ? 'dot-green' : 'dot-red'}"></div>${lb.state}
+        </div>
+      </div>`;
+  }
+  html += `</div>`;
+
+  // CloudFront
+  html += `<div class="section-title">CloudFront</div>`;
+  html += `<div class="service-grid">`;
+  for (const cf of d.cloudfront) {
+    const ok = cf.status === 'Deployed';
+    const alias = cf.aliases[0] || cf.domain;
+    html += `
+      <div class="svc-card ${ok ? 'state-deployed' : 'state-unknown'}">
+        <div class="svc-name" title="${esc(cf.domain)}">${esc(alias)}</div>
+        <div class="svc-meta">
+          ${esc(cf.id)}<br>
+          <span style="font-size:9px;color:rgba(200,216,232,0.3)">${esc(cf.origin || '')}</span>
+        </div>
+        <div class="svc-status" style="color:${ok ? '#00d4ff' : '#3a8a9a'}">
+          <div class="dot-status ${ok ? 'dot-blue' : 'dot-grey'}"></div>${cf.status}
+        </div>
+      </div>`;
+  }
+  html += `</div>`;
+
+  // S3
+  html += `<div class="section-title">S3 Buckets</div>`;
+  html += `<div class="service-grid">`;
+  for (const b of d.s3) {
+    html += `
+      <div class="svc-card state-s3">
+        <div class="svc-name">${esc(b.name)}</div>
+        <div class="svc-meta">
+          Created ${fmtDate(b.created)}
+        </div>
+        <div class="svc-status" style="color:#ffaa00">
+          <div class="dot-status dot-amber"></div>active
+        </div>
+      </div>`;
+  }
+  html += `</div>`;
+
+  document.getElementById('overviewContent').innerHTML = html;
+}
+
+// ─── Metrics ──────────────────────────────────────────────────────────────────
+function populateMetricInstances() {
+  if (!infraData) return;
+  const svc = document.getElementById('metricService').value;
+  const sel = document.getElementById('metricInstance');
+  sel.innerHTML = '';
+  const items = svc === 'ec2' ? infraData.ec2.map(i => ({ id: i.id, label: i.name || i.id }))
+    : svc === 'rds' ? infraData.rds.map(i => ({ id: i.id, label: i.id }))
+    : svc === 'alb' ? infraData.alb.map(i => ({ id: i.arnSuffix, label: i.name }))
+    : infraData.redis.map(i => ({ id: i.id, label: i.id }));
+  for (const it of items) {
+    const o = document.createElement('option');
+    o.value = it.id; o.textContent = it.label;
+    sel.appendChild(o);
+  }
+}
+
+function onMetricServiceChange() {
+  populateMetricInstances();
+}
+
+function setTimeRange(btn, hours) {
+  document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  metricTimeHours = hours;
+}
+
+async function loadMetrics() {
+  if (!infraData) {
+    await loadOverview();
+    populateMetricInstances();
+  } else {
+    populateMetricInstances();
+  }
+
+  const svc = document.getElementById('metricService').value;
+  const instanceId = document.getElementById('metricInstance').value;
+  if (!instanceId) {
+    document.getElementById('metricsContent').innerHTML = '<div class="empty-state">No instance selected</div>';
+    return;
+  }
+
+  document.getElementById('metricsContent').innerHTML = '<div class="loading-state"><span class="spinner"></span>Loading metrics...</div>';
+
+  const endTime = new Date().toISOString();
+  const startTime = new Date(Date.now() - metricTimeHours * 3600 * 1000).toISOString();
+  const period = metricTimeHours <= 1 ? 60 : metricTimeHours <= 6 ? 300 : metricTimeHours <= 24 ? 900 : 3600;
+
+  const METRIC_SETS = {
+    ec2: [
+      { label: 'CPU Utilization (%)', namespace: 'AWS/EC2', metricName: 'CPUUtilization', dimensions: [{ name: 'InstanceId', value: instanceId }], stat: 'Average', unit: '%' },
+      { label: 'Network In (bytes)', namespace: 'AWS/EC2', metricName: 'NetworkIn', dimensions: [{ name: 'InstanceId', value: instanceId }], stat: 'Sum', unit: 'bytes' },
+      { label: 'Network Out (bytes)', namespace: 'AWS/EC2', metricName: 'NetworkOut', dimensions: [{ name: 'InstanceId', value: instanceId }], stat: 'Sum', unit: 'bytes' },
+      { label: 'Status Check Failed', namespace: 'AWS/EC2', metricName: 'StatusCheckFailed', dimensions: [{ name: 'InstanceId', value: instanceId }], stat: 'Maximum', unit: '' },
+      { label: 'Memory Used (%) *', namespace: 'lc-core/EC2', metricName: 'mem_used_percent', dimensions: [{ name: 'InstanceId', value: instanceId }], stat: 'Average', unit: '%' },
+      { label: 'Disk Used (%) *', namespace: 'lc-core/EC2', metricName: 'disk_used_percent', dimensions: [{ name: 'InstanceId', value: instanceId }, { name: 'path', value: '/' }], stat: 'Average', unit: '%' },
+    ],
+    rds: [
+      { label: 'DB Connections', namespace: 'AWS/RDS', metricName: 'DatabaseConnections', dimensions: [{ name: 'DBInstanceIdentifier', value: instanceId }], stat: 'Average', unit: '' },
+      { label: 'CPU Utilization (%)', namespace: 'AWS/RDS', metricName: 'CPUUtilization', dimensions: [{ name: 'DBInstanceIdentifier', value: instanceId }], stat: 'Average', unit: '%' },
+      { label: 'Free Storage (bytes)', namespace: 'AWS/RDS', metricName: 'FreeStorageSpace', dimensions: [{ name: 'DBInstanceIdentifier', value: instanceId }], stat: 'Average', unit: 'bytes' },
+      { label: 'Read IOPS', namespace: 'AWS/RDS', metricName: 'ReadIOPS', dimensions: [{ name: 'DBInstanceIdentifier', value: instanceId }], stat: 'Average', unit: '' },
+      { label: 'Write IOPS', namespace: 'AWS/RDS', metricName: 'WriteIOPS', dimensions: [{ name: 'DBInstanceIdentifier', value: instanceId }], stat: 'Average', unit: '' },
+      { label: 'Freeable Memory (bytes)', namespace: 'AWS/RDS', metricName: 'FreeableMemory', dimensions: [{ name: 'DBInstanceIdentifier', value: instanceId }], stat: 'Average', unit: 'bytes' },
+    ],
+    alb: [
+      { label: 'Request Count', namespace: 'AWS/ApplicationELB', metricName: 'RequestCount', dimensions: [{ name: 'LoadBalancer', value: instanceId }], stat: 'Sum', unit: '' },
+      { label: 'Target Response Time (s)', namespace: 'AWS/ApplicationELB', metricName: 'TargetResponseTime', dimensions: [{ name: 'LoadBalancer', value: instanceId }], stat: 'Average', unit: 's' },
+      { label: '5XX Errors', namespace: 'AWS/ApplicationELB', metricName: 'HTTPCode_ELB_5XX_Count', dimensions: [{ name: 'LoadBalancer', value: instanceId }], stat: 'Sum', unit: '' },
+      { label: '4XX Errors', namespace: 'AWS/ApplicationELB', metricName: 'HTTPCode_ELB_4XX_Count', dimensions: [{ name: 'LoadBalancer', value: instanceId }], stat: 'Sum', unit: '' },
+      { label: 'Active Connections', namespace: 'AWS/ApplicationELB', metricName: 'ActiveConnectionCount', dimensions: [{ name: 'LoadBalancer', value: instanceId }], stat: 'Sum', unit: '' },
+      { label: 'Processed Bytes', namespace: 'AWS/ApplicationELB', metricName: 'ProcessedBytes', dimensions: [{ name: 'LoadBalancer', value: instanceId }], stat: 'Sum', unit: 'bytes' },
+    ],
+    redis: [
+      { label: 'Current Connections', namespace: 'AWS/ElastiCache', metricName: 'CurrConnections', dimensions: [{ name: 'CacheClusterId', value: instanceId }], stat: 'Average', unit: '' },
+      { label: 'CPU Utilization (%)', namespace: 'AWS/ElastiCache', metricName: 'CPUUtilization', dimensions: [{ name: 'CacheClusterId', value: instanceId }], stat: 'Average', unit: '%' },
+      { label: 'Memory Used (bytes)', namespace: 'AWS/ElastiCache', metricName: 'BytesUsedForCache', dimensions: [{ name: 'CacheClusterId', value: instanceId }], stat: 'Average', unit: 'bytes' },
+      { label: 'Cache Hits', namespace: 'AWS/ElastiCache', metricName: 'CacheHits', dimensions: [{ name: 'CacheClusterId', value: instanceId }], stat: 'Sum', unit: '' },
+      { label: 'Cache Misses', namespace: 'AWS/ElastiCache', metricName: 'CacheMisses', dimensions: [{ name: 'CacheClusterId', value: instanceId }], stat: 'Sum', unit: '' },
+      { label: 'Network Bytes In', namespace: 'AWS/ElastiCache', metricName: 'NetworkBytesIn', dimensions: [{ name: 'CacheClusterId', value: instanceId }], stat: 'Sum', unit: 'bytes' },
+    ],
+  };
+
+  const queries = METRIC_SETS[svc].map((m, i) => ({ ...m, id: `m${i}`, period }));
+
+  try {
+    const res = await fetch('/api/monitor/cloudwatch/metrics', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ queries, startTime, endTime }),
+    });
+    const results = await res.json();
+    if (!Array.isArray(results)) throw new Error(results.error || 'Unknown error');
+    renderMetrics(queries, results);
+  } catch(e) {
+    document.getElementById('metricsContent').innerHTML = `<div class="error-state">⚠ ${e.message}</div>`;
+  }
+}
+
+function renderMetrics(queries, results) {
+  const byId = {};
+  for (const r of results) byId[r.Id] = r;
+
+  let html = '<div class="charts-grid">';
+  queries.forEach((q, i) => {
+    const r = byId[`m${i}`];
+    const hasData = r && r.Values && r.Values.length > 0;
+    html += `<div class="chart-card">
+      <div class="chart-title">${esc(q.label)}</div>
+      <canvas class="metric-chart" id="chart_m${i}" width="400" height="120"></canvas>
+      ${!hasData ? '<div style="font-size:10px;font-family:monospace;color:rgba(200,216,232,0.2);text-align:center;margin-top:-30px">No data available</div>' : ''}
+    </div>`;
+  });
+  html += '</div>';
+  document.getElementById('metricsContent').innerHTML = html;
+
+  queries.forEach((q, i) => {
+    const r = byId[`m${i}`];
+    if (!r || !r.Timestamps || !r.Values) return;
+    const canvas = document.getElementById(`chart_m${i}`);
+    if (!canvas) return;
+    canvas.width = canvas.parentElement.offsetWidth - 28;
+    const pairs = r.Timestamps.map((t, j) => ({ ts: new Date(t), v: r.Values[j] })).sort((a, b) => a.ts - b.ts);
+    drawChart(canvas, pairs.map(p => p.ts), pairs.map(p => p.v), q.unit);
+  });
+}
+
+// ─── Canvas Chart ─────────────────────────────────────────────────────────────
+function drawChart(canvas, timestamps, values, unit) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const pad = { top: 16, right: 12, bottom: 28, left: 52 };
+  const cW = W - pad.left - pad.right;
+  const cH = H - pad.top - pad.bottom;
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(5,8,14,0)';
+  ctx.fillRect(0, 0, W, H);
+
+  if (!values.length) return;
+
+  const valid = values.filter(v => v != null && !isNaN(v));
+  if (!valid.length) return;
+
+  let minV = Math.min(...valid), maxV = Math.max(...valid);
+  if (minV === maxV) { minV -= 1; maxV += 1; }
+  const range = maxV - minV;
+
+  // Grid
+  const gridCount = 4;
+  ctx.strokeStyle = 'rgba(0,255,136,0.07)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= gridCount; i++) {
+    const y = pad.top + (cH / gridCount) * i;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + cW, y); ctx.stroke();
+    const v = maxV - (range / gridCount) * i;
+    ctx.fillStyle = 'rgba(58,90,106,0.8)';
+    ctx.font = '9px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(fmtVal(v, unit), pad.left - 4, y + 3);
+  }
+
+  // Time labels
+  const labelCount = Math.min(values.length - 1, 4);
+  for (let i = 0; i <= labelCount; i++) {
+    const idx = Math.round((values.length - 1) * (i / labelCount));
+    const x = pad.left + (idx / (values.length - 1)) * cW;
+    ctx.strokeStyle = 'rgba(0,255,136,0.04)';
+    ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, pad.top + cH); ctx.stroke();
+    if (timestamps[idx]) {
+      ctx.fillStyle = 'rgba(58,90,106,0.7)';
+      ctx.font = '9px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(fmtTime(timestamps[idx]), x, H - 6);
+    }
+  }
+
+  // Points
+  const pts = [];
+  for (let i = 0; i < values.length; i++) {
+    if (values[i] == null) continue;
+    const x = pad.left + (i / Math.max(values.length - 1, 1)) * cW;
+    const y = pad.top + cH - ((values[i] - minV) / range) * cH;
+    pts.push({ x, y });
+  }
+
+  if (!pts.length) return;
+
+  // Fill
+  const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + cH);
+  grad.addColorStop(0, 'rgba(0,212,255,0.2)');
+  grad.addColorStop(1, 'rgba(0,212,255,0.0)');
+
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.lineTo(pts[pts.length - 1].x, pad.top + cH);
+  ctx.lineTo(pts[0].x, pad.top + cH);
+  ctx.closePath();
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Line
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.strokeStyle = '#00d4ff';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Axes
+  ctx.strokeStyle = 'rgba(0,255,136,0.15)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(pad.left, pad.top); ctx.lineTo(pad.left, pad.top + cH); ctx.lineTo(pad.left + cW, pad.top + cH);
+  ctx.stroke();
+
+  // Dots
+  ctx.fillStyle = '#00d4ff';
+  for (const p of pts) {
+    ctx.beginPath(); ctx.arc(p.x, p.y, 2.5, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+// ─── Live Logs (SSE) ──────────────────────────────────────────────────────────
+function startSSE() {
+  if (eventSource) { eventSource.close(); eventSource = null; }
+  setSseStatus('connecting');
+
+  const cfg = dbCfg;
+  const params = new URLSearchParams({
+    dbHost: cfg.host || 'localhost',
+    dbPort: cfg.port || '8090',
+    dbName: cfg.db || 'lillian_care_core',
+    dbUser: cfg.user || 'postgres',
+    dbPass: cfg.pass || '',
+  });
+
+  eventSource = new EventSource(`/api/monitor/logs/stream?${params}`);
+
+  eventSource.onopen = () => setSseStatus('connected');
+  eventSource.onerror = () => setSseStatus('disconnected');
+  eventSource.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      if (data.type === 'history' || data.type === 'logs') {
+        if (logPaused && data.type === 'logs') return;
+        appendLogs(data.sessionErrors, data.appLogs);
+      } else if (data.type === 'error') {
+        appendSysLog('error', data.message || 'DB connection failed — check database is connected');
+      }
+    } catch(_) {}
+  };
+}
+
+function setSseStatus(s) {
+  const el = document.getElementById('sseStatus');
+  const states = {
+    connecting: { cls: 'connecting', dot: 'dot-amber', text: 'Connecting...' },
+    connected:  { cls: 'connected',  dot: 'dot-green', text: 'Connected' },
+    disconnected: { cls: 'disconnected', dot: 'dot-red', text: 'Reconnecting...' },
+  };
+  const st = states[s] || states.disconnected;
+  el.className = `sse-status ${st.cls}`;
+  el.innerHTML = `<div class="dot-status ${st.dot}"></div><span>${st.text}</span>`;
+}
+
+const LEVEL_NAMES = ['debug', 'info', 'warning', 'error', 'fatal'];
+const LEVEL_CLASSES = ['level-debug', 'level-info', 'level-warning', 'level-error', 'level-fatal'];
+
+function appendLogs(sessionErrors, appLogs) {
+  const entries = [];
+
+  for (const r of sessionErrors) {
+    entries.push({
+      id: `se_${r.id}`,
+      time: r.time,
+      level: 'error',
+      levelClass: 'level-error',
+      source: r.endpoint || 'unknown',
+      msg: r.error ? r.error.split('\n')[0] : 'Session error',
+      detail: r.stackTrace || r.error || '',
+      type: 'session',
+    });
+  }
+
+  for (const r of appLogs) {
+    const level = LEVEL_NAMES[r.logLevel] || 'debug';
+    entries.push({
+      id: `al_${r.id}`,
+      time: r.time,
+      level,
+      levelClass: LEVEL_CLASSES[r.logLevel] || 'level-debug',
+      source: r.endpoint || 'system',
+      msg: r.message || r.error || '(no message)',
+      detail: r.stackTrace || r.error || '',
+      type: 'app',
+    });
+  }
+
+  entries.sort((a, b) => new Date(a.time) - new Date(b.time));
+
+  for (const e of entries) {
+    logEntries.push(e);
+  }
+
+  if (logEntries.length > MAX_LOG_ENTRIES) {
+    logEntries.splice(0, logEntries.length - MAX_LOG_ENTRIES);
+  }
+
+  renderLogStream();
+}
+
+function appendSysLog(level, msg) {
+  logEntries.push({
+    id: `sys_${Date.now()}`,
+    time: new Date().toISOString(),
+    level,
+    levelClass: `level-${level}`,
+    source: 'system',
+    msg,
+    detail: '',
+    type: 'sys',
+  });
+  if (logEntries.length > MAX_LOG_ENTRIES) logEntries.shift();
+  renderLogStream();
+}
+
+function renderLogStream() {
+  const search = document.getElementById('logSearch').value.toLowerCase();
+  const levelFilter = document.getElementById('logLevelFilter').value;
+  const stream = document.getElementById('logStream');
+
+  const levelOrder = { 'debug': 0, 'info': 1, 'warning': 2, 'error': 3, 'fatal': 4 };
+  const minLevel = levelFilter === 'error' ? 3 : levelFilter === 'warning' ? 2 : levelFilter === 'info' ? 1 : 0;
+
+  const filtered = logEntries.filter(e => {
+    if (levelOrder[e.level] < minLevel) return false;
+    if (search && !e.source.toLowerCase().includes(search) && !e.msg.toLowerCase().includes(search)) return false;
+    return true;
+  });
+
+  document.getElementById('logCount').textContent = `${filtered.length} entries`;
+
+  if (!filtered.length) {
+    stream.innerHTML = `<div class="log-stream-empty"><div>◎</div><div>${logEntries.length ? 'No entries match filter' : 'Waiting for logs...'}</div></div>`;
+    return;
+  }
+
+  const empty = document.getElementById('logStreamEmpty');
+  if (empty) empty.style.display = 'none';
+
+  // Only add new entries to avoid full re-render
+  const existingIds = new Set([...stream.querySelectorAll('[data-id]')].map(el => el.dataset.id));
+  const newEntries = filtered.filter(e => !existingIds.has(e.id));
+
+  for (const e of newEntries) {
+    const div = document.createElement('div');
+    div.dataset.id = e.id;
+    const ts = fmtTs(e.time);
+    const levelLabel = e.level.substring(0,4).toUpperCase();
+    div.innerHTML = `
+      <div class="log-entry" onclick="toggleLogDetail(this)">
+        <span class="log-ts">${ts}</span>
+        <span class="log-level ${e.levelClass}">${levelLabel}</span>
+        <span class="log-source" title="${esc(e.source)}">${esc(e.source)}</span>
+        <span class="log-msg">${esc(e.msg)}</span>
+      </div>
+      ${e.detail ? `<div class="log-detail" style="display:none">${esc(e.detail)}</div>` : ''}`;
+    stream.appendChild(div);
+  }
+
+  // Auto-scroll
+  const autoScrollEl = document.getElementById('pauseBtn');
+  if (!logPaused && autoScrollEl && newEntries.length) {
+    stream.scrollTop = stream.scrollHeight;
+  }
+
+  // Prune DOM if too many
+  while (stream.children.length > MAX_LOG_ENTRIES * 2) {
+    stream.removeChild(stream.firstChild);
+  }
+}
+
+function toggleLogDetail(entryEl) {
+  const detail = entryEl.nextElementSibling;
+  if (detail && detail.classList.contains('log-detail')) {
+    const showing = detail.style.display !== 'none';
+    detail.style.display = showing ? 'none' : 'block';
+    entryEl.classList.toggle('expanded', !showing);
+  }
+}
+
+function filterLogs() {
+  const stream = document.getElementById('logStream');
+  // Clear existing DOM and re-render with filter
+  stream.innerHTML = '';
+  const existingIds = new Set();
+  logEntries.forEach(e => existingIds.delete(e.id));
+  renderLogStream();
+}
+
+function togglePause() {
+  logPaused = !logPaused;
+  const btn = document.getElementById('pauseBtn');
+  btn.textContent = logPaused ? '▶ Resume' : '⏸ Pause';
+}
+
+function clearLogs() {
+  logEntries = [];
+  document.getElementById('logStream').innerHTML = '';
+  renderLogStream();
+}
+
+// ─── Errors ───────────────────────────────────────────────────────────────────
+async function loadErrors() {
+  const content = document.getElementById('errorsContent');
+  content.innerHTML = '<div class="loading-state"><span class="spinner"></span>Loading...</div>';
+
+  const cfg = dbCfg;
+  const headers = {
+    'x-db-host': cfg.host || 'localhost',
+    'x-db-port': String(cfg.port || '8090'),
+    'x-db-name': cfg.db || 'lillian_care_core',
+    'x-db-user': cfg.user || 'postgres',
+    'x-db-password': cfg.pass || '',
+  };
+
+  try {
+    const [errRes, dtRes] = await Promise.all([
+      fetch('/api/monitor/errors/summary', { headers }),
+      fetch('/api/monitor/errors/pms-downtime', { headers }),
+    ]);
+    const errData = await errRes.json();
+    const dtData = await dtRes.json();
+
+    if (errData.error) throw new Error(errData.error);
+
+    let html = '';
+
+    // Summary stats
+    html += `<div class="stats-bar" style="margin-bottom:14px">
+      <div class="stat-card">
+        <div class="stat-label">Total Errors (24h)</div>
+        <div class="stat-value" style="color:#ff3366">${errData.total || 0}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Unique Endpoints</div>
+        <div class="stat-value" style="color:#ffaa00">${errData.topEndpoints ? errData.topEndpoints.length : 0}</div>
+      </div>
+    </div>`;
+
+    // Two-column: chart + top endpoints
+    html += `<div class="errors-grid">
+      <div class="panel">
+        <div class="chart-title">Error Frequency — Last 24h</div>
+        <canvas id="errChart" width="400" height="120" style="width:100%;display:block"></canvas>
+      </div>
+      <div class="panel">
+        <div class="chart-title">Top Error Endpoints</div>
+        <table class="err-table">
+          <thead><tr><th>Endpoint</th><th>Count</th></tr></thead>
+          <tbody>
+            ${errData.topEndpoints && errData.topEndpoints.length
+              ? errData.topEndpoints.map(e => `<tr><td class="err-endpoint" title="${esc(e.endpoint)}">${esc(e.endpoint)}</td><td class="err-count">${e.count}</td></tr>`).join('')
+              : '<tr><td colspan="2" style="color:rgba(200,216,232,0.2);text-align:center">No errors in last 24h</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+
+    // PMS Downtime
+    if (dtData.length) {
+      const maxDt = Math.max(...dtData.map(d => d.totalDownTimeInSeconds));
+      html += `<div class="section-title" style="margin-top:16px">PMS Downtime History</div>
+        <div class="panel"><div class="downtime-list">`;
+      for (const d of dtData.slice(0, 20)) {
+        const secs = d.totalDownTimeInSeconds;
+        const dur = secs >= 3600 ? `${(secs/3600).toFixed(1)}h` : secs >= 60 ? `${Math.round(secs/60)}m` : `${secs}s`;
+        const pct = Math.min((secs / maxDt) * 100, 100);
+        html += `<div class="downtime-item">
+          <span class="dt-time">${fmtTs(d.createdAt)}</span>
+          <span class="dt-dur">${dur}</span>
+          <div class="dt-bar"><div class="dt-bar-fill" style="width:${pct}%"></div></div>
+        </div>`;
+      }
+      html += `</div></div>`;
+    }
+
+    // Recent errors
+    if (errData.recent && errData.recent.length) {
+      html += `<div class="section-title" style="margin-top:16px">Recent Errors</div>
+        <div class="panel" style="padding:0">`;
+      for (const r of errData.recent) {
+        const msg = r.error ? r.error.split('\n')[0] : 'Error';
+        html += `<div class="err-row" onclick="toggleErrDetail(this)">
+          <div class="err-row-header">
+            <span class="err-time">${fmtTs(r.time)}</span>
+            <span class="err-ep">${esc(r.endpoint || 'unknown')}</span>
+            <span class="err-dur">${r.duration ? Math.round(r.duration) + 'ms' : ''}</span>
+          </div>
+          <div class="err-msg">${esc(msg)}</div>
+          <div class="err-detail">${esc(r.stackTrace || r.error || '')}</div>
+        </div>`;
+      }
+      html += `</div>`;
+    }
+
+    content.innerHTML = html;
+
+    // Render error frequency bar chart
+    const errChart = document.getElementById('errChart');
+    if (errChart && errData.hourly) {
+      errChart.width = errChart.parentElement.offsetWidth - 28;
+      drawBarChart(errChart, errData.hourly);
+    }
+
+  } catch(e) {
+    content.innerHTML = `<div class="error-state">⚠ ${e.message}<br><span style="color:rgba(200,216,232,0.3);font-size:10px">Connect to a database to see error data</span></div>`;
+  }
+}
+
+function toggleErrDetail(row) {
+  const d = row.querySelector('.err-detail');
+  if (d) d.style.display = d.style.display === 'block' ? 'none' : 'block';
+}
+
+function drawBarChart(canvas, hourlyData) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const pad = { top: 12, right: 12, bottom: 24, left: 40 };
+  const cW = W - pad.left - pad.right, cH = H - pad.top - pad.bottom;
+
+  ctx.clearRect(0, 0, W, H);
+
+  if (!hourlyData.length) {
+    ctx.fillStyle = 'rgba(200,216,232,0.15)';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('No errors in last 24h', W / 2, H / 2);
+    return;
+  }
+
+  const maxCount = Math.max(...hourlyData.map(h => h.count), 1);
+  const barW = cW / 24;
+
+  // Fill all 24 hours
+  const now = new Date();
+  const hours = [];
+  for (let i = 23; i >= 0; i--) {
+    const h = new Date(now);
+    h.setMinutes(0, 0, 0);
+    h.setHours(h.getHours() - i);
+    hours.push(h);
+  }
+
+  const countByHour = {};
+  for (const d of hourlyData) {
+    const h = new Date(d.hour);
+    h.setMinutes(0, 0, 0);
+    countByHour[h.getTime()] = d.count;
+  }
+
+  // Grid
+  ctx.strokeStyle = 'rgba(0,255,136,0.07)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + (cH / 4) * i;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + cW, y); ctx.stroke();
+    const v = maxCount - (maxCount / 4) * i;
+    ctx.fillStyle = 'rgba(58,90,106,0.7)';
+    ctx.font = '9px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(Math.round(v), pad.left - 4, y + 3);
+  }
+
+  // Bars
+  hours.forEach((h, i) => {
+    const count = countByHour[h.getTime()] || 0;
+    const barH = (count / maxCount) * cH;
+    const x = pad.left + i * barW;
+    const y = pad.top + cH - barH;
+
+    if (barH > 0) {
+      const grad = ctx.createLinearGradient(0, y, 0, y + barH);
+      grad.addColorStop(0, 'rgba(255,51,102,0.8)');
+      grad.addColorStop(1, 'rgba(255,51,102,0.2)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(x + 1, y, barW - 2, barH);
+    }
+
+    // Hour label every 6 hours
+    if (i % 6 === 0) {
+      ctx.fillStyle = 'rgba(58,90,106,0.7)';
+      ctx.font = '9px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(h.getHours().toString().padStart(2, '0') + ':00', x + barW / 2, H - 4);
+    }
+  });
+
+  ctx.strokeStyle = 'rgba(0,255,136,0.15)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(pad.left, pad.top); ctx.lineTo(pad.left, pad.top + cH); ctx.lineTo(pad.left + cW, pad.top + cH);
+  ctx.stroke();
+}
+
+// ─── Alarms ───────────────────────────────────────────────────────────────────
+async function loadAlarms() {
+  const content = document.getElementById('alarmsContent');
+  content.innerHTML = '<div class="loading-state"><span class="spinner"></span>Loading...</div>';
+
+  try {
+    const res = await fetch('/api/monitor/cloudwatch/alarms');
+    const alarms = await res.json();
+    if (!Array.isArray(alarms)) throw new Error(alarms.error || 'Unknown error');
+
+    if (!alarms.length) {
+      content.innerHTML = '<div class="empty-state">No CloudWatch alarms found</div>';
+      return;
+    }
+
+    const sorted = [...alarms].sort((a, b) => {
+      const order = { ALARM: 0, INSUFFICIENT_DATA: 1, OK: 2 };
+      return (order[a.state] ?? 3) - (order[b.state] ?? 3);
+    });
+
+    const alarmCount = alarms.filter(a => a.state === 'ALARM').length;
+    const okCount = alarms.filter(a => a.state === 'OK').length;
+    const insufCount = alarms.filter(a => a.state === 'INSUFFICIENT_DATA').length;
+
+    let html = `<div class="stats-bar" style="margin-bottom:14px">
+      <div class="stat-card"><div class="stat-label">In Alarm</div><div class="stat-value" style="color:#ff3366">${alarmCount}</div></div>
+      <div class="stat-card"><div class="stat-label">OK</div><div class="stat-value" style="color:#00ff88">${okCount}</div></div>
+      <div class="stat-card"><div class="stat-label">Insufficient Data</div><div class="stat-value" style="color:#3a8a9a">${insufCount}</div></div>
+      <div class="stat-card"><div class="stat-label">Total</div><div class="stat-value" style="color:#c8d8e8">${alarms.length}</div></div>
+    </div>`;
+
+    html += '<div class="alarms-grid">';
+    for (const a of sorted) {
+      const stateClass = a.state === 'ALARM' ? 'alarm-alarm' : a.state === 'OK' ? 'alarm-ok' : 'alarm-insufficient';
+      const badgeClass = a.state === 'ALARM' ? 'badge-alarm' : a.state === 'OK' ? 'badge-ok' : 'badge-insufficient';
+      const dotClass = a.state === 'ALARM' ? 'dot-red' : a.state === 'OK' ? 'dot-green' : 'dot-grey';
+      const dims = (a.dimensions || []).map(d => `${d.Name}=${d.Value}`).join(', ');
+      const updAt = a.updatedAt ? fmtTs(a.updatedAt) : '';
+
+      html += `<div class="alarm-card ${stateClass}">
+        <div class="alarm-name">${esc(a.name)}</div>
+        <div class="alarm-state-badge ${badgeClass}">
+          <div class="dot-status ${dotClass}"></div>${a.state}
+        </div>
+        <div class="alarm-meta">
+          ${a.metric ? `Metric: <span style="color:#00d4ff">${esc(a.metric)}</span><br>` : ''}
+          ${a.namespace ? `NS: <span style="color:rgba(200,216,232,0.5)">${esc(a.namespace)}</span><br>` : ''}
+          ${dims ? `Dim: <span style="color:rgba(200,216,232,0.4)">${esc(dims)}</span><br>` : ''}
+          ${updAt ? `Updated: ${updAt}` : ''}
+        </div>
+        ${a.reason ? `<div class="alarm-reason">${esc(a.reason.substring(0, 200))}</div>` : ''}
+      </div>`;
+    }
+    html += '</div>';
+    content.innerHTML = html;
+
+  } catch(e) {
+    content.innerHTML = `<div class="error-state">⚠ ${e.message}</div>`;
+  }
+}
+
+// ─── Utility functions ────────────────────────────────────────────────────────
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function fmtTs(ts) {
+  if (!ts) return '';
+  try {
+    return new Intl.DateTimeFormat('de-DE', {
+      timeZone: 'Europe/Berlin',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false,
+    }).format(new Date(ts)).replace(',', '');
+  } catch(e) { return String(ts); }
+}
+
+function fmtDate(ts) {
+  if (!ts) return '—';
+  try {
+    return new Intl.DateTimeFormat('de-DE', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'UTC' }).format(new Date(ts));
+  } catch(e) { return String(ts); }
+}
+
+function fmtTime(ts) {
+  if (!ts) return '';
+  try {
+    return new Intl.DateTimeFormat('de-DE', {
+      timeZone: 'Europe/Berlin',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(new Date(ts));
+  } catch(e) { return ''; }
+}
+
+function fmtVal(v, unit) {
+  if (v == null) return '';
+  if (unit === 'bytes') {
+    if (v >= 1e9) return (v / 1e9).toFixed(1) + 'G';
+    if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+    if (v >= 1e3) return (v / 1e3).toFixed(1) + 'K';
+    return Math.round(v) + 'B';
+  }
+  if (unit === '%') return v.toFixed(1) + '%';
+  if (unit === 's') return v.toFixed(3) + 's';
+  if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+  if (v >= 1e3) return (v / 1e3).toFixed(1) + 'K';
+  return v % 1 === 0 ? String(Math.round(v)) : v.toFixed(2);
+}
+</script>
+</body>
+</html>
