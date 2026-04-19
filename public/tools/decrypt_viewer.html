@@ -1,325 +1,261 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Guest Appointment Decryptor</title>
+  <title>DecryptHealth | CSV Decryptor</title>
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+  <script id="tailwind-config">
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            primary: '#3525cd', 'primary-container': '#4f46e5', 'on-primary': '#ffffff',
+            'primary-fixed': '#e2dfff', 'primary-fixed-dim': '#c3c0ff', 'on-primary-container': '#dad7ff',
+            secondary: '#5d5c74', 'secondary-container': '#e2e0fc',
+            tertiary: '#005522', 'tertiary-container': '#00702f', 'tertiary-fixed': '#7ffc97', 'tertiary-fixed-dim': '#62df7d', 'on-tertiary-container': '#78f591',
+            error: '#ba1a1a', 'error-container': '#ffdad6', 'on-error-container': '#93000a',
+            surface: '#f9f9f9', background: '#f9f9f9',
+            'surface-container-lowest': '#ffffff',
+            'surface-container-low': '#f3f3f3',
+            'surface-container': '#eeeeee',
+            'surface-container-high': '#e8e8e8',
+            'surface-variant': '#e2e2e2',
+            'on-surface': '#1a1c1c', 'on-surface-variant': '#464555',
+            outline: '#777587', 'outline-variant': '#c7c4d8',
+          },
+          borderRadius: { DEFAULT: '0.5rem', lg: '0.75rem', xl: '1rem', full: '9999px' },
+          fontFamily: { headline: ['Inter','sans-serif'], body: ['Inter','sans-serif'], mono: ['JetBrains Mono','monospace'] }
+        }
+      }
+    }
+  </script>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; color: #333; }
-    .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
-    h1 { font-size: 22px; font-weight: 600; margin-bottom: 24px; color: #1a1a2e; }
-
-    .setup-card {
-      background: white;
-      border-radius: 12px;
-      padding: 24px;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-      margin-bottom: 16px;
-      display: flex;
-      gap: 20px;
-      align-items: flex-end;
-      flex-wrap: wrap;
-    }
-
-    .field { display: flex; flex-direction: column; gap: 6px; }
-    .field label { font-size: 12px; font-weight: 600; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
-
-    .drop-zone {
-      width: 280px;
-      height: 80px;
-      border: 2px dashed #ccc;
-      border-radius: 8px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      transition: border-color 0.2s, background 0.2s;
-      font-size: 14px;
-      color: #888;
-      text-align: center;
-      padding: 8px;
-    }
-    .drop-zone:hover, .drop-zone.drag-over { border-color: #4f46e5; background: #f0f0ff; color: #4f46e5; }
-    .drop-zone.loaded { border-color: #16a34a; background: #f0fdf4; color: #16a34a; }
-
-    .key-input {
-      width: 340px;
-      height: 40px;
-      border: 1px solid #ddd;
-      border-radius: 8px;
-      padding: 0 12px;
-      font-size: 14px;
-      font-family: monospace;
-      letter-spacing: 1px;
-    }
-    .key-input:focus { outline: none; border-color: #4f46e5; }
-
-    .key-counter { font-size: 11px; color: #999; margin-top: 2px; }
-    .key-counter.valid { color: #16a34a; }
-    .key-counter.invalid { color: #dc2626; }
-
-    .btn {
-      height: 40px;
-      padding: 0 20px;
-      border: none;
-      border-radius: 8px;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: background 0.2s, opacity 0.2s;
-    }
-    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
-    .btn-primary { background: #4f46e5; color: white; }
-    .btn-primary:hover:not(:disabled) { background: #4338ca; }
-    .btn-export { background: #16a34a; color: white; }
-    .btn-export:hover:not(:disabled) { background: #15803d; }
-
-    /* Stats bar */
-    .stats-bar {
-      display: none;
-      gap: 12px;
-      margin-bottom: 16px;
-      flex-wrap: wrap;
-    }
-    .stat-card {
-      background: white;
-      border-radius: 10px;
-      padding: 14px 20px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.07);
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      min-width: 140px;
-    }
-    .stat-label { font-size: 11px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.4px; }
-    .stat-value { font-size: 26px; font-weight: 700; color: #1a1a2e; }
-    .stat-sub { font-size: 12px; color: #aaa; }
-    .stat-card.green .stat-value { color: #16a34a; }
-    .stat-card.red .stat-value { color: #dc2626; }
-    .stat-card.blue .stat-value { color: #4f46e5; }
-    .stat-card.orange .stat-value { color: #d97706; }
-
-    /* Export panel */
-    .export-panel {
-      display: none;
-      background: white;
-      border-radius: 12px;
-      padding: 20px 24px;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-      margin-bottom: 16px;
-    }
-    .export-panel-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 14px;
-    }
-    .export-panel-header h3 { font-size: 14px; font-weight: 700; color: #333; }
-    .col-groups { display: flex; gap: 32px; flex-wrap: wrap; }
-    .col-group h4 { font-size: 11px; font-weight: 700; color: #999; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 8px; }
-    .col-checkboxes { display: flex; flex-direction: column; gap: 6px; }
-    .col-check {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 13px;
-      cursor: pointer;
-    }
-    .col-check input[type=checkbox] { width: 15px; height: 15px; cursor: pointer; accent-color: #4f46e5; }
-    .badge-dec {
-      display: inline-block;
-      font-size: 9px;
-      font-weight: 700;
-      background: #4f46e5;
-      color: white;
-      border-radius: 3px;
-      padding: 1px 4px;
-      margin-left: 4px;
-      vertical-align: middle;
-      text-transform: uppercase;
-    }
-    .export-actions { display: flex; gap: 10px; align-items: center; margin-top: 16px; }
-    .link-btn { font-size: 13px; color: #4f46e5; background: none; border: none; cursor: pointer; text-decoration: underline; }
-
-    .status-bar {
-      display: none;
-      background: white;
-      border-radius: 8px;
-      padding: 12px 16px;
-      margin-bottom: 16px;
-      font-size: 14px;
-      border-left: 4px solid #4f46e5;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-    }
-    .status-bar.error { border-left-color: #dc2626; color: #dc2626; }
-    .status-bar.success { border-left-color: #16a34a; }
-
-    .search-bar {
-      background: white;
-      border-radius: 8px;
-      padding: 12px 16px;
-      margin-bottom: 16px;
-      display: none;
-      align-items: center;
-      gap: 12px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-    }
-    .search-bar input {
-      flex: 1;
-      border: 1px solid #ddd;
-      border-radius: 6px;
-      padding: 8px 12px;
-      font-size: 14px;
-    }
-    .search-bar input:focus { outline: none; border-color: #4f46e5; }
-    .row-count { font-size: 13px; color: #888; white-space: nowrap; }
-
-    .table-wrap {
-      background: white;
-      border-radius: 12px;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-      overflow: auto;
-      display: none;
-      max-height: 600px;
-    }
-
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th {
-      background: #f8f9fa;
-      padding: 10px 12px;
-      text-align: left;
-      font-size: 11px;
-      font-weight: 700;
-      color: #555;
-      text-transform: uppercase;
-      letter-spacing: 0.4px;
-      border-bottom: 2px solid #e5e7eb;
-      white-space: nowrap;
-      position: sticky;
-      top: 0;
-      z-index: 1;
-      cursor: pointer;
-      user-select: none;
-    }
-    th:hover { background: #eef0f3; }
-    th.sort-asc::after { content: ' ↑'; }
-    th.sort-desc::after { content: ' ↓'; }
-
-    td {
-      padding: 8px 12px;
-      border-bottom: 1px solid #f0f0f0;
-      max-width: 220px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    tr:hover td { background: #fafafe; }
-    tr:last-child td { border-bottom: none; }
-
-    td.decrypted { color: #1a6b3c; font-weight: 500; }
-    td.failed { color: #dc2626; font-style: italic; }
-    td.empty { color: #bbb; }
-
-    input[type="file"] { display: none; }
+    body { font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; }
+    .mono-text { font-family: 'JetBrains Mono', monospace; }
+    .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; vertical-align: middle; }
+    .ms-fill { font-variation-settings: 'FILL' 1; }
+    .whisper-shadow { box-shadow: 0 8px 32px rgba(26,28,28,0.06); }
+    .glass-panel { background: rgba(255,255,255,0.85); backdrop-filter: blur(20px); }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #e2e2e2; border-radius: 10px; }
   </style>
 </head>
-<body>
-<div class="container">
-  <h1>Guest Appointment Decryptor</h1>
+<body class="bg-surface font-body text-on-surface antialiased min-h-screen">
 
-  <!-- Setup -->
-  <div class="setup-card">
-    <div class="field">
-      <label>CSV File</label>
-      <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
-        Drop CSV here or click to browse
-      </div>
-      <input type="file" id="fileInput" accept=".csv">
+<!-- Top Nav -->
+<header class="sticky top-0 z-50 bg-slate-50/85 backdrop-blur-md flex justify-between items-center w-full px-6 py-3 border-b border-slate-100">
+  <div class="flex items-center gap-8">
+    <div class="text-xl font-black tracking-tighter text-slate-900 flex items-center gap-2">
+      <span class="material-symbols-outlined text-primary ms-fill">enhanced_encryption</span>
+      DecryptHealth
     </div>
-
-    <div class="field">
-      <label>Encryption Key (32 chars)</label>
-      <input type="password" class="key-input" id="keyInput" placeholder="Enter 32-character key" maxlength="64">
-      <span class="key-counter" id="keyCounter">0 / 32</span>
-    </div>
-
-    <div class="field">
-      <button class="btn btn-primary" id="decryptBtn" disabled>Decrypt</button>
-    </div>
+    <nav class="hidden md:flex items-center gap-6 text-sm">
+      <a class="text-slate-500 hover:text-slate-900 transition-colors" href="#">Dashboard</a>
+      <a class="text-indigo-600 border-b-2 border-indigo-600 font-semibold py-1" href="#">Decryptor</a>
+      <a class="text-slate-500 hover:text-slate-900 transition-colors" href="#">History</a>
+      <a class="text-slate-500 hover:text-slate-900 transition-colors" href="#">Documentation</a>
+    </nav>
   </div>
+  <div class="flex items-center gap-3">
+    <button class="p-2 hover:bg-slate-200/50 rounded-full transition-colors" onclick="alert('Decorative — local-only tool')"><span class="material-symbols-outlined text-slate-500">settings</span></button>
+    <button class="p-2 hover:bg-slate-200/50 rounded-full transition-colors" onclick="alert('Decorative — local-only tool')"><span class="material-symbols-outlined text-slate-500">help</span></button>
+    <div class="w-8 h-8 rounded-full bg-gradient-to-br from-primary to-primary-container flex items-center justify-center text-xs font-black text-white border-2 border-white shadow-sm">LC</div>
+  </div>
+</header>
+
+<main class="max-w-[1400px] mx-auto px-6 py-10 space-y-8">
+
+  <!-- Hero -->
+  <header class="mb-6">
+    <h1 class="text-[2.75rem] font-black tracking-tighter leading-tight text-on-surface">CSV Decryptor</h1>
+    <p class="text-on-surface-variant font-medium mt-1">Bulk decrypt guest appointment data, client-side.</p>
+  </header>
+
+  <!-- Setup card -->
+  <section class="bg-surface-container-lowest rounded-xl whisper-shadow overflow-hidden">
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-px bg-surface-container">
+      <!-- Drop zone -->
+      <div class="bg-surface-container-lowest p-8 flex flex-col items-center justify-center min-h-[280px]">
+        <input type="file" id="fileInput" accept=".csv" class="hidden">
+        <div id="dropZone" class="w-full h-full border-2 border-dashed border-outline-variant rounded-lg flex flex-col items-center justify-center p-6 transition-all duration-300 hover:border-primary-container hover:bg-primary-fixed/30 cursor-pointer" onclick="document.getElementById('fileInput').click()">
+          <span id="dropIcon" class="material-symbols-outlined text-[3rem] text-outline mb-4">upload_file</span>
+          <p id="dropLabel" class="text-on-surface font-bold text-lg">Drop your CSV file here</p>
+          <p id="dropSub" class="text-on-surface-variant text-sm">or click to browse</p>
+        </div>
+      </div>
+      <!-- Settings -->
+      <div class="bg-surface-container-lowest p-8 flex flex-col justify-center space-y-6">
+        <div class="space-y-2">
+          <label class="text-xs font-bold uppercase tracking-widest text-on-surface-variant flex items-center gap-2">
+            <span class="material-symbols-outlined text-sm ms-fill">lock</span>Encryption Key
+          </label>
+          <input type="password" id="keyInput" placeholder="32-character AES-256-CBC key" maxlength="64" class="w-full bg-surface-container-low border-none rounded-lg p-4 mono-text text-sm focus:ring-2 focus:ring-primary-container/30 outline-none placeholder:text-outline">
+          <div class="flex justify-between items-center text-[10px] mono-text text-outline uppercase tracking-tighter">
+            <span>Security: client-side execution only</span>
+            <span id="keyCounter">0 / 32</span>
+          </div>
+        </div>
+        <button id="decryptBtn" class="w-full py-4 rounded-lg font-bold text-sm tracking-wide bg-surface-container text-on-surface-variant cursor-not-allowed opacity-60 transition-all flex items-center justify-center gap-2" disabled>
+          <span class="material-symbols-outlined text-sm">lock_open</span>Decrypt File
+        </button>
+      </div>
+    </div>
+  </section>
 
   <!-- Status -->
-  <div class="status-bar" id="statusBar"></div>
+  <div id="statusBar" class="hidden rounded-xl whisper-shadow p-4 text-sm font-medium"></div>
 
   <!-- Stats -->
-  <div class="stats-bar" id="statsBar">
-    <div class="stat-card blue">
-      <span class="stat-label">Total Rows</span>
-      <span class="stat-value" id="statTotal">0</span>
+  <section id="statsBar" class="hidden grid grid-cols-2 md:grid-cols-6 gap-4">
+    <div class="bg-surface-container-lowest p-4 rounded-lg whisper-shadow border-t-4 border-primary">
+      <div class="text-[10px] uppercase font-bold text-on-surface-variant tracking-wider">Total Rows</div>
+      <div class="text-2xl font-black mt-1 mono-text" id="statTotal">0</div>
     </div>
-    <div class="stat-card green">
-      <span class="stat-label">Decrypted OK</span>
-      <span class="stat-value" id="statSuccess">0</span>
-    </div>
-    <div class="stat-card green">
-      <span class="stat-label">Email Present</span>
-      <span class="stat-value" id="statEmailPresent">0</span>
-      <span class="stat-sub" id="statEmailPresentPct"></span>
-    </div>
-    <div class="stat-card red">
-      <span class="stat-label">Email Empty</span>
-      <span class="stat-value" id="statEmailEmpty">0</span>
-      <span class="stat-sub" id="statEmailEmptyPct"></span>
-    </div>
-    <div class="stat-card orange">
-      <span class="stat-label">No Encrypted Data</span>
-      <span class="stat-value" id="statNoEnc">0</span>
-    </div>
-    <div class="stat-card red">
-      <span class="stat-label">Decrypt Failed</span>
-      <span class="stat-value" id="statFailed">0</span>
-    </div>
-  </div>
-
-  <!-- Export Panel -->
-  <div class="export-panel" id="exportPanel">
-    <div class="export-panel-header">
-      <h3>Export Options — choose columns</h3>
-    </div>
-    <div class="col-groups">
-      <div class="col-group">
-        <h4>Original Columns</h4>
-        <div class="col-checkboxes" id="origColChecks"></div>
-      </div>
-      <div class="col-group">
-        <h4>Decrypted Fields</h4>
-        <div class="col-checkboxes" id="decColChecks"></div>
+    <div class="bg-surface-container-lowest p-4 rounded-lg whisper-shadow border-t-4 border-tertiary-fixed-dim">
+      <div class="text-[10px] uppercase font-bold text-on-surface-variant tracking-wider">Decrypted OK</div>
+      <div class="flex items-baseline gap-2 mt-1">
+        <span class="text-2xl font-black mono-text" id="statSuccess">0</span>
       </div>
     </div>
-    <div class="export-actions">
-      <button class="btn btn-export" id="exportBtn">Download CSV</button>
-      <button class="link-btn" id="selectAllBtn">Select all</button>
-      <button class="link-btn" id="selectNoneBtn">Deselect all</button>
-      <button class="link-btn" id="selectDecOnly">Decrypted fields only</button>
+    <div class="bg-surface-container-lowest p-4 rounded-lg whisper-shadow border-t-4 border-tertiary-fixed-dim">
+      <div class="text-[10px] uppercase font-bold text-on-surface-variant tracking-wider">Email Present</div>
+      <div class="flex items-baseline gap-2 mt-1">
+        <span class="text-2xl font-black mono-text" id="statEmailPresent">0</span>
+        <span class="text-xs font-bold text-tertiary" id="statEmailPresentPct"></span>
+      </div>
     </div>
-  </div>
+    <div class="bg-surface-container-lowest p-4 rounded-lg whisper-shadow border-t-4 border-amber-400">
+      <div class="text-[10px] uppercase font-bold text-on-surface-variant tracking-wider">Email Empty</div>
+      <div class="flex items-baseline gap-2 mt-1">
+        <span class="text-2xl font-black mono-text" id="statEmailEmpty">0</span>
+        <span class="text-xs font-bold text-amber-600" id="statEmailEmptyPct"></span>
+      </div>
+    </div>
+    <div class="bg-surface-container-lowest p-4 rounded-lg whisper-shadow border-t-4 border-outline-variant">
+      <div class="text-[10px] uppercase font-bold text-on-surface-variant tracking-wider">No Encrypted Data</div>
+      <div class="text-2xl font-black mt-1 mono-text" id="statNoEnc">0</div>
+    </div>
+    <div class="bg-surface-container-lowest p-4 rounded-lg whisper-shadow border-t-4 border-error">
+      <div class="text-[10px] uppercase font-bold text-on-surface-variant tracking-wider">Decrypt Failed</div>
+      <div class="text-2xl font-black mt-1 mono-text text-error" id="statFailed">0</div>
+    </div>
+  </section>
 
-  <!-- Search -->
-  <div class="search-bar" id="searchBar">
-    <input type="text" id="searchInput" placeholder="Search any column...">
-    <span class="row-count" id="rowCount"></span>
-  </div>
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
+    <!-- Export Panel -->
+    <section id="exportPanel" class="hidden lg:col-span-1 bg-surface-container-lowest p-6 rounded-xl whisper-shadow border border-white/50">
+      <div class="flex items-center gap-2 mb-6">
+        <span class="material-symbols-outlined text-primary">download</span>
+        <h2 class="font-bold text-lg tracking-tight">Export Columns</h2>
+      </div>
+      <div class="space-y-8">
+        <div>
+          <h3 class="text-[10px] font-black uppercase text-outline tracking-[0.2em] mb-4">Original Fields</h3>
+          <div id="origColChecks" class="space-y-3"></div>
+        </div>
+        <div>
+          <h3 class="text-[10px] font-black uppercase text-tertiary tracking-[0.2em] mb-4 flex items-center gap-2">
+            Decrypted Fields
+            <span class="bg-tertiary-fixed text-[9px] px-1.5 py-0.5 rounded-full font-bold text-tertiary-container">NEW</span>
+          </h3>
+          <div id="decColChecks" class="space-y-3"></div>
+        </div>
+      </div>
+      <div class="mt-10 pt-6 border-t border-surface-container space-y-4">
+        <div class="flex flex-wrap gap-2">
+          <button id="selectAllBtn" class="text-[10px] font-bold uppercase tracking-wider text-outline hover:text-primary py-1 px-2">Select All</button>
+          <button id="selectNoneBtn" class="text-[10px] font-bold uppercase tracking-wider text-outline hover:text-primary py-1 px-2">Deselect All</button>
+          <button id="selectDecOnly" class="text-[10px] font-bold uppercase tracking-wider text-tertiary hover:bg-tertiary-fixed/20 py-1 px-2 rounded">Decrypted Only</button>
+        </div>
+        <button id="exportBtn" class="w-full bg-primary text-white py-3 rounded-lg font-bold flex items-center justify-center gap-2 hover:bg-primary-container transition-all active:scale-95 shadow-lg shadow-primary/20">
+          <span class="material-symbols-outlined text-sm">download</span>Download CSV
+        </button>
+      </div>
+    </section>
 
-  <!-- Table -->
-  <div class="table-wrap" id="tableWrap">
-    <table id="dataTable">
-      <thead id="tableHead"></thead>
-      <tbody id="tableBody"></tbody>
-    </table>
+    <!-- Search + Table -->
+    <section class="lg:col-span-2 space-y-4">
+      <div id="searchBar" class="hidden bg-surface-container-lowest p-4 rounded-xl whisper-shadow flex items-center gap-4">
+        <span class="material-symbols-outlined text-outline">search</span>
+        <input type="text" id="searchInput" placeholder="Filter rows..." class="w-full border-none bg-transparent focus:ring-0 text-sm font-medium placeholder:text-outline outline-none">
+        <span id="rowCount" class="text-[10px] font-bold text-outline uppercase tracking-wider whitespace-nowrap"></span>
+      </div>
+      <div id="tableWrap" class="hidden bg-surface-container-lowest rounded-xl whisper-shadow overflow-hidden border border-white/50">
+        <div class="overflow-x-auto max-h-[640px]">
+          <table id="dataTable" class="w-full text-left border-collapse">
+            <thead id="tableHead" class="sticky top-0 bg-surface-container-low"></thead>
+            <tbody id="tableBody" class="text-xs mono-text"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
   </div>
-</div>
+</main>
+
+<!-- Footer -->
+<footer class="mt-20 border-t border-surface-container py-12 px-6">
+  <div class="max-w-[1400px] mx-auto flex flex-col md:flex-row justify-between items-center gap-8">
+    <div class="flex flex-col items-center md:items-start">
+      <span class="text-indigo-500 font-black tracking-tighter mb-2">DecryptHealth</span>
+      <span class="text-[10px] mono-text text-outline uppercase tracking-[0.2em]">V2.4.0-stable</span>
+    </div>
+    <div class="flex gap-12">
+      <div class="flex flex-col gap-3">
+        <span class="text-xs font-black uppercase tracking-widest text-on-surface">Security</span>
+        <a class="text-xs text-outline hover:text-primary transition-colors" href="#">Audit Logs</a>
+        <a class="text-xs text-outline hover:text-primary transition-colors" href="#">Privacy Policy</a>
+      </div>
+      <div class="flex flex-col gap-3">
+        <span class="text-xs font-black uppercase tracking-widest text-on-surface">Support</span>
+        <a class="text-xs text-outline hover:text-primary transition-colors" href="#">Technical Docs</a>
+        <a class="text-xs text-outline hover:text-primary transition-colors" href="#">API Reference</a>
+      </div>
+    </div>
+    <button class="flex items-center gap-3 bg-surface-container text-on-surface-variant px-6 py-3 rounded-lg text-sm font-bold hover:bg-surface-container-high transition-all" onclick="alert('Local-only tool')">
+      <span class="material-symbols-outlined text-base">support_agent</span>Technical Support
+    </button>
+  </div>
+</footer>
+
+<style>
+  /* Empty/decrypt status cell colors */
+  td.empty { color: var(--outline, #777587); }
+  td.decrypted { color: #00702f; font-weight: 500; }
+  td.failed { color: #ba1a1a; font-weight: 500; }
+  td { padding: 8px 16px; border-bottom: 1px solid #f3f3f3; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  th { padding: 12px 16px; text-align: left; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; color: #464555; cursor: pointer; user-select: none; border-bottom: 1px solid #e2e2e2; }
+  th:hover { color: #1a1c1c; }
+  th.sort-asc::after { content: ' ↑'; color: #4f46e5; }
+  th.sort-desc::after { content: ' ↓'; color: #4f46e5; }
+  tbody tr:nth-child(even) { background: rgba(243,243,243,0.4); }
+  tbody tr:hover { background: rgba(229,229,229,0.5); }
+  /* Drop zone states */
+  #dropZone.drag-over { border-color: #4f46e5 !important; background: rgba(226,223,255,0.4) !important; }
+  #dropZone.drag-over #dropIcon { color: #3525cd; }
+  #dropZone.loaded { border-color: #00702f !important; background: rgba(127,252,151,0.15) !important; }
+  #dropZone.loaded #dropIcon { color: #00702f; }
+  /* Status bar variants */
+  #statusBar.success { background: #e0f2e9; color: #00702f; border-left: 4px solid #00702f; }
+  #statusBar.error { background: #ffdad6; color: #93000a; border-left: 4px solid #ba1a1a; }
+  /* Decrypt button enabled */
+  #decryptBtn:not(:disabled) {
+    background: linear-gradient(135deg, #3525cd, #4f46e5);
+    color: white; opacity: 1; cursor: pointer;
+    box-shadow: 0 4px 16px rgba(53,37,205,0.25);
+  }
+  #decryptBtn:not(:disabled):hover { box-shadow: 0 6px 20px rgba(53,37,205,0.35); transform: translateY(-1px); }
+  /* Key counter validity */
+  #keyCounter.valid { color: #00702f; }
+  #keyCounter.invalid { color: #ba1a1a; }
+</style>
 
 <script>
   let parsedRows = [];
@@ -337,10 +273,12 @@
 
   function toGermanTime(val) {
     if (!val || !val.trim()) return val;
-    const d = new Date(val.trim());
+    let s = val.trim().replace(' ', 'T');
+    if (!/Z$|[+\-]\d{2}:?\d{2}$/.test(s)) s += 'Z';   // no tz → treat as UTC
+    const d = new Date(s);
     if (isNaN(d.getTime())) return val;
     return new Intl.DateTimeFormat('de-DE', {
-      timeZone: DE_TZ,
+      // No timeZone option → uses the user's local timezone
       year: 'numeric', month: '2-digit', day: '2-digit',
       hour: '2-digit', minute: '2-digit', second: '2-digit',
       hour12: false,
@@ -350,6 +288,8 @@
   // ─── Drag & Drop ────────────────────────────────────────────
   const dropZone = document.getElementById('dropZone');
   const fileInput = document.getElementById('fileInput');
+  const dropLabel = document.getElementById('dropLabel');
+  const dropSub = document.getElementById('dropSub');
 
   dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
   dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
@@ -368,8 +308,10 @@
       skipEmptyLines: true,
       complete: result => {
         parsedRows = result.data;
-        dropZone.textContent = `✓ ${file.name} (${parsedRows.length} rows)`;
+        dropLabel.textContent = `${file.name}`;
+        dropSub.textContent = `${parsedRows.length} rows ready`;
         dropZone.classList.add('loaded');
+        document.getElementById('dropIcon').textContent = 'check_circle';
         updateDecryptBtn();
       }
     });
@@ -382,7 +324,7 @@
   keyInput.addEventListener('input', () => {
     const len = keyInput.value.length;
     keyCounter.textContent = `${len} / 32`;
-    keyCounter.className = 'key-counter' + (len === 32 ? ' valid' : len > 32 ? ' invalid' : '');
+    keyCounter.className = len === 32 ? 'valid' : len > 32 ? 'invalid' : '';
     updateDecryptBtn();
   });
 
@@ -416,15 +358,15 @@
   // ─── Main decrypt ─────────────────────────────────────────────
   document.getElementById('decryptBtn').addEventListener('click', async () => {
     const statusBar = document.getElementById('statusBar');
-    statusBar.className = 'status-bar';
-    statusBar.style.display = 'block';
-    statusBar.textContent = 'Decrypting...';
+    statusBar.className = 'rounded-xl whisper-shadow p-4 text-sm font-medium';
+    statusBar.classList.remove('hidden');
+    statusBar.textContent = 'Decrypting…';
 
     let cryptoKey;
     try {
       cryptoKey = await importKey(keyInput.value);
     } catch (e) {
-      statusBar.className = 'status-bar error';
+      statusBar.classList.add('error');
       statusBar.textContent = 'Failed to import key: ' + e.message;
       return;
     }
@@ -459,14 +401,14 @@
       allRows.push(newRow);
     }
 
-    statusBar.className = 'status-bar success';
+    statusBar.classList.add('success');
     statusBar.textContent = `Decrypted ${success} rows successfully.${failed > 0 ? ' ' + failed + ' failed.' : ''}${noEnc > 0 ? ' ' + noEnc + ' had no encrypted data.' : ''}`;
 
     renderStats(success, failed, noEnc, emailPresent, emailEmpty);
     buildExportPanel();
     renderTable(allRows);
 
-    document.getElementById('searchBar').style.display = 'flex';
+    document.getElementById('searchBar').classList.remove('hidden');
     document.getElementById('searchInput').value = '';
   });
 
@@ -480,9 +422,9 @@
     document.getElementById('statEmailEmpty').textContent   = emailEmpty;
     document.getElementById('statNoEnc').textContent        = noEnc;
     document.getElementById('statFailed').textContent       = failed;
-    document.getElementById('statEmailPresentPct').textContent = pct(emailPresent) + ' of total';
-    document.getElementById('statEmailEmptyPct').textContent   = pct(emailEmpty)   + ' of total';
-    document.getElementById('statsBar').style.display = 'flex';
+    document.getElementById('statEmailPresentPct').textContent = pct(emailPresent);
+    document.getElementById('statEmailEmptyPct').textContent   = pct(emailEmpty);
+    document.getElementById('statsBar').classList.remove('hidden');
   }
 
   // ─── Export Panel ─────────────────────────────────────────────
@@ -497,22 +439,23 @@
     decDiv.innerHTML  = '';
 
     origCols().forEach(col => {
-      origDiv.appendChild(makeCheck('orig_' + col, col, true));
+      origDiv.appendChild(makeCheck('orig_' + col, col, true, 'orig'));
     });
 
     DEC_LABELS.forEach((label, i) => {
-      const el = makeCheck('dec_' + i, label, true);
-      el.querySelector('span').innerHTML += '<span class="badge-dec">NEW</span>';
+      const el = makeCheck('dec_' + i, label, true, 'dec');
       decDiv.appendChild(el);
     });
 
-    document.getElementById('exportPanel').style.display = 'block';
+    document.getElementById('exportPanel').classList.remove('hidden');
   }
 
-  function makeCheck(id, label, checked) {
+  function makeCheck(id, label, checked, kind) {
     const wrap = document.createElement('label');
-    wrap.className = 'col-check';
-    wrap.innerHTML = `<input type="checkbox" id="${id}" ${checked ? 'checked' : ''}><span>${label}</span>`;
+    wrap.className = 'flex items-center gap-3 cursor-pointer group';
+    const accent = kind === 'dec' ? 'text-tertiary focus:ring-tertiary' : 'text-primary focus:ring-primary-container';
+    const hoverColor = kind === 'dec' ? 'group-hover:text-tertiary' : 'group-hover:text-primary';
+    wrap.innerHTML = `<input type="checkbox" id="${id}" ${checked ? 'checked' : ''} class="rounded border-outline-variant ${accent} w-4 h-4"><span class="text-sm mono-text text-on-surface-variant ${hoverColor}">${label}</span>`;
     return wrap;
   }
 
@@ -531,7 +474,7 @@
     if (!allRows.length) return;
 
     const oCols = origCols();
-    const selectedOrig = oCols.filter((col, i) => {
+    const selectedOrig = oCols.filter(col => {
       const cb = document.getElementById('orig_' + col);
       return cb && cb.checked;
     });
@@ -540,10 +483,7 @@
       return cb && cb.checked ? i : -1;
     }).filter(i => i >= 0);
 
-    const headers = [
-      ...selectedOrig,
-      ...selectedDecIdx.map(i => DEC_EXPORTS[i]),
-    ];
+    const headers = [...selectedOrig, ...selectedDecIdx.map(i => DEC_EXPORTS[i])];
 
     const csvRows = [headers.map(h => `"${h}"`).join(',')];
     allRows.forEach(row => {
@@ -568,7 +508,7 @@
   // ─── Table ────────────────────────────────────────────────────
   function renderTable(rows) {
     const tableWrap = document.getElementById('tableWrap');
-    if (!rows.length) { tableWrap.style.display = 'none'; return; }
+    if (!rows.length) { tableWrap.classList.add('hidden'); return; }
 
     const cols = origCols();
     const thead = document.getElementById('tableHead');
@@ -583,14 +523,14 @@
     });
     DEC_LABELS.forEach((label, i) => {
       const th = document.createElement('th');
-      th.innerHTML = label + '<span style="display:inline-block;font-size:9px;font-weight:700;background:#4f46e5;color:white;border-radius:3px;padding:1px 4px;margin-left:4px;text-transform:uppercase;">NEW</span>';
+      th.innerHTML = label + '<span style="display:inline-block;font-size:9px;font-weight:700;background:#7ffc97;color:#00702f;border-radius:9999px;padding:1px 6px;margin-left:4px;text-transform:uppercase;">NEW</span>';
       th.addEventListener('click', () => sortTable(cols.length + i, DEC_FIELDS[i], true));
       tr.appendChild(th);
     });
     thead.appendChild(tr);
 
     buildBodyRows(rows, cols);
-    tableWrap.style.display = 'block';
+    tableWrap.classList.remove('hidden');
     updateRowCount(rows.length);
   }
 
@@ -604,7 +544,7 @@
         const td = document.createElement('td');
         const raw = row[col] || '';
         const val = TIME_COLS.includes(col) ? toGermanTime(raw) : raw;
-        td.textContent = val;
+        td.textContent = val || '—';
         td.title = val;
         if (!val) td.className = 'empty';
         tr.appendChild(td);
@@ -616,7 +556,7 @@
           td.className = 'failed';
         } else {
           const val = row[f] || '';
-          td.textContent = val;
+          td.textContent = val || '—';
           td.title = val;
           td.className = val ? 'decrypted' : 'empty';
         }

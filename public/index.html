@@ -1,257 +1,286 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LillianCare Debugger</title>
+  <title>LC Debugger — Technical Atelier</title>
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+  <script id="tailwind-config">
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            primary: '#3525cd', 'primary-container': '#4f46e5', 'on-primary': '#ffffff',
+            'primary-fixed': '#e2dfff', 'primary-fixed-dim': '#c3c0ff', 'on-primary-container': '#dad7ff',
+            'on-primary-fixed': '#0f0069', 'on-primary-fixed-variant': '#3323cc',
+            secondary: '#5d5c74', 'secondary-container': '#e2e0fc', 'on-secondary': '#ffffff',
+            'on-secondary-container': '#63627a', 'secondary-fixed': '#e2e0fc', 'secondary-fixed-dim': '#c6c4df',
+            'on-secondary-fixed': '#1a1a2e', 'on-secondary-fixed-variant': '#45455b',
+            tertiary: '#005522', 'tertiary-container': '#00702f', 'tertiary-fixed': '#7ffc97', 'tertiary-fixed-dim': '#62df7d',
+            'on-tertiary': '#ffffff', 'on-tertiary-container': '#78f591', 'on-tertiary-fixed': '#002109', 'on-tertiary-fixed-variant': '#005320',
+            error: '#ba1a1a', 'error-container': '#ffdad6', 'on-error': '#ffffff', 'on-error-container': '#93000a',
+            surface: '#f9f9f9', background: '#f9f9f9', 'surface-bright': '#f9f9f9',
+            'surface-container-lowest': '#ffffff',
+            'surface-container-low': '#f3f3f3',
+            'surface-container': '#eeeeee',
+            'surface-container-high': '#e8e8e8',
+            'surface-container-highest': '#e2e2e2',
+            'surface-variant': '#e2e2e2', 'surface-dim': '#dadada', 'surface-tint': '#4d44e3',
+            'on-surface': '#1a1c1c', 'on-surface-variant': '#464555', 'on-background': '#1a1c1c',
+            outline: '#777587', 'outline-variant': '#c7c4d8',
+            'inverse-surface': '#2f3131', 'inverse-on-surface': '#f1f1f1', 'inverse-primary': '#c3c0ff',
+          },
+          borderRadius: { DEFAULT: '0.25rem', lg: '0.5rem', xl: '0.75rem', full: '9999px' },
+          fontFamily: { headline: ['Inter','sans-serif'], body: ['Inter','sans-serif'], label: ['Inter','sans-serif'], mono: ['JetBrains Mono','monospace'] }
+        }
+      }
+    }
+  </script>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; color: #333; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
-
-    /* Warning banner */
-    .warn-banner { background: #fef3c7; border-bottom: 1px solid #f59e0b; padding: 6px 20px; font-size: 12px; color: #92400e; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-    .warn-banner strong { font-weight: 700; }
-
-    /* DB Config panel */
-    .config-panel { background: white; border-bottom: 1px solid #e5e7eb; padding: 10px 20px; flex-shrink: 0; }
-    .config-toggle { display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
-    .config-toggle h2 { font-size: 13px; font-weight: 700; color: #1a1a2e; }
-    .conn-status { width: 8px; height: 8px; border-radius: 50%; background: #ccc; flex-shrink: 0; }
-    .conn-status.connected { background: #16a34a; }
-    .conn-status.error { background: #dc2626; }
-    .conn-label { font-size: 12px; color: #888; }
-    .chevron { font-size: 11px; color: #aaa; margin-left: auto; }
-
-    .config-body { display: none; margin-top: 12px; }
-    .config-body.open { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
-    .cf { display: flex; flex-direction: column; gap: 4px; }
-    .cf label { font-size: 11px; font-weight: 600; color: #777; text-transform: uppercase; letter-spacing: 0.4px; }
-    .cf select, .cf input { height: 34px; border: 1px solid #ddd; border-radius: 6px; padding: 0 10px; font-size: 13px; outline: none; }
-    .cf select:focus, .cf input:focus { border-color: #4f46e5; }
-    .cf input { width: 160px; }
-    .cf select { width: 160px; }
-    .btn { height: 34px; padding: 0 14px; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; }
-    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
-    .btn-primary { background: #4f46e5; color: white; }
-    .btn-primary:hover:not(:disabled) { background: #4338ca; }
-    .btn-success { background: #16a34a; color: white; }
-    .btn-success:hover:not(:disabled) { background: #15803d; }
-    .btn-danger { background: #dc2626; color: white; }
-    .btn-danger:hover:not(:disabled) { background: #b91c1c; }
-    .btn-ghost { background: #f3f4f6; color: #555; }
-    .btn-ghost:hover { background: #e5e7eb; }
-    .btn-sm { height: 28px; padding: 0 10px; font-size: 12px; }
-
-    /* Main layout */
-    .main { display: flex; flex: 1; overflow: hidden; }
-
-    /* Sidebar */
-    .sidebar { width: 200px; background: #1a1a2e; flex-shrink: 0; display: flex; flex-direction: column; overflow-y: auto; }
-    .sidebar-logo { padding: 16px; border-bottom: 1px solid rgba(255,255,255,0.08); }
-    .sidebar-logo h1 { font-size: 14px; font-weight: 700; color: white; line-height: 1.3; }
-    .sidebar-logo span { font-size: 11px; color: rgba(255,255,255,0.4); }
-    .nav-section { padding: 8px 0; }
-    .nav-label { font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.3); text-transform: uppercase; letter-spacing: 0.8px; padding: 6px 16px 4px; }
-    .nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 16px; cursor: pointer; font-size: 13px; color: rgba(255,255,255,0.65); transition: background 0.1s; border-radius: 0; }
-    .nav-item:hover { background: rgba(255,255,255,0.06); color: white; }
-    .nav-item.active { background: #4f46e5; color: white; }
-    .nav-item .icon { font-size: 15px; flex-shrink: 0; }
-
-    /* Content area */
-    .content { flex: 1; overflow-y: auto; padding: 20px; }
-
-    /* Cards & tables */
-    .card { background: white; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.07); margin-bottom: 14px; }
-    .card-header { padding: 14px 16px; border-bottom: 1px solid #f0f0f0; display: flex; align-items: center; gap: 10px; }
-    .card-header h3 { font-size: 14px; font-weight: 700; flex: 1; }
-    .card-body { padding: 14px 16px; }
-
-    .filter-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
-    .fld { display: flex; flex-direction: column; gap: 4px; }
-    .fld label { font-size: 11px; font-weight: 600; color: #777; text-transform: uppercase; letter-spacing: 0.4px; }
-    .fld input, .fld select { height: 34px; border: 1px solid #ddd; border-radius: 6px; padding: 0 10px; font-size: 13px; outline: none; }
-    .fld input:focus, .fld select:focus { border-color: #4f46e5; }
-    .fld input { min-width: 150px; }
-
-    .table-wrap { overflow-x: auto; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th { background: #f8f9fa; padding: 9px 12px; text-align: left; font-size: 11px; font-weight: 700; color: #666; text-transform: uppercase; letter-spacing: 0.4px; border-bottom: 2px solid #e5e7eb; white-space: nowrap; }
-    td { padding: 8px 12px; border-bottom: 1px solid #f3f3f3; vertical-align: top; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    tr:last-child td { border-bottom: none; }
-    tr:hover td { background: #fafafe; }
-    tr.expandable { cursor: pointer; }
-    tr.expanded td { background: #f0f0ff !important; }
-    .expand-row td { background: #f8f8ff; padding: 0; }
-    .expand-inner { padding: 16px; border-top: 2px solid #4f46e5; }
-
-    /* Badges & status */
-    .badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
-    .badge-green { background: #dcfce7; color: #166534; }
-    .badge-red { background: #fee2e2; color: #991b1b; }
-    .badge-blue { background: #dbeafe; color: #1e40af; }
-    .badge-orange { background: #fed7aa; color: #9a3412; }
-    .badge-grey { background: #f3f4f6; color: #6b7280; }
-    .badge-indigo { background: #e0e7ff; color: #3730a3; }
-    .badge-yellow { background: #fef9c3; color: #713f12; }
-
-    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
-    .dot-green { background: #16a34a; }
-    .dot-red { background: #dc2626; }
-    .dot-orange { background: #d97706; }
-    .dot-grey { background: #9ca3af; }
-
+    body { font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; }
+    .mono-text, .text-jetbrains { font-family: 'JetBrains Mono', monospace; }
+    .material-symbols-outlined {
+      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+      vertical-align: middle;
+    }
+    .ms-fill { font-variation-settings: 'FILL' 1; }
+    .shadow-whisper { box-shadow: 0 8px 32px rgba(26,28,28,0.06); }
+    .atelier-shadow { box-shadow: 0 8px 32px rgba(26,28,28,0.06); }
+    .glass-panel { background: rgba(255,255,255,0.85); backdrop-filter: blur(20px); }
+    .atelier-grid { background-image: radial-gradient(#e2e2e2 0.5px, transparent 0.5px); background-size: 24px 24px; }
+    .code-bg { background-color: #1e1e2e; }
+    .zebra-row:nth-child(even) { background-color: #f3f3f3; }
+    .compact-row { height: 38px; }
+    .row-compact { height: 34px; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #e2e2e2; border-radius: 10px; }
+    ::-webkit-scrollbar-thumb:hover { background: #c7c4d8; }
     /* Log levels */
-    .log-debug { color: #9ca3af; }
-    .log-info { color: #3b82f6; }
+    .log-debug { color: #777587; }
+    .log-info { color: #4f46e5; }
     .log-warning { color: #d97706; }
-    .log-error { color: #dc2626; }
-    .log-fatal { color: #dc2626; font-weight: 700; background: #fef2f2; }
-
-    /* Stats bar */
-    .stats-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
-    .stat-card { background: white; border-radius: 10px; padding: 12px 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.07); min-width: 120px; }
-    .stat-label { font-size: 11px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.4px; }
-    .stat-value { font-size: 24px; font-weight: 700; color: #1a1a2e; margin-top: 2px; }
-    .stat-card.blue .stat-value { color: #4f46e5; }
-    .stat-card.green .stat-value { color: #16a34a; }
-    .stat-card.red .stat-value { color: #dc2626; }
-
-    /* Pagination */
-    .pagination { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid #f0f0f0; font-size: 13px; }
-    .pagination .info { color: #888; flex: 1; }
-    .page-btn { height: 30px; min-width: 30px; padding: 0 8px; border: 1px solid #ddd; border-radius: 6px; background: white; font-size: 13px; cursor: pointer; }
-    .page-btn:hover { background: #f3f4f6; }
-    .page-btn.active { background: #4f46e5; color: white; border-color: #4f46e5; }
-    .page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
-    /* User detail */
-    .back-btn { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #4f46e5; cursor: pointer; margin-bottom: 14px; font-weight: 600; }
-    .back-btn:hover { text-decoration: underline; }
-    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-    .detail-section h4 { font-size: 12px; font-weight: 700; color: #888; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 10px; }
-    .field-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #f5f5f5; }
-    .field-row:last-child { border-bottom: none; }
-    .field-key { font-size: 12px; color: #888; width: 140px; flex-shrink: 0; }
-    .field-val { font-size: 13px; flex: 1; font-weight: 500; }
-    .field-input { height: 30px; border: 1px solid #ddd; border-radius: 5px; padding: 0 8px; font-size: 13px; width: 100%; outline: none; }
-    .field-input:focus { border-color: #4f46e5; }
-    .field-input.changed { border-color: #d97706; background: #fffbeb; }
-
-    /* Query runner */
-    .sql-editor { width: 100%; min-height: 140px; font-family: 'Monaco', 'Menlo', monospace; font-size: 13px; border: 1px solid #ddd; border-radius: 8px; padding: 12px; outline: none; resize: vertical; line-height: 1.6; }
-    .sql-editor:focus { border-color: #4f46e5; }
-    .query-actions { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
-    .write-mode-toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #666; margin-left: auto; }
-    .write-mode-toggle input { accent-color: #dc2626; }
-
-    /* AI Query */
-    .chat-messages { min-height: 200px; max-height: 420px; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
-    .msg { display: flex; flex-direction: column; gap: 4px; }
-    .msg-user { align-items: flex-end; }
-    .msg-bubble { padding: 10px 14px; border-radius: 10px; font-size: 13px; max-width: 90%; line-height: 1.5; }
-    .msg-user .msg-bubble { background: #4f46e5; color: white; border-bottom-right-radius: 3px; }
-    .msg-ai .msg-bubble { background: #f3f4f6; color: #333; border-bottom-left-radius: 3px; }
-    .sql-block { background: #1e1e2e; color: #cdd6f4; font-family: monospace; font-size: 12px; border-radius: 8px; padding: 12px; margin-top: 8px; white-space: pre-wrap; word-break: break-all; }
-    .sql-actions { display: flex; gap: 6px; margin-top: 6px; }
-    .chat-input-row { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #f0f0f0; align-items: flex-end; }
-    .chat-input { flex: 1; border: 1px solid #ddd; border-radius: 8px; padding: 8px 12px; font-size: 13px; font-family: inherit; resize: none; outline: none; min-height: 38px; max-height: 120px; }
-    .chat-input:focus { border-color: #4f46e5; }
-
-    /* Misc */
-    .empty-state { padding: 40px; text-align: center; color: #aaa; font-size: 14px; }
-    .error-msg { background: #fee2e2; color: #991b1b; border-radius: 8px; padding: 10px 14px; font-size: 13px; margin-bottom: 10px; }
-    .loading { padding: 30px; text-align: center; color: #888; font-size: 14px; }
-    .stack-pre { font-family: monospace; font-size: 11px; background: #1e1e2e; color: #f8f8f2; padding: 10px; border-radius: 6px; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; margin-top: 6px; }
-    .sub-tabs { display: flex; gap: 0; border-bottom: 2px solid #e5e7eb; margin-bottom: 14px; }
-    .sub-tab { padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; color: #888; border-bottom: 2px solid transparent; margin-bottom: -2px; }
-    .sub-tab.active { color: #4f46e5; border-bottom-color: #4f46e5; }
-    .page-title { font-size: 20px; font-weight: 700; color: #1a1a2e; margin-bottom: 16px; }
-    textarea[readonly], input[readonly] { background: #f9fafb; color: #555; }
+    .log-error { color: #ba1a1a; }
+    .log-fatal { color: #ba1a1a; font-weight: 700; background: rgba(186,26,26,0.08); padding: 1px 6px; border-radius: 3px; }
+    /* Toast */
+    .toast {
+      background: #1a1a2e; color: white; padding: 10px 16px; border-radius: 8px;
+      font-size: 13px; box-shadow: 0 8px 32px rgba(0,0,0,0.2); pointer-events: auto;
+      animation: toastSlide .25s ease-out;
+    }
+    @keyframes toastSlide { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    /* Pulse */
+    .pulse-dot { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+    /* Dirty input */
+    .field-changed { background: #fff7ed !important; border-color: #fdba74 !important; }
   </style>
 </head>
-<body>
+<body class="bg-surface text-on-surface overflow-hidden flex h-screen">
 
-<!-- Warning banner -->
-<div class="warn-banner">
-  <strong>⚠ LOCAL DEV TOOL</strong> — Do not expose to the internet. All data stays on your machine.
-  <span id="connLabel" class="conn-label" style="margin-left:auto"></span>
-</div>
+<!-- ─── Sidebar ────────────────────────────────────────────────────────── -->
+<aside class="hidden md:flex flex-col h-screen py-6 bg-[#1a1a2e] fixed h-full w-[220px] left-0 z-40 shadow-[8px_0_32px_rgba(26,28,28,0.06)]">
+  <div class="px-6 mb-8">
+    <h1 class="text-indigo-50 font-bold tracking-widest text-lg">LC DEBUGGER</h1>
+    <p class="text-slate-400 text-[10px] tracking-widest uppercase mt-1">LillianCare Technical Atelier</p>
+  </div>
+  <nav class="flex-1 overflow-y-auto space-y-6 px-2">
+    <div>
+      <h3 class="px-4 text-[10px] font-black text-slate-500 tracking-[0.2em] mb-2">LOGS</h3>
+      <div class="space-y-1">
+        <a class="nav-item" data-view="session-logs" onclick="navigate('session-logs');return false" href="#session-logs">
+          <span class="material-symbols-outlined text-[20px]">terminal</span>
+          <span class="text-sm font-medium">Session Logs</span>
+        </a>
+        <a class="nav-item" data-view="admin-audit" onclick="navigate('admin-audit');return false" href="#admin-audit">
+          <span class="material-symbols-outlined text-[20px]">shield</span>
+          <span class="text-sm font-medium">Admin Audit</span>
+        </a>
+        <a class="nav-item" data-view="notifications" onclick="navigate('notifications');return false" href="#notifications">
+          <span class="material-symbols-outlined text-[20px]">notifications</span>
+          <span class="text-sm font-medium">Notifications</span>
+        </a>
+      </div>
+    </div>
+    <div>
+      <h3 class="px-4 text-[10px] font-black text-slate-500 tracking-[0.2em] mb-2">DATA</h3>
+      <div class="space-y-1">
+        <a class="nav-item" data-view="users" onclick="navigate('users');return false" href="#users">
+          <span class="material-symbols-outlined text-[20px]">person</span>
+          <span class="text-sm font-medium">Users</span>
+        </a>
+        <a class="nav-item" data-view="bookings" onclick="navigate('bookings');return false" href="#bookings">
+          <span class="material-symbols-outlined text-[20px]">calendar_today</span>
+          <span class="text-sm font-medium">Bookings</span>
+        </a>
+      </div>
+    </div>
+    <div>
+      <h3 class="px-4 text-[10px] font-black text-slate-500 tracking-[0.2em] mb-2">OPERATIONS</h3>
+      <div class="space-y-1">
+        <a class="nav-item" data-view="send-notification" onclick="navigate('send-notification');return false" href="#send-notification">
+          <span class="material-symbols-outlined text-[20px]">campaign</span>
+          <span class="text-sm font-medium">Send Notification</span>
+        </a>
+        <a class="nav-item" data-view="future-calls" onclick="navigate('future-calls');return false" href="#future-calls">
+          <span class="material-symbols-outlined text-[20px]">schedule</span>
+          <span class="text-sm font-medium">Future Calls</span>
+        </a>
+        <a class="nav-item" data-view="health" onclick="navigate('health');return false" href="#health">
+          <span class="material-symbols-outlined text-[20px]">favorite</span>
+          <span class="text-sm font-medium">Server Health</span>
+        </a>
+        <a class="nav-item" data-view="api-keys" onclick="navigate('api-keys');return false" href="#api-keys">
+          <span class="material-symbols-outlined text-[20px]">key</span>
+          <span class="text-sm font-medium">API Keys</span>
+        </a>
+      </div>
+    </div>
+    <div>
+      <h3 class="px-4 text-[10px] font-black text-slate-500 tracking-[0.2em] mb-2">TOOLS</h3>
+      <div class="space-y-1">
+        <a class="nav-item" data-view="query-runner" onclick="navigate('query-runner');return false" href="#query-runner">
+          <span class="material-symbols-outlined text-[20px]">database</span>
+          <span class="text-sm font-medium">Query Runner</span>
+        </a>
+        <a class="nav-item" data-view="ai-query" onclick="navigate('ai-query');return false" href="#ai-query">
+          <span class="material-symbols-outlined text-[20px]">auto_awesome</span>
+          <span class="text-sm font-medium">AI Assistant</span>
+        </a>
+        <a class="nav-item" data-view="csv-decrypt" onclick="navigate('csv-decrypt');return false" href="#csv-decrypt">
+          <span class="material-symbols-outlined text-[20px]">lock_open</span>
+          <span class="text-sm font-medium">CSV Decryptor</span>
+        </a>
+      </div>
+    </div>
+    <div>
+      <h3 class="px-4 text-[10px] font-black text-slate-500 tracking-[0.2em] mb-2">MONITORING</h3>
+      <div class="space-y-1">
+        <a class="nav-item" data-view="monitoring" onclick="navigate('monitoring');return false" href="#monitoring">
+          <span class="material-symbols-outlined text-[20px]">satellite_alt</span>
+          <span class="text-sm font-medium">Monitor</span>
+        </a>
+      </div>
+    </div>
+  </nav>
+  <footer class="px-4 mt-auto border-t border-slate-800 pt-4">
+    <a class="flex items-center gap-3 text-slate-400 hover:text-white px-2 py-2 text-sm transition-colors" href="#" onclick="event.preventDefault();showToast('Local-only tool — no docs site')">
+      <span class="material-symbols-outlined text-[20px]">menu_book</span>
+      Docs
+    </a>
+    <a class="flex items-center gap-3 text-slate-400 hover:text-error px-2 py-2 text-sm transition-colors" href="#" onclick="event.preventDefault();showToast('Local-only tool — Logout disabled')">
+      <span class="material-symbols-outlined text-[20px]">logout</span>
+      Logout
+    </a>
+  </footer>
+</aside>
 
-<!-- DB Config panel -->
-<div class="config-panel">
-  <div class="config-toggle" onclick="toggleConfig()">
-    <div class="conn-status" id="connStatus"></div>
-    <h2>Database Connection</h2>
-    <span class="chevron" id="configChevron">▼</span>
-  </div>
-  <div class="config-body" id="configBody">
-    <div class="cf">
-      <label>Environment</label>
-      <select id="cfPreset" onchange="applyPreset()">
-        <option value="dev">Development</option>
-        <option value="staging">Staging</option>
-        <option value="production">Production</option>
-        <option value="custom">Custom</option>
-      </select>
-    </div>
-    <div class="cf"><label>Host</label><input id="cfHost" value="localhost"></div>
-    <div class="cf"><label>Port</label><input id="cfPort" value="8090" style="width:80px"></div>
-    <div class="cf"><label>Database</label><input id="cfDb" value="lillian_care_core"></div>
-    <div class="cf"><label>User</label><input id="cfUser" value="postgres"></div>
-    <div class="cf"><label>Password</label><input id="cfPass" type="password" placeholder="Enter password"></div>
-    <div class="cf" style="gap:6px;flex-direction:row;align-items:flex-end">
-      <button class="btn btn-ghost" onclick="testConnection()">Test</button>
-      <button class="btn btn-primary" onclick="saveConnection()">Connect</button>
-    </div>
-  </div>
-</div>
+<style>
+  .nav-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 12px; border-radius: 8px;
+    color: rgb(148 163 184); transition: all .12s;
+  }
+  .nav-item:hover { color: rgb(199 210 254); background: rgba(30, 41, 59, 0.5); }
+  .nav-item.active { background: rgba(79, 70, 229, 0.9); color: white; }
+  .nav-item.active:hover { background: rgba(79, 70, 229, 0.95); color: white; }
+</style>
 
-<!-- Main layout -->
-<div class="main">
-  <!-- Sidebar -->
-  <div class="sidebar">
-    <div class="sidebar-logo">
-      <h1>LC Debugger</h1>
-      <span>LillianCare</span>
+<!-- ─── Main Content Wrapper ──────────────────────────────────────────── -->
+<main class="flex-1 ml-0 md:ml-[220px] flex flex-col min-h-screen overflow-hidden">
+
+  <!-- Warning banner (with inline DB toggle) -->
+  <header class="bg-amber-100 px-6 py-1.5 flex justify-between items-center text-[11px] font-bold tracking-tight text-amber-800 border-b border-amber-200 flex-shrink-0">
+    <div class="flex items-center gap-2">
+      <span class="material-symbols-outlined text-sm">warning</span>
+      <span>LOCAL DEVELOPMENT TOOL — NOT FOR PRODUCTION</span>
     </div>
-    <div class="nav-section">
-      <div class="nav-label">Logs</div>
-      <div class="nav-item" data-view="session-logs" onclick="navigate('session-logs')"><span class="icon">📋</span> Session Logs</div>
-      <div class="nav-item" data-view="admin-audit" onclick="navigate('admin-audit')"><span class="icon">🛡️</span> Admin Audit</div>
-      <div class="nav-item" data-view="notifications" onclick="navigate('notifications')"><span class="icon">🔔</span> Notifications</div>
+    <div class="flex items-center gap-3">
+      <div class="relative">
+        <div id="connStatus" class="w-2 h-2 bg-[#10b981] rounded-full"></div>
+        <div id="connStatusPing" class="absolute inset-0 w-2 h-2 bg-[#10b981] rounded-full animate-ping opacity-25"></div>
+      </div>
+      <div class="mono-text opacity-80" id="connLabel">—</div>
+      <button type="button" onclick="toggleConfig()" title="Database connection settings" class="flex items-center justify-center w-6 h-6 rounded hover:bg-amber-200 transition-colors text-amber-800">
+        <span id="configChevron" class="material-symbols-outlined text-base transition-transform">expand_more</span>
+      </button>
     </div>
-    <div class="nav-section">
-      <div class="nav-label">Data</div>
-      <div class="nav-item" data-view="users" onclick="navigate('users')"><span class="icon">👤</span> Users</div>
-      <div class="nav-item" data-view="bookings" onclick="navigate('bookings')"><span class="icon">📅</span> Bookings</div>
+  </header>
+
+  <!-- Database Connection panel (collapsed by default) -->
+  <section class="bg-surface-container-lowest border-b border-outline-variant/10 z-10 flex-shrink-0">
+    <div id="configBody" class="px-6 pb-5 pt-4 hidden">
+      <div class="flex flex-wrap items-end gap-4">
+        <div class="flex flex-col gap-1.5">
+          <label class="text-[10px] font-black text-on-surface-variant uppercase tracking-wider">Environment</label>
+          <select id="cfPreset" class="bg-surface-container-low border-none rounded-lg text-xs px-3 py-2 font-medium focus:ring-2 focus:ring-primary/20 min-w-[160px]" onchange="applyPreset()">
+            <option value="dev">Development</option>
+            <option value="staging">Staging</option>
+            <option value="production">Production</option>
+            <option value="custom">Custom</option>
+          </select>
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <label class="text-[10px] font-black text-on-surface-variant uppercase tracking-wider">Host</label>
+          <input id="cfHost" class="mono-text bg-surface-container-low border-none rounded-lg text-xs px-3 py-2 focus:ring-2 focus:ring-primary/20 w-44" type="text" value="localhost">
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <label class="text-[10px] font-black text-on-surface-variant uppercase tracking-wider">Port</label>
+          <input id="cfPort" class="mono-text bg-surface-container-low border-none rounded-lg text-xs px-3 py-2 focus:ring-2 focus:ring-primary/20 w-20" type="text" value="8090">
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <label class="text-[10px] font-black text-on-surface-variant uppercase tracking-wider">Database</label>
+          <input id="cfDb" class="mono-text bg-surface-container-low border-none rounded-lg text-xs px-3 py-2 focus:ring-2 focus:ring-primary/20 w-48" type="text" value="lillian_care_core">
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <label class="text-[10px] font-black text-on-surface-variant uppercase tracking-wider">User</label>
+          <input id="cfUser" class="mono-text bg-surface-container-low border-none rounded-lg text-xs px-3 py-2 focus:ring-2 focus:ring-primary/20 w-32" type="text" value="postgres">
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <label class="text-[10px] font-black text-on-surface-variant uppercase tracking-wider">Password</label>
+          <input id="cfPass" class="mono-text bg-surface-container-low border-none rounded-lg text-xs px-3 py-2 focus:ring-2 focus:ring-primary/20 w-32" type="password" placeholder="••••••••">
+        </div>
+        <div class="flex gap-2 ml-auto">
+          <button class="px-5 py-2 text-xs font-bold rounded-lg bg-surface-container-high text-on-surface-variant hover:bg-surface-variant transition-colors" onclick="testConnection()">Test</button>
+          <button class="px-5 py-2 text-xs font-bold rounded-lg bg-gradient-to-br from-primary to-primary-container text-white shadow-lg shadow-primary/20 hover:scale-[0.98] transition-transform" onclick="saveConnection()">Connect</button>
+        </div>
+      </div>
     </div>
-    <div class="nav-section">
-      <div class="nav-label">Operations</div>
-      <div class="nav-item" data-view="send-notification" onclick="navigate('send-notification')"><span class="icon">📣</span> Send Notification</div>
-      <div class="nav-item" data-view="future-calls" onclick="navigate('future-calls')"><span class="icon">⏰</span> Future Calls</div>
-      <div class="nav-item" data-view="health" onclick="navigate('health')"><span class="icon">💚</span> Server Health</div>
-      <div class="nav-item" data-view="api-keys" onclick="navigate('api-keys')"><span class="icon">🔑</span> API Keys</div>
-    </div>
-    <div class="nav-section">
-      <div class="nav-label">Tools</div>
-      <div class="nav-item" data-view="query-runner" onclick="navigate('query-runner')"><span class="icon">💻</span> Query Runner</div>
-      <div class="nav-item" data-view="ai-query" onclick="navigate('ai-query')"><span class="icon">🤖</span> AI Assistant</div>
-      <div class="nav-item" data-view="csv-decrypt" onclick="navigate('csv-decrypt')"><span class="icon">🔓</span> CSV Decryptor</div>
-    <div class="nav-section">
-      <div class="nav-label">Monitoring</div>
-      <div class="nav-item" data-view="monitoring" onclick="navigate('monitoring')"><span class="icon">🛰️</span> AWS Monitor</div>
-    </div>
-    </div>
+  </section>
+
+  <!-- Content area -->
+  <div id="content" class="flex-1 overflow-y-auto bg-surface-container-low">
+    <div class="p-12 text-center text-on-surface-variant text-sm">Select a tool from the sidebar to get started.</div>
   </div>
 
-  <!-- Content -->
-  <div class="content" id="content">
-    <div class="empty-state">Select a tool from the sidebar to get started.</div>
-  </div>
-</div>
+  <!-- Bottom status bar -->
+  <footer class="border-t border-slate-200 bg-surface-container-lowest px-6 py-1.5 flex justify-between items-center text-[10px] mono-text text-on-surface-variant/80 font-medium flex-shrink-0">
+    <div class="flex gap-4">
+      <span>UPTIME: <span id="uptimeDisplay">—</span></span>
+      <span>TZ: <span id="tzDisplay">local</span></span>
+    </div>
+    <div class="flex gap-4 items-center">
+      <span>V.2.4.0-STABLE</span>
+      <span class="flex items-center gap-1">
+        <span class="w-1.5 h-1.5 bg-tertiary rounded-full pulse-dot"></span>
+        SYSTEMS NOMINAL
+      </span>
+    </div>
+  </footer>
+</main>
+
+<!-- Toast container -->
+<div id="toastContainer" class="fixed bottom-6 right-6 z-50 space-y-2 pointer-events-none"></div>
 
 <script>
-// ─── Constants ───────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═════════════════════════════════════════════════════════════════════════
 const DE_TZ = 'Europe/Berlin';
 const PRESETS = {
   dev:        { host: 'localhost',                    port: '8090', db: 'lillian_care_core', user: 'postgres' },
@@ -260,27 +289,86 @@ const PRESETS = {
 };
 
 const APT_STATUS = ['proposed','pending','booked','arrived','fulfilled','cancelled','noshow','enteredInError','checkedIn','waitlist','rescheduled'];
-const APT_STATUS_BADGE = ['badge-grey','badge-yellow','badge-green','badge-blue','badge-indigo','badge-red','badge-red','badge-red','badge-green','badge-orange','badge-orange'];
+const APT_STATUS_PILL = {
+  0: ['bg-slate-100','text-slate-700','bg-slate-500'],     // proposed
+  1: ['bg-amber-100','text-amber-700','bg-amber-500'],     // pending
+  2: ['bg-emerald-100','text-emerald-700','bg-emerald-500'],// booked
+  3: ['bg-blue-100','text-blue-700','bg-blue-500'],         // arrived
+  4: ['bg-indigo-100','text-indigo-700','bg-indigo-500'],   // fulfilled
+  5: ['bg-red-100','text-red-700','bg-red-500'],            // cancelled
+  6: ['bg-red-100','text-red-700','bg-red-500'],            // noshow
+  7: ['bg-red-100','text-red-700','bg-red-500'],            // enteredInError
+  8: ['bg-emerald-100','text-emerald-700','bg-emerald-500'],// checkedIn
+  9: ['bg-orange-100','text-orange-700','bg-orange-500'],   // waitlist
+  10:['bg-orange-100','text-orange-700','bg-orange-500'],   // rescheduled
+};
 
 const NOTIF_TYPES = ['accountVerified','aptRescheduledByPraxis','aptCancelledByPraxis','aptBookedByPraxis','aptReminder','newDocument','unknown'];
-const NOTIF_BADGE  = ['badge-indigo','badge-orange','badge-red','badge-blue','badge-blue','badge-green','badge-grey'];
+const NOTIF_PILL = {
+  0: ['bg-indigo-100','text-indigo-700'],
+  1: ['bg-orange-100','text-orange-700'],
+  2: ['bg-red-100','text-red-700'],
+  3: ['bg-blue-100','text-blue-700'],
+  4: ['bg-blue-100','text-blue-700'],
+  5: ['bg-emerald-100','text-emerald-700'],
+  6: ['bg-slate-100','text-slate-700'],
+};
 
 const LOG_LEVELS = ['DEBUG','INFO','WARNING','ERROR','FATAL'];
 const LOG_CLASSES = ['log-debug','log-info','log-warning','log-error','log-fatal'];
 
-// ─── German time formatter ────────────────────────────────────────────────────
+const TITLE_BY_VIEW = {
+  'session-logs': 'Session Logs',
+  'admin-audit': 'Admin Audit',
+  'notifications': 'Notifications',
+  'users': 'Users',
+  'bookings': 'Bookings',
+  'send-notification': 'Send Notification',
+  'future-calls': 'Future Calls',
+  'health': 'Server Health',
+  'api-keys': 'API Keys',
+  'query-runner': 'Query Runner',
+  'ai-query': 'AI Assistant',
+  'csv-decrypt': 'CSV Decryptor',
+  'monitoring': 'Monitor',
+};
+
+// ═════════════════════════════════════════════════════════════════════════
+// HELPERS
+// ═════════════════════════════════════════════════════════════════════════
+
+// Postgres returns timestamps without a TZ marker (e.g. "2026-04-17 10:30:00").
+// JS would otherwise parse those as LOCAL time — but the server stores UTC.
+// Force-tag tz-less strings as UTC, then we can format in any zone.
+function parseDbDate(val) {
+  if (val === null || val === undefined || val === '') return null;
+  if (val instanceof Date) return isNaN(val) ? null : val;
+  let s = String(val).trim();
+  s = s.replace(' ', 'T');                          // "2026-04-17 10:30" → "2026-04-17T10:30"
+  if (!/Z$|[+\-]\d{2}:?\d{2}$/.test(s)) s += 'Z';   // no tz → assume UTC
+  const d = new Date(s);
+  return isNaN(d) ? null : d;
+}
+
+// Format a DB timestamp in the user's local timezone (de-DE format: dd.MM.yyyy HH:mm:ss).
 function deTime(val) {
   if (!val) return '—';
-  const d = new Date(val);
-  if (isNaN(d)) return val;
+  const d = parseDbDate(val);
+  if (!d) return String(val);
   return new Intl.DateTimeFormat('de-DE', {
-    timeZone: DE_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+    year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
   }).format(d).replace(',', '');
 }
 
+// Local timezone label (e.g. "Europe/Berlin") for the bottom status bar.
+const LOCAL_TZ = (() => {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'local'; }
+  catch { return 'local'; }
+})();
+
 function escHtml(s) {
-  if (!s) return '';
+  if (s === null || s === undefined) return '';
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
@@ -290,11 +378,198 @@ function dur(ms) {
   return `${(ms/1000).toFixed(2)}s`;
 }
 
-// ─── Env config (passwords + decrypt key from server .env) ───────────────────
-let envConfig = null;
-fetch('/api/env-config').then(r => r.json()).then(c => { envConfig = c; }).catch(() => {});
+function showToast(msg) {
+  const c = document.getElementById('toastContainer');
+  const t = document.createElement('div');
+  t.className = 'toast';
+  t.textContent = msg;
+  c.appendChild(t);
+  setTimeout(() => t.remove(), 2400);
+}
 
-// ─── DB Config ────────────────────────────────────────────────────────────────
+// Copy arbitrary text to clipboard with a toast confirmation.
+// Falls back to a hidden textarea + execCommand for non-secure contexts.
+async function copyText(text, label = 'Copied') {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+    showToast('✓ ' + label);
+  } catch (e) {
+    showToast('Copy failed: ' + e.message);
+  }
+}
+
+// Decode HTML entities back to raw text. Used by inline onclick handlers
+// that need to copy SQL stored in escaped HTML attributes.
+function decodeEntities(s) {
+  const t = document.createElement('textarea');
+  t.innerHTML = s;
+  return t.value;
+}
+
+// Copy the current Query Runner editor contents.
+function copyQrSql() {
+  const ta = document.getElementById('qrSql');
+  if (!ta) return;
+  const v = ta.value.trim();
+  if (!v) { showToast('Editor is empty'); return; }
+  copyText(v, 'Copied SQL');
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// REUSABLE UI BUILDERS
+// ═════════════════════════════════════════════════════════════════════════
+function pageHero(title, opts = {}) {
+  const { sub = '', actions = '', live = false } = opts;
+  const liveDot = live ? `<span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-tertiary pulse-dot"></span> Live Stream Active</span>` : '';
+  const subRow = (sub || live) ? `<div class="flex items-center gap-4 text-on-surface-variant text-sm mt-1">${liveDot}${sub ? `<span class="${live ? 'mono-text text-xs border-l border-outline-variant pl-4' : ''}">${sub}</span>` : ''}</div>` : '';
+  return `<header class="mb-8 flex justify-between items-end">
+    <div>
+      <h2 class="text-[2.75rem] font-black tracking-tight text-on-surface leading-none">${escHtml(title)}</h2>
+      ${subRow}
+    </div>
+    ${actions ? `<div class="flex gap-2">${actions}</div>` : ''}
+  </header>`;
+}
+
+function filterCard(html, cols = 6) {
+  return `<section class="bg-surface-container-lowest rounded-xl shadow-whisper p-6 mb-6">
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-${cols} gap-4 items-end">${html}</div>
+  </section>`;
+}
+
+function fLabel(text) {
+  return `<label class="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider">${escHtml(text)}</label>`;
+}
+
+function fInput(label, attrs) {
+  return `<div class="space-y-1.5">${fLabel(label)}<input ${attrs} class="w-full h-10 bg-surface-container-low text-sm rounded-lg border-none focus:ring-2 focus:ring-primary-fixed px-3"></div>`;
+}
+
+function fSelect(label, options, attrs = '', selected = '') {
+  return `<div class="space-y-1.5">${fLabel(label)}<select ${attrs} class="w-full h-10 bg-surface-container-low text-sm rounded-lg border-none focus:ring-2 focus:ring-primary-fixed px-3">${options.map(o => {
+    const v = typeof o === 'object' ? o.value : o;
+    const lbl = typeof o === 'object' ? o.label : o;
+    return `<option value="${escHtml(v)}" ${String(selected) === String(v) ? 'selected' : ''}>${escHtml(lbl)}</option>`;
+  }).join('')}</select></div>`;
+}
+
+function btnPrimary(label, onclick, opts = {}) {
+  const icon = opts.icon ? `<span class="material-symbols-outlined text-sm">${opts.icon}</span>` : '';
+  const w = opts.full ? 'w-full' : '';
+  return `<button class="${w} h-10 bg-gradient-to-br from-primary to-primary-container text-white font-bold text-sm rounded-lg shadow-md shadow-primary/20 hover:opacity-90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 px-5" onclick="${onclick}">${icon}${escHtml(label)}</button>`;
+}
+
+function btnGhost(label, onclick, opts = {}) {
+  const icon = opts.icon ? `<span class="material-symbols-outlined text-sm">${opts.icon}</span>` : '';
+  const w = opts.full ? 'w-full' : '';
+  return `<button class="${w} h-10 bg-surface-container-high text-on-surface-variant font-bold text-sm rounded-lg hover:bg-surface-variant transition-colors flex items-center justify-center gap-2 px-5" onclick="${onclick}">${icon}${escHtml(label)}</button>`;
+}
+
+function statusBadge(label, color = 'tertiary') {
+  const map = {
+    tertiary: 'bg-tertiary/15 text-tertiary',
+    error: 'bg-error/15 text-error',
+    primary: 'bg-primary/15 text-primary',
+    amber: 'bg-amber-100 text-amber-700',
+    slate: 'bg-slate-100 text-slate-600',
+    blue: 'bg-blue-100 text-blue-700',
+    indigo: 'bg-indigo-100 text-indigo-700',
+    orange: 'bg-orange-100 text-orange-700',
+    emerald: 'bg-emerald-100 text-emerald-700',
+    red: 'bg-red-100 text-red-700',
+    purple: 'bg-purple-100 text-purple-700',
+  };
+  return `<span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${map[color] || map.slate}">${escHtml(label)}</span>`;
+}
+
+function statusDotText(label, color) {
+  const colors = {
+    tertiary: ['text-tertiary','bg-tertiary'],
+    error: ['text-error','bg-error'],
+    amber: ['text-amber-600','bg-amber-500'],
+    blue: ['text-blue-600','bg-blue-500'],
+    emerald: ['text-emerald-600','bg-emerald-500'],
+    red: ['text-red-600','bg-red-500'],
+    slate: ['text-slate-500','bg-slate-400'],
+  };
+  const [t, b] = colors[color] || colors.slate;
+  return `<span class="flex items-center gap-1.5 ${t} font-medium text-xs"><span class="w-2 h-2 rounded-full ${b} ring-2 ring-current/10"></span>${escHtml(label)}</span>`;
+}
+
+function tableShell(headers, rowsHtml, paginationId = '') {
+  const headHtml = headers.map(h => `<th class="px-4 py-3 text-[0.7rem] font-bold uppercase tracking-widest">${h}</th>`).join('');
+  return `<section class="bg-surface-container-lowest rounded-xl shadow-whisper overflow-hidden mb-6">
+    <div class="overflow-x-auto">
+      <table class="w-full text-left border-collapse">
+        <thead class="bg-surface-container-low text-on-surface-variant border-b border-outline-variant/20"><tr>${headHtml}</tr></thead>
+        <tbody class="text-sm">${rowsHtml}</tbody>
+      </table>
+    </div>
+    ${paginationId ? `<div id="${paginationId}"></div>` : ''}
+  </section>`;
+}
+
+function emptyState(label, icon = 'inbox') {
+  return `<div class="bg-surface-container-lowest rounded-xl shadow-whisper p-16 text-center">
+    <span class="material-symbols-outlined text-5xl text-outline-variant mb-4 block">${icon}</span>
+    <p class="text-sm text-on-surface-variant">${escHtml(label)}</p>
+  </div>`;
+}
+
+function loadingState(label = 'Loading…') {
+  return `<div class="bg-surface-container-lowest rounded-xl shadow-whisper p-12 text-center">
+    <div class="inline-flex items-center gap-3 text-on-surface-variant text-sm">
+      <span class="material-symbols-outlined animate-spin">progress_activity</span>${escHtml(label)}
+    </div>
+  </div>`;
+}
+
+function errorState(msg) {
+  return `<div class="bg-error-container border-l-4 border-error rounded-xl p-5 mb-6">
+    <div class="flex items-start gap-3">
+      <span class="material-symbols-outlined text-error">error</span>
+      <div class="flex-1">
+        <p class="font-bold text-on-error-container text-sm mb-1">Error</p>
+        <p class="mono-text text-xs text-on-error-container break-all">${escHtml(msg)}</p>
+      </div>
+    </div>
+  </div>`;
+}
+
+function pageWrap(inner) {
+  return `<div class="p-8 max-w-[1600px] mx-auto">${inner}</div>`;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// ENV CONFIG (passwords + decrypt key from server .env)
+// ═════════════════════════════════════════════════════════════════════════
+let envConfig = null;
+fetch('/api/env-config').then(r => r.json()).then(c => {
+  envConfig = c;
+  // Auto-fill password if a preset is selected and no password is set
+  const cfg = getCfg();
+  if (!cfg.pass) {
+    const preset = document.getElementById('cfPreset')?.value;
+    if (preset && envConfig?.passwords?.[preset]) {
+      document.getElementById('cfPass').value = envConfig.passwords[preset];
+    }
+  }
+}).catch(() => {});
+
+// ═════════════════════════════════════════════════════════════════════════
+// DB CONFIG
+// ═════════════════════════════════════════════════════════════════════════
 function getCfg() {
   return JSON.parse(localStorage.getItem('lc_db') || '{"host":"localhost","port":"8090","db":"lillian_care_core","user":"postgres","pass":""}');
 }
@@ -319,12 +594,12 @@ async function apiPatch(path, body) {
   return res.json();
 }
 
-// ─── Config panel ─────────────────────────────────────────────────────────────
 function toggleConfig() {
   const body = document.getElementById('configBody');
   const ch = document.getElementById('configChevron');
-  const open = body.classList.toggle('open');
-  ch.textContent = open ? '▲' : '▼';
+  body.classList.toggle('hidden');
+  const open = !body.classList.contains('hidden');
+  ch.style.transform = open ? 'rotate(180deg)' : '';
 }
 
 function applyPreset() {
@@ -335,8 +610,8 @@ function applyPreset() {
   document.getElementById('cfPort').value = p.port;
   document.getElementById('cfDb').value = p.db;
   document.getElementById('cfUser').value = p.user;
-  document.getElementById('cfPass').value = (envConfig && envConfig.passwords[val]) || '';
-  if (envConfig && envConfig.decryptKeys[val]) {
+  document.getElementById('cfPass').value = (envConfig && envConfig.passwords && envConfig.passwords[val]) || '';
+  if (envConfig && envConfig.decryptKeys && envConfig.decryptKeys[val]) {
     localStorage.setItem('bk_dec_key', envConfig.decryptKeys[val]);
   }
 }
@@ -346,19 +621,25 @@ async function testConnection() {
   try {
     const res = await fetch('/api/connection-test', { headers: { 'x-db-host': cfg.host, 'x-db-port': cfg.port, 'x-db-name': cfg.db, 'x-db-user': cfg.user, 'x-db-password': cfg.pass } });
     const data = await res.json();
-    if (data.ok) alert('✅ Connection successful!');
-    else alert('❌ Connection failed: ' + data.error);
-  } catch(e) { alert('❌ ' + e.message); }
+    if (data.ok) showToast('✅ Connection successful');
+    else showToast('❌ Connection failed: ' + data.error);
+  } catch(e) { showToast('❌ ' + e.message); }
 }
 
 function readConfigForm() {
-  return { host: document.getElementById('cfHost').value, port: document.getElementById('cfPort').value, db: document.getElementById('cfDb').value, user: document.getElementById('cfUser').value, pass: document.getElementById('cfPass').value };
+  return {
+    host: document.getElementById('cfHost').value,
+    port: document.getElementById('cfPort').value,
+    db:   document.getElementById('cfDb').value,
+    user: document.getElementById('cfUser').value,
+    pass: document.getElementById('cfPass').value,
+  };
 }
 
 function saveConnection() {
   const cfg = readConfigForm();
   localStorage.setItem('lc_db', JSON.stringify(cfg));
-  document.getElementById('connLabel').textContent = `${cfg.host}:${cfg.port}/${cfg.db}`;
+  document.getElementById('connLabel').textContent = `Connected: ${cfg.host}:${cfg.port}/${cfg.db}`;
   toggleConfig();
   setConnStatus('connected');
   const view = window.location.hash.replace('#','') || 'session-logs';
@@ -366,21 +647,42 @@ function saveConnection() {
 }
 
 function setConnStatus(state) {
-  const el = document.getElementById('connStatus');
-  el.className = 'conn-status ' + (state || '');
+  const dot  = document.getElementById('connStatus');
+  const ping = document.getElementById('connStatusPing');
+  if (!dot || !ping) return;
+  if (state === 'connected') {
+    dot.className  = 'w-2.5 h-2.5 bg-[#10b981] rounded-full';
+    ping.className = 'absolute inset-0 w-2.5 h-2.5 bg-[#10b981] rounded-full animate-ping opacity-25';
+  } else if (state === 'error') {
+    dot.className  = 'w-2.5 h-2.5 bg-error rounded-full';
+    ping.className = 'absolute inset-0 w-2.5 h-2.5 bg-error rounded-full animate-ping opacity-25';
+  } else {
+    dot.className  = 'w-2.5 h-2.5 bg-outline rounded-full';
+    ping.className = 'absolute inset-0 w-2.5 h-2.5 bg-outline rounded-full opacity-0';
+  }
 }
 
 function loadConfigFromStorage() {
   const cfg = getCfg();
   document.getElementById('cfHost').value = cfg.host || 'localhost';
   document.getElementById('cfPort').value = cfg.port || '8090';
-  document.getElementById('cfDb').value = cfg.db || 'lillian_care_core';
+  document.getElementById('cfDb').value   = cfg.db   || 'lillian_care_core';
   document.getElementById('cfUser').value = cfg.user || 'postgres';
   document.getElementById('cfPass').value = cfg.pass || '';
-  document.getElementById('connLabel').textContent = `${cfg.host}:${cfg.port}/${cfg.db}`;
+  // Pick the matching preset
+  for (const [k, p] of Object.entries(PRESETS)) {
+    if (cfg.host === p.host && String(cfg.port) === String(p.port) && cfg.db === p.db) {
+      document.getElementById('cfPreset').value = k;
+      return;
+    }
+  }
+  document.getElementById('cfPreset').value = 'custom';
+  document.getElementById('connLabel').textContent = `Connected: ${cfg.host}:${cfg.port}/${cfg.db}`;
 }
 
-// ─── Router ───────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════
+// ROUTER
+// ═════════════════════════════════════════════════════════════════════════
 function navigate(view) {
   window.location.hash = view;
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
@@ -402,385 +704,561 @@ function navigate(view) {
   else if (view === 'monitoring') renderMonitoring(content);
 }
 
-// ─── Pagination helper ────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════
+// PAGINATION HELPER
+// ═════════════════════════════════════════════════════════════════════════
 function renderPagination(el, data, onPage) {
-  const { total, page, pageSize } = data;
+  const { total, page, pageSize, estimated } = data;
   const totalPages = Math.ceil(total / pageSize);
   const start = (page - 1) * pageSize + 1;
   const end = Math.min(page * pageSize, total);
+  const totalLabel = estimated ? `~${total.toLocaleString()}` : total.toLocaleString();
   el.innerHTML = `
-    <div class="pagination">
-      <span class="info">Showing ${start}–${end} of ${total} rows</span>
-      <button class="page-btn" ${page <= 1 ? 'disabled' : ''} onclick="(${onPage.toString()})(${page - 1})">‹</button>
-      ${[...Array(Math.min(totalPages, 5))].map((_, i) => {
-        const p = page <= 3 ? i+1 : page - 2 + i;
-        if (p < 1 || p > totalPages) return '';
-        return `<button class="page-btn ${p === page ? 'active' : ''}" onclick="(${onPage.toString()})(${p})">${p}</button>`;
-      }).join('')}
-      <button class="page-btn" ${page >= totalPages ? 'disabled' : ''} onclick="(${onPage.toString()})(${page + 1})">›</button>
+    <div class="px-6 py-3 border-t border-outline-variant/20 bg-surface-container-low/40 flex justify-between items-center">
+      <span class="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider">Showing ${start}–${end} of ${totalLabel} rows${estimated ? ' (estimated)' : ''}</span>
+      <div class="flex gap-1">
+        <button class="w-8 h-8 rounded flex items-center justify-center hover:bg-surface-container active:scale-95 ${page <= 1 ? 'opacity-30 pointer-events-none' : ''}" onclick="(${onPage.toString()})(${page - 1})">
+          <span class="material-symbols-outlined text-sm">chevron_left</span>
+        </button>
+        ${[...Array(Math.min(totalPages, 5))].map((_, i) => {
+          const p = page <= 3 ? i+1 : page - 2 + i;
+          if (p < 1 || p > totalPages) return '';
+          const active = p === page ? 'bg-primary text-white' : 'hover:bg-surface-container';
+          return `<button class="w-8 h-8 rounded flex items-center justify-center ${active} font-mono text-[11px] active:scale-95" onclick="(${onPage.toString()})(${p})">${p}</button>`;
+        }).join('')}
+        <button class="w-8 h-8 rounded flex items-center justify-center hover:bg-surface-container active:scale-95 ${page >= totalPages ? 'opacity-30 pointer-events-none' : ''}" onclick="(${onPage.toString()})(${page + 1})">
+          <span class="material-symbols-outlined text-sm">chevron_right</span>
+        </button>
+      </div>
     </div>`;
 }
 
-// ─── Session Logs ─────────────────────────────────────────────────────────────
-let slFilters = {}, slEndpoints = [];
+// ═════════════════════════════════════════════════════════════════════════
+// SESSION LOGS
+// ═════════════════════════════════════════════════════════════════════════
+let slFilters = {};
 const slCache = {};
 
+// Endpoint groups + method names sourced from Serverpod's protocol.yaml
+// via /api/protocol. Cached on first load (no DB query needed).
+let slProtocol = null;
+let slProtocolPromise = null;
+function loadProtocol() {
+  if (slProtocol) return Promise.resolve(slProtocol);
+  if (slProtocolPromise) return slProtocolPromise;
+  slProtocolPromise = fetch('/api/protocol').then(r => r.json()).then(d => {
+    slProtocol = d.groups || {};
+    return slProtocol;
+  }).catch(e => {
+    showToast('Failed to load protocol: ' + e.message);
+    slProtocol = {};
+    return slProtocol;
+  });
+  return slProtocolPromise;
+}
+
+// Rebuild the Method <select> when the chosen endpoint changes.
+function refreshSlMethodOptions() {
+  const sel = document.getElementById('slMethod');
+  if (!sel || !slProtocol) return;
+  const ep = slFilters.endpoint || '';
+  const methods = ep && slProtocol[ep]
+    ? slProtocol[ep]
+    : Array.from(new Set(Object.values(slProtocol).flat())).sort();
+  const cur = slFilters.method || '';
+  sel.innerHTML = ['<option value="">All Methods</option>',
+    ...methods.map(m => `<option value="${escHtml(m)}" ${cur === m ? 'selected' : ''}>${escHtml(m)}</option>`)
+  ].join('');
+}
+
+function onSlEndpointChange(val) {
+  slFilters.endpoint = val;
+  // If current method isn't valid for the new endpoint, clear it.
+  if (val && slProtocol && slProtocol[val] && slFilters.method && !slProtocol[val].includes(slFilters.method)) {
+    slFilters.method = '';
+  }
+  refreshSlMethodOptions();
+}
+
 async function renderSessionLogs(el, page = 1) {
-  el.innerHTML = `<div class="page-title">Session Logs</div><div class="loading">Loading...</div>`;
+  el.innerHTML = pageWrap(pageHero('Session Logs', { sub: 'Per-request server-side logs and queries', live: true }) + loadingState());
   try {
-    if (!slEndpoints.length) {
-      slEndpoints = await apiFetch('/api/session-logs/endpoints');
-    }
-    const p = new URLSearchParams({ ...slFilters, page, pageSize: 50 });
-    const data = await apiFetch(`/api/session-logs?${p}`);
+    // Kick off protocol load in parallel with the rows fetch.
+    const [data] = await Promise.all([
+      apiFetch(`/api/session-logs?${new URLSearchParams({ ...slFilters, page, pageSize: 50 })}`),
+      loadProtocol(),
+    ]);
     setConnStatus('connected');
 
-    el.innerHTML = `
-      <div class="page-title">Session Logs</div>
-      <div class="card">
-        <div class="card-body">
-          <div class="filter-row">
-            <div class="fld"><label>Endpoint</label>
-              <select id="slEndpoint" onchange="slFilters.endpoint=this.value">
-                <option value="">All</option>
-                ${slEndpoints.map(e => `<option value="${escHtml(e)}" ${slFilters.endpoint===e?'selected':''}>${escHtml(e)}</option>`).join('')}
-              </select>
-            </div>
-            <div class="fld"><label>Method</label><input id="slMethod" placeholder="method" value="${escHtml(slFilters.method||'')}" oninput="slFilters.method=this.value" style="width:140px"></div>
-            <div class="fld"><label>From</label><input type="datetime-local" id="slFrom" value="${slFilters.dateFrom||''}" oninput="slFilters.dateFrom=this.value"></div>
-            <div class="fld"><label>To</label><input type="datetime-local" id="slTo" value="${slFilters.dateTo||''}" oninput="slFilters.dateTo=this.value"></div>
-            <div class="fld"><label>&nbsp;</label>
-              <label style="display:flex;align-items:center;gap:6px;height:34px;font-size:13px;cursor:pointer">
-                <input type="checkbox" ${slFilters.errorsOnly?'checked':''} onchange="slFilters.errorsOnly=this.checked"> Errors only
-              </label>
-            </div>
-            <div class="fld"><label>&nbsp;</label>
-              <div style="display:flex;gap:6px">
-                <button class="btn btn-primary" onclick="renderSessionLogs(document.getElementById('content'))">Apply</button>
-                <button class="btn btn-ghost" onclick="slFilters={};renderSessionLogs(document.getElementById('content'))">Clear</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="card">
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th></th><th>Time</th><th>Endpoint</th><th>Method</th><th>Duration</th><th>Queries</th><th>User ID</th><th>Status</th></tr></thead>
-            <tbody id="slBody"></tbody>
-          </table>
-        </div>
-        <div id="slPaging"></div>
-      </div>`;
+    const groupNames = Object.keys(slProtocol || {}).sort();
+    const allMethods = slFilters.endpoint && slProtocol?.[slFilters.endpoint]
+      ? slProtocol[slFilters.endpoint]
+      : Array.from(new Set(Object.values(slProtocol || {}).flat())).sort();
+    const endpointOpts = [{value:'',label:'All Endpoints'}, ...groupNames.map(e => ({value:e,label:e}))];
+    const methodOpts   = [{value:'',label:'All Methods'},   ...allMethods.map(m => ({value:m,label:m}))];
 
-    const tbody = document.getElementById('slBody');
-    data.rows.forEach(row => {
+    const filterHtml =
+      fSelect('Endpoint', endpointOpts, `id="slEndpoint" onchange="onSlEndpointChange(this.value)"`, slFilters.endpoint || '') +
+      fSelect('Method',   methodOpts,   `id="slMethod"   onchange="slFilters.method=this.value"`,   slFilters.method   || '') +
+      fInput('From', `type="datetime-local" id="slFrom" value="${slFilters.dateFrom||''}" oninput="slFilters.dateFrom=this.value"`) +
+      fInput('To',   `type="datetime-local" id="slTo"   value="${slFilters.dateTo||''}"   oninput="slFilters.dateTo=this.value"`) +
+      `<div class="flex items-center gap-3 pb-2.5">
+        <input type="checkbox" id="slErrors" ${slFilters.errorsOnly?'checked':''} onchange="slFilters.errorsOnly=this.checked" class="w-5 h-5 text-primary rounded border-outline-variant focus:ring-primary">
+        <label for="slErrors" class="text-sm font-medium text-on-surface">Errors only</label>
+      </div>` +
+      `<div class="flex gap-2">${btnPrimary('Search', `renderSessionLogs(document.getElementById('content'))`, { full: true })}${btnGhost('Clear', `slFilters={};renderSessionLogs(document.getElementById('content'))`)}</div>`;
+
+    const rowsHtml = data.rows.map(row => {
       const hasError = !!row.error;
       const isSlow = row.slow;
-      const statusDot = hasError ? 'dot-red' : isSlow ? 'dot-orange' : 'dot-green';
-      const tr = document.createElement('tr');
-      tr.className = 'expandable';
-      tr.innerHTML = `
-        <td><span class="dot ${statusDot}"></span></td>
-        <td>${deTime(row.time)}</td>
-        <td title="${escHtml(row.endpoint)}">${escHtml(row.endpoint) || '—'}</td>
-        <td>${escHtml(row.method) || '—'}</td>
-        <td>${dur(row.duration)}</td>
-        <td>${row.numQueries ?? '—'}</td>
-        <td>${row.authenticatedUserId || '—'}</td>
-        <td>${hasError ? `<span class="badge badge-red">Error</span>` : isSlow ? `<span class="badge badge-orange">Slow</span>` : `<span class="badge badge-green">OK</span>`}</td>`;
-      tr.addEventListener('click', () => toggleSessionDetail(tr, row.id));
-      tbody.appendChild(tr);
+      const dotClass = hasError ? 'bg-error' : isSlow ? 'bg-amber-500' : 'bg-tertiary';
+      const statusPill = hasError ? statusBadge('Error','error') : isSlow ? statusBadge('Slow','amber') : statusBadge('OK','tertiary');
+      return `<tr class="zebra-row hover:bg-surface-container transition-colors cursor-pointer group sl-row" data-id="${row.id}">
+        <td class="px-4 py-2"><div class="w-2 h-2 rounded-full ${dotClass}"></div></td>
+        <td class="px-4 py-2 mono-text text-xs opacity-70 whitespace-nowrap">${escHtml(deTime(row.time))}</td>
+        <td class="px-4 py-2 font-medium" title="${escHtml(row.endpoint)}">${escHtml(row.endpoint) || '—'}</td>
+        <td class="px-4 py-2"><span class="px-2 py-0.5 bg-surface-container-high rounded text-[0.65rem] font-bold mono-text">${escHtml(row.method) || '—'}</span></td>
+        <td class="px-4 py-2 mono-text ${hasError ? 'text-error font-bold' : isSlow ? 'text-amber-600' : ''}">${dur(row.duration)}</td>
+        <td class="px-4 py-2 mono-text">${row.numQueries ?? '—'}</td>
+        <td class="px-4 py-2 mono-text text-xs">${escHtml(row.authenticatedUserId) || '—'}</td>
+        <td class="px-4 py-2">${statusPill}</td>
+      </tr>`;
+    }).join('');
+
+    el.innerHTML = pageWrap(
+      pageHero('Session Logs', { sub: `SID: ${getCfg().db}`, live: true,
+        actions: `<button class="p-2 bg-surface-container rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors" onclick="renderSessionLogs(document.getElementById('content'))" title="Refresh"><span class="material-symbols-outlined">refresh</span></button>` }) +
+      filterCard(filterHtml, 6) +
+      tableShell(['St','Time','Endpoint','Method','Duration','Queries','User ID','Status'], rowsHtml, 'slPaging')
+    );
+
+    // Wire row clicks
+    document.querySelectorAll('.sl-row').forEach(tr => {
+      tr.addEventListener('click', () => toggleSessionDetail(tr, tr.dataset.id));
     });
 
     renderPagination(document.getElementById('slPaging'), data, (p) => renderSessionLogs(document.getElementById('content'), p));
   } catch(e) {
     setConnStatus('error');
-    el.innerHTML = `<div class="page-title">Session Logs</div><div class="error-msg">${escHtml(e.message)}</div>`;
+    el.innerHTML = pageWrap(pageHero('Session Logs') + errorState(e.message));
   }
 }
 
 async function toggleSessionDetail(tr, id) {
   const existing = tr.nextElementSibling;
   if (existing && existing.classList.contains('expand-row')) {
-    existing.remove(); tr.classList.remove('expanded'); return;
+    existing.remove();
+    tr.classList.remove('bg-surface-container-low','border-l-4','border-primary');
+    return;
   }
-  tr.classList.add('expanded');
+  tr.classList.add('bg-surface-container-low','border-l-4','border-primary');
   const expandTr = document.createElement('tr');
-  expandTr.className = 'expand-row';
-  expandTr.innerHTML = `<td colspan="8"><div class="expand-inner"><em>Loading...</em></div></td>`;
+  expandTr.className = 'expand-row bg-surface-container-low/50';
+  expandTr.innerHTML = `<td class="p-6" colspan="8"><div class="text-on-surface-variant text-sm">Loading…</div></td>`;
   tr.after(expandTr);
 
   const details = slCache[id] || await apiFetch(`/api/session-logs/${id}/details`);
   slCache[id] = details;
 
   const { session, logs, queries } = details;
-  expandTr.innerHTML = `<td colspan="8"><div class="expand-inner">
-    ${session?.error ? `
-    <div style="margin-bottom:14px">
-      <div style="font-size:12px;font-weight:700;color:#888;text-transform:uppercase;margin-bottom:6px">Crash Reason</div>
-      <div class="stack-pre">${escHtml(session.error)}${session.stackTrace ? '\n\n' + escHtml(session.stackTrace) : ''}</div>
-    </div>` : ''}
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-      <div>
-        <div style="font-size:12px;font-weight:700;color:#888;text-transform:uppercase;margin-bottom:8px">Log Entries (${logs.length})</div>
-        ${logs.length ? logs.map(l => `
-          <div class="${LOG_CLASSES[l.logLevel] || ''}" style="font-size:12px;margin-bottom:6px">
-            <strong>[${LOG_LEVELS[l.logLevel]||l.logLevel}]</strong> ${deTime(l.time)} — ${escHtml(l.message)}
-            ${l.error ? `<div class="stack-pre">${escHtml(l.error)}${l.stackTrace ? '\n\n'+escHtml(l.stackTrace) : ''}</div>` : ''}
-          </div>`).join('') : '<div style="color:#aaa;font-size:13px">No log entries</div>'}
-      </div>
-      <div>
-        <div style="font-size:12px;font-weight:700;color:#888;text-transform:uppercase;margin-bottom:8px">Query Log (${queries.length})</div>
-        ${queries.length ? `<table style="font-size:12px"><thead><tr><th>Query</th><th>Duration</th><th>Rows</th><th>Slow</th></tr></thead><tbody>
-          ${queries.map(q => `<tr>
-            <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis" title="${escHtml(q.query)}">${escHtml(q.query)}</td>
-            <td>${dur(q.duration)}</td>
-            <td>${q.numRows ?? '—'}</td>
-            <td>${q.slow ? '⚠️' : ''}</td>
-          </tr>`).join('')}
-        </tbody></table>` : '<div style="color:#aaa;font-size:13px">No queries</div>'}
+  const crashSection = session?.error ? `
+    <div class="mb-6">
+      <h4 class="text-xs font-black uppercase tracking-widest text-error mb-2 flex items-center gap-2">
+        <span class="material-symbols-outlined text-sm">crisis_alert</span> Crash Reason
+      </h4>
+      <pre class="code-bg text-xs mono-text text-red-300 p-4 rounded-lg whitespace-pre-wrap break-all max-h-60 overflow-y-auto">${escHtml(session.error)}${session.stackTrace ? '\n\n' + escHtml(session.stackTrace) : ''}</pre>
+    </div>` : '';
+
+  const logsHtml = logs.length ? logs.map(l => `
+    <div class="${LOG_CLASSES[l.logLevel] || ''} mono-text text-[11px] mb-1.5 leading-relaxed">
+      <strong>[${LOG_LEVELS[l.logLevel]||l.logLevel}]</strong> ${escHtml(deTime(l.time))} — ${escHtml(l.message)}
+      ${l.error ? `<pre class="mt-1 code-bg text-red-300 p-2 rounded mono-text text-[10px] whitespace-pre-wrap break-all max-h-32 overflow-y-auto">${escHtml(l.error)}${l.stackTrace ? '\n\n'+escHtml(l.stackTrace) : ''}</pre>` : ''}
+    </div>`).join('') : '<div class="text-outline text-sm italic">No log entries</div>';
+
+  const queryHtml = queries.length ? `
+    <div class="bg-surface-container-lowest rounded-lg overflow-hidden border border-outline-variant/20">
+      <table class="w-full text-[11px] mono-text">
+        <thead class="bg-surface-container-high"><tr>
+          <th class="px-3 py-2 text-left font-bold">SQL</th>
+          <th class="px-3 py-2 text-right font-bold">Dur</th>
+          <th class="px-3 py-2 text-right font-bold">Rows</th>
+          <th class="px-3 py-2 text-right font-bold w-10"></th>
+        </tr></thead>
+        <tbody>${queries.map(q => `<tr class="border-b border-surface-container">
+          <td class="px-3 py-2 truncate max-w-[260px]" title="${escHtml(q.query)}">${escHtml(q.query)}</td>
+          <td class="px-3 py-2 text-right ${q.slow ? 'text-amber-600 font-bold' : ''}">${dur(q.duration)}${q.slow ? ' <span class="bg-amber-100 text-[9px] px-1 rounded ml-1 font-bold">SLOW</span>':''}</td>
+          <td class="px-3 py-2 text-right">${q.numRows ?? '—'}</td>
+          <td class="px-3 py-2 text-right">
+            <button class="text-on-surface-variant hover:text-primary p-1 rounded hover:bg-primary/5 transition-colors" title="Copy SQL" onclick="copyText(decodeEntities('${escHtml(q.query)}'), 'Copied SQL')">
+              <span class="material-symbols-outlined text-sm">content_copy</span>
+            </button>
+          </td>
+        </tr>`).join('')}</tbody>
+      </table>
+    </div>` : '<div class="text-outline text-sm italic">No queries</div>';
+
+  expandTr.innerHTML = `<td colspan="8" class="p-0">
+    <div class="p-6 border-l-4 border-primary bg-surface-container-low/40">
+      ${crashSection}
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div>
+          <h4 class="text-xs font-black uppercase tracking-widest text-on-surface-variant mb-3 flex items-center gap-2">
+            <span class="material-symbols-outlined text-sm">subject</span> Log Entries (${logs.length})
+          </h4>
+          <div class="bg-surface-container-lowest p-4 rounded-lg shadow-inner max-h-72 overflow-y-auto">${logsHtml}</div>
+        </div>
+        <div>
+          <h4 class="text-xs font-black uppercase tracking-widest text-on-surface-variant mb-3 flex items-center gap-2">
+            <span class="material-symbols-outlined text-sm">database</span> Query Log (${queries.length})
+          </h4>
+          ${queryHtml}
+        </div>
       </div>
     </div>
-  </div></td>`;
+  </td>`;
 }
 
-// ─── Admin Audit Log ──────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════
+// ADMIN AUDIT
+// ═════════════════════════════════════════════════════════════════════════
 let aaFilters = {};
 
 async function renderAdminAudit(el, page = 1) {
-  el.innerHTML = `<div class="page-title">Admin Audit Log</div><div class="loading">Loading...</div>`;
+  el.innerHTML = pageWrap(pageHero('Admin Audit') + loadingState());
   try {
     const p = new URLSearchParams({ ...aaFilters, page, pageSize: 50 });
     const data = await apiFetch(`/api/admin-audit?${p}`);
     setConnStatus('connected');
 
-    el.innerHTML = `
-      <div class="page-title">Admin Audit Log</div>
-      <div class="card">
-        <div class="card-body">
-          <div class="filter-row">
-            <div class="fld"><label>Action</label><input placeholder="action" value="${escHtml(aaFilters.action||'')}" oninput="aaFilters.action=this.value"></div>
-            <div class="fld"><label>User</label><input placeholder="name" value="${escHtml(aaFilters.userName||'')}" oninput="aaFilters.userName=this.value"></div>
-            <div class="fld"><label>Praxis</label><input placeholder="praxisId" value="${escHtml(aaFilters.praxisId||'')}" oninput="aaFilters.praxisId=this.value"></div>
-            <div class="fld"><label>From</label><input type="datetime-local" value="${aaFilters.dateFrom||''}" oninput="aaFilters.dateFrom=this.value"></div>
-            <div class="fld"><label>To</label><input type="datetime-local" value="${aaFilters.dateTo||''}" oninput="aaFilters.dateTo=this.value"></div>
-            <div class="fld"><label>&nbsp;</label>
-              <div style="display:flex;gap:6px">
-                <button class="btn btn-primary" onclick="renderAdminAudit(document.getElementById('content'))">Apply</button>
-                <button class="btn btn-ghost" onclick="aaFilters={};renderAdminAudit(document.getElementById('content'))">Clear</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="card">
-        <div class="table-wrap">
-          <table><thead><tr><th>Time</th><th>User</th><th>Email</th><th>Action</th><th>Praxis</th><th>Changes</th></tr></thead>
-          <tbody>
-            ${data.rows.map(r => `<tr>
-              <td style="white-space:nowrap">${deTime(r.createdAt)}</td>
-              <td>${escHtml(r.userName)}</td>
-              <td>${escHtml(r.userEmail)}</td>
-              <td><span class="badge badge-blue">${escHtml(r.action)}</span></td>
-              <td>${escHtml(r.praxisId)||'—'}</td>
-              <td title="${escHtml(r.changes)}" style="max-width:300px;overflow:hidden;text-overflow:ellipsis">${escHtml(r.changes)||'—'}</td>
-            </tr>`).join('')}
-          </tbody></table>
-        </div>
-        <div id="aaPaging"></div>
-      </div>`;
+    const filterHtml =
+      fInput('Action', `placeholder="action" value="${escHtml(aaFilters.action||'')}" oninput="aaFilters.action=this.value"`) +
+      fInput('User',   `placeholder="name"   value="${escHtml(aaFilters.userName||'')}" oninput="aaFilters.userName=this.value"`) +
+      fInput('Praxis', `placeholder="praxisId" value="${escHtml(aaFilters.praxisId||'')}" oninput="aaFilters.praxisId=this.value"`) +
+      fInput('From', `type="datetime-local" value="${aaFilters.dateFrom||''}" oninput="aaFilters.dateFrom=this.value"`) +
+      fInput('To',   `type="datetime-local" value="${aaFilters.dateTo||''}"   oninput="aaFilters.dateTo=this.value"`) +
+      `<div class="flex gap-2">${btnPrimary('Search', `renderAdminAudit(document.getElementById('content'))`, { full: true })}${btnGhost('Clear', `aaFilters={};renderAdminAudit(document.getElementById('content'))`)}</div>`;
+
+    const rowsHtml = data.rows.map(r => `<tr class="zebra-row hover:bg-surface-container transition-colors">
+      <td class="px-4 py-2 mono-text text-xs opacity-70 whitespace-nowrap">${escHtml(deTime(r.createdAt))}</td>
+      <td class="px-4 py-2 font-semibold">${escHtml(r.userName)}</td>
+      <td class="px-4 py-2 text-xs text-on-surface-variant">${escHtml(r.userEmail)}</td>
+      <td class="px-4 py-2">${statusBadge(r.action,'blue')}</td>
+      <td class="px-4 py-2 mono-text text-xs">${escHtml(r.praxisId)||'—'}</td>
+      <td class="px-4 py-2 text-xs text-on-surface-variant truncate max-w-[300px]" title="${escHtml(r.changes)}">${escHtml(r.changes)||'—'}</td>
+    </tr>`).join('');
+
+    el.innerHTML = pageWrap(
+      pageHero('Admin Audit', { sub: 'Compliance trail of admin actions' }) +
+      filterCard(filterHtml, 6) +
+      tableShell(['Time','User','Email','Action','Praxis','Changes'], rowsHtml, 'aaPaging')
+    );
     renderPagination(document.getElementById('aaPaging'), data, (p) => renderAdminAudit(document.getElementById('content'), p));
-  } catch(e) { setConnStatus('error'); el.innerHTML = `<div class="page-title">Admin Audit Log</div><div class="error-msg">${escHtml(e.message)}</div>`; }
+  } catch(e) {
+    setConnStatus('error');
+    el.innerHTML = pageWrap(pageHero('Admin Audit') + errorState(e.message));
+  }
 }
 
-// ─── Notifications ────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════
+// NOTIFICATIONS
+// ═════════════════════════════════════════════════════════════════════════
 let nfFilters = {};
 
 async function renderNotifications(el, page = 1) {
-  el.innerHTML = `<div class="page-title">Notifications</div><div class="loading">Loading...</div>`;
+  el.innerHTML = pageWrap(pageHero('Notifications') + loadingState());
   try {
     const p = new URLSearchParams({ ...nfFilters, page, pageSize: 50 });
     const data = await apiFetch(`/api/notifications?${p}`);
     setConnStatus('connected');
 
-    el.innerHTML = `
-      <div class="page-title">Notifications</div>
-      <div class="card">
-        <div class="card-body">
-          <div class="filter-row">
-            <div class="fld"><label>Type</label>
-              <select oninput="nfFilters.type=this.value">
-                <option value="">All</option>
-                ${NOTIF_TYPES.map((t,i) => `<option value="${i}" ${String(nfFilters.type)===String(i)?'selected':''}>${t}</option>`).join('')}
-              </select>
-            </div>
-            <div class="fld"><label>User ID</label><input placeholder="userId" value="${escHtml(nfFilters.userId||'')}" oninput="nfFilters.userId=this.value" style="width:100px"></div>
-            <div class="fld"><label>From</label><input type="datetime-local" value="${nfFilters.dateFrom||''}" oninput="nfFilters.dateFrom=this.value"></div>
-            <div class="fld"><label>To</label><input type="datetime-local" value="${nfFilters.dateTo||''}" oninput="nfFilters.dateTo=this.value"></div>
-            <div class="fld"><label>&nbsp;</label>
-              <div style="display:flex;gap:6px">
-                <button class="btn btn-primary" onclick="renderNotifications(document.getElementById('content'))">Apply</button>
-                <button class="btn btn-ghost" onclick="nfFilters={};renderNotifications(document.getElementById('content'))">Clear</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="card">
-        <div class="table-wrap">
-          <table><thead><tr><th>Time</th><th>User</th><th>Type</th><th>Title</th><th>Body</th><th>New</th></tr></thead>
-          <tbody>
-            ${data.rows.map(r => `<tr>
-              <td style="white-space:nowrap">${deTime(r.createdAt)}</td>
-              <td style="white-space:nowrap">
-                ${r.firstName ? `<div style="font-weight:600">${escHtml(r.firstName)} ${escHtml(r.lastName)}</div>` : ''}
-                <div style="font-size:11px;color:#888">${escHtml(r.userEmail||r.userId||'')}</div>
-              </td>
-              <td><span class="badge ${NOTIF_BADGE[r.type]||'badge-grey'}">${NOTIF_TYPES[r.type]||r.type}</span></td>
-              <td title="${escHtml(r.title)}">${escHtml(r.title)}</td>
-              <td title="${escHtml(r.body)}" style="max-width:200px;overflow:hidden;text-overflow:ellipsis">${escHtml(r.body)}</td>
-              <td>${r.isNew ? '🔵' : ''}</td>
-            </tr>`).join('')}
-          </tbody></table>
-        </div>
-        <div id="nfPaging"></div>
-      </div>`;
+    const filterHtml =
+      fSelect('Type', [{value:'',label:'All'}, ...NOTIF_TYPES.map((t,i) => ({value:i,label:t}))], `oninput="nfFilters.type=this.value"`, nfFilters.type ?? '') +
+      fInput('User ID', `placeholder="userId" value="${escHtml(nfFilters.userId||'')}" oninput="nfFilters.userId=this.value"`) +
+      fInput('From', `type="datetime-local" value="${nfFilters.dateFrom||''}" oninput="nfFilters.dateFrom=this.value"`) +
+      fInput('To',   `type="datetime-local" value="${nfFilters.dateTo||''}"   oninput="nfFilters.dateTo=this.value"`) +
+      `<div></div>` +
+      `<div class="flex gap-2">${btnPrimary('Search', `renderNotifications(document.getElementById('content'))`, { full: true })}${btnGhost('Clear', `nfFilters={};renderNotifications(document.getElementById('content'))`)}</div>`;
+
+    const rowsHtml = data.rows.map(r => {
+      const [bg, fg] = NOTIF_PILL[r.type] || NOTIF_PILL[6];
+      return `<tr class="zebra-row hover:bg-surface-container transition-colors">
+        <td class="px-4 py-2 mono-text text-xs opacity-70 whitespace-nowrap">${escHtml(deTime(r.createdAt))}</td>
+        <td class="px-4 py-2">
+          ${r.firstName ? `<div class="font-semibold text-sm">${escHtml(r.firstName)} ${escHtml(r.lastName)}</div>` : ''}
+          <div class="text-xs text-on-surface-variant">${escHtml(r.userEmail||r.userId||'')}</div>
+        </td>
+        <td class="px-4 py-2"><span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${bg} ${fg}">${escHtml(NOTIF_TYPES[r.type]||r.type)}</span></td>
+        <td class="px-4 py-2 text-sm font-medium" title="${escHtml(r.title)}">${escHtml(r.title)}</td>
+        <td class="px-4 py-2 text-xs text-on-surface-variant truncate max-w-[260px]" title="${escHtml(r.body)}">${escHtml(r.body)}</td>
+        <td class="px-4 py-2">${r.isNew ? '<span class="w-2 h-2 rounded-full bg-blue-500 inline-block"></span>' : ''}</td>
+      </tr>`;
+    }).join('');
+
+    el.innerHTML = pageWrap(
+      pageHero('Notifications', { sub: 'Sent push notifications log' }) +
+      filterCard(filterHtml, 6) +
+      tableShell(['Time','User','Type','Title','Body','New'], rowsHtml, 'nfPaging')
+    );
     renderPagination(document.getElementById('nfPaging'), data, (p) => renderNotifications(document.getElementById('content'), p));
-  } catch(e) { setConnStatus('error'); el.innerHTML = `<div class="page-title">Notifications</div><div class="error-msg">${escHtml(e.message)}</div>`; }
+  } catch(e) {
+    setConnStatus('error');
+    el.innerHTML = pageWrap(pageHero('Notifications') + errorState(e.message));
+  }
 }
 
-// ─── Users ────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════
+// USERS
+// ═════════════════════════════════════════════════════════════════════════
 let usFilters = {};
 
 async function renderUsers(el, page = 1) {
-  el.innerHTML = `<div class="page-title">Users</div><div class="loading">Loading...</div>`;
+  el.innerHTML = pageWrap(pageHero('Users') + loadingState());
   try {
     const p = new URLSearchParams({ ...usFilters, page, pageSize: 50 });
     const data = await apiFetch(`/api/users?${p}`);
     setConnStatus('connected');
 
-    el.innerHTML = `
-      <div class="page-title">Users</div>
-      <div class="card">
-        <div class="card-body">
-          <div class="filter-row">
-            <div class="fld"><label>Search</label><input id="usQ" placeholder="name / email / phone / ID" value="${escHtml(usFilters.q||'')}" oninput="usFilters.q=this.value" style="width:260px" onkeydown="if(event.key==='Enter')renderUsers(document.getElementById('content'))"></div>
-            <div class="fld"><label>Praxis</label><input placeholder="lc_10" value="${escHtml(usFilters.praxisId||'')}" oninput="usFilters.praxisId=this.value" style="width:120px"></div>
-            <div class="fld"><label>&nbsp;</label>
-              <div style="display:flex;gap:6px">
-                <button class="btn btn-primary" onclick="renderUsers(document.getElementById('content'))">Search</button>
-                <button class="btn btn-ghost" onclick="usFilters={};renderUsers(document.getElementById('content'))">Clear</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="card">
-        <div class="table-wrap">
-          <table><thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Phone</th><th>Praxis</th><th>Verified</th><th>Created</th><th></th></tr></thead>
-          <tbody>
-            ${data.rows.map(r => `<tr>
-              <td style="color:#888;font-size:12px">${r.id}</td>
-              <td style="font-weight:600">${escHtml(r.firstName)} ${escHtml(r.lastName)}</td>
-              <td>${escHtml(r.email)}</td>
-              <td>${escHtml(r.phoneNumber)||'—'}</td>
-              <td>${escHtml(r.praxisId)||'—'}</td>
-              <td>${r.isVerified ? '<span class="badge badge-green">✓</span>' : '<span class="badge badge-grey">No</span>'}</td>
-              <td style="white-space:nowrap;font-size:12px">${deTime(r.createdAt)}</td>
-              <td><button class="btn btn-ghost btn-sm" onclick="renderUserDetail(document.getElementById('content'), ${r.id})">View</button></td>
-            </tr>`).join('')}
-          </tbody></table>
-        </div>
-        <div id="usPaging"></div>
-      </div>`;
+    const filterHtml =
+      `<div class="space-y-1.5 col-span-2">${fLabel('Search')}<input id="usQ" placeholder="name / email / phone / ID" value="${escHtml(usFilters.q||'')}" oninput="usFilters.q=this.value" onkeydown="if(event.key==='Enter')renderUsers(document.getElementById('content'))" class="w-full h-10 bg-surface-container-low text-sm rounded-lg border-none focus:ring-2 focus:ring-primary-fixed px-3"></div>` +
+      fInput('Praxis', `placeholder="lc_10" value="${escHtml(usFilters.praxisId||'')}" oninput="usFilters.praxisId=this.value"`) +
+      `<div></div><div></div>` +
+      `<div class="flex gap-2">${btnPrimary('Search', `renderUsers(document.getElementById('content'))`, { full: true })}${btnGhost('Clear', `usFilters={};renderUsers(document.getElementById('content'))`)}</div>`;
+
+    const rowsHtml = data.rows.map(r => `<tr class="zebra-row hover:bg-surface-container transition-colors cursor-pointer" onclick="renderUserDetail(document.getElementById('content'), ${r.id})">
+      <td class="px-4 py-2 mono-text text-xs opacity-60">${r.id}</td>
+      <td class="px-4 py-2 font-semibold text-primary">${escHtml(r.firstName)} ${escHtml(r.lastName)}</td>
+      <td class="px-4 py-2 text-sm">${escHtml(r.email)}</td>
+      <td class="px-4 py-2 mono-text text-xs">${escHtml(r.phoneNumber)||'—'}</td>
+      <td class="px-4 py-2 mono-text text-xs">${escHtml(r.praxisId)||'—'}</td>
+      <td class="px-4 py-2">${r.isVerified ? statusBadge('Verified','tertiary') : statusBadge('No','slate')}</td>
+      <td class="px-4 py-2 mono-text text-xs whitespace-nowrap">${escHtml(deTime(r.createdAt))}</td>
+      <td class="px-4 py-2 text-right"><span class="material-symbols-outlined text-on-surface-variant text-sm">chevron_right</span></td>
+    </tr>`).join('');
+
+    el.innerHTML = pageWrap(
+      pageHero('Users', { sub: 'Patient and staff records' }) +
+      filterCard(filterHtml, 6) +
+      tableShell(['ID','Name','Email','Phone','Praxis','Verified','Created',''], rowsHtml, 'usPaging')
+    );
     renderPagination(document.getElementById('usPaging'), data, (p) => renderUsers(document.getElementById('content'), p));
     document.getElementById('usQ')?.focus();
-  } catch(e) { setConnStatus('error'); el.innerHTML = `<div class="page-title">Users</div><div class="error-msg">${escHtml(e.message)}</div>`; }
+  } catch(e) {
+    setConnStatus('error');
+    el.innerHTML = pageWrap(pageHero('Users') + errorState(e.message));
+  }
 }
 
 async function renderUserDetail(el, userId) {
-  el.innerHTML = `<div class="loading">Loading user...</div>`;
+  el.innerHTML = pageWrap(loadingState('Loading user…'));
   try {
     const d = await apiFetch(`/api/users/${userId}`);
     const u = d.user;
     const changed = {};
 
     const EDITABLE = ['firstName','lastName','email','phoneNumber','street','city','postalCode','newEmail','newPhone'];
+    const FIELD_GROUPS = {
+      'Editable Records': ['firstName','lastName','email','phoneNumber','street','city','postalCode','newEmail','newPhone'],
+      'System Attributes (Read-Only)': ['id','gender','dob','consent','praxisId','mfaActivated','isVerified','lcAccountId','pmsPatientId','verifiedBy','verifiedOn','verifiedByDocument','verifiedByPraxisId','createdAt','modifiedAt'],
+    };
 
-    function renderFields() {
-      const ALL_FIELDS = ['id','email','firstName','lastName','phoneNumber','gender','dob','consent','praxisId','mfaActivated','street','city','postalCode','isVerified','lcAccountId','pmsPatientId','verifiedBy','verifiedOn','verifiedByDocument','verifiedByPraxisId','createdAt','modifiedAt'];
-      return ALL_FIELDS.map(k => {
-        const val = u[k];
-        const isEdit = EDITABLE.includes(k);
-        const raw = val === null || val === undefined ? '' : (val instanceof Date ? val.toISOString() : String(val));
-        const display = (k === 'createdAt' || k === 'modifiedAt' || k === 'dob' || k === 'verifiedOn') ? deTime(raw) : raw;
-        return `<div class="field-row">
-          <span class="field-key">${k}</span>
-          ${isEdit
-            ? `<input class="field-input" data-key="${k}" value="${escHtml(display)}" oninput="markChanged('${k}', this.value)">`
-            : `<span class="field-val">${escHtml(display) || '<span style="color:#bbb">—</span>'}</span>`}
-        </div>`;
-      }).join('');
+    function fieldDisplay(k, val) {
+      if (val === null || val === undefined) return '';
+      if (k === 'createdAt' || k === 'modifiedAt' || k === 'dob' || k === 'verifiedOn') return deTime(val);
+      return String(val);
     }
 
-    el.innerHTML = `
-      <div class="back-btn" onclick="renderUsers(document.getElementById('content'))">← Back to Users</div>
-      <div class="page-title">${escHtml(u.firstName)} ${escHtml(u.lastName)}</div>
-      <div class="detail-grid">
-        <div>
-          <div class="card">
-            <div class="card-header"><h3>User Info</h3>
-        ${!u.isVerified ? `<button class="btn btn-ghost btn-sm" onclick="verifyUser(${userId})" style="margin-right:6px">✓ Verify User</button>` : `<span class="badge badge-green" style="margin-right:8px">✓ Verified</span>`}
-        <button class="btn btn-success btn-sm" id="saveBtn" onclick="saveUserChanges(${userId})" disabled>Save Changes</button>
-      </div>
-            <div class="card-body" id="userFields">${renderFields()}</div>
+    function fieldHtml(k) {
+      const isEdit = EDITABLE.includes(k);
+      const display = fieldDisplay(k, u[k]);
+      if (isEdit) {
+        return `<div class="space-y-1.5">
+          <label class="text-[11px] font-bold uppercase tracking-widest text-on-surface-variant">${escHtml(k)}</label>
+          <input class="user-field w-full bg-surface-container-lowest border border-outline-variant rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary-fixed focus:border-primary" data-key="${k}" value="${escHtml(display)}" oninput="markChanged('${k}', this.value)">
+        </div>`;
+      } else {
+        if (k === 'isVerified') {
+          return `<div class="space-y-1.5">
+            <label class="text-[11px] font-bold uppercase tracking-widest text-on-surface-variant">${escHtml(k)}</label>
+            <div class="bg-surface-container-low px-3 py-2 rounded-lg flex items-center">
+              ${u[k] ? statusBadge('Verified','tertiary') : statusBadge('Pending','amber')}
+            </div>
+          </div>`;
+        }
+        if (k === 'mfaActivated' || k === 'consent') {
+          return `<div class="space-y-1.5">
+            <label class="text-[11px] font-bold uppercase tracking-widest text-on-surface-variant">${escHtml(k)}</label>
+            <div class="bg-surface-container-low px-3 py-2 rounded-lg flex items-center">
+              ${u[k] ? statusBadge('Enabled','primary') : statusBadge('Disabled','slate')}
+            </div>
+          </div>`;
+        }
+        const isMono = k === 'id' || k === 'lcAccountId' || k === 'pmsPatientId' || k === 'praxisId';
+        return `<div class="space-y-1.5">
+          <label class="text-[11px] font-bold uppercase tracking-widest text-on-surface-variant">${escHtml(k)}</label>
+          <div class="bg-surface-container-low px-3 py-2 rounded-lg ${isMono ? 'mono-text text-xs' : 'text-sm'} text-on-surface-variant">${escHtml(display) || '—'}</div>
+        </div>`;
+      }
+    }
+
+    const editableFields = FIELD_GROUPS['Editable Records'].map(fieldHtml).join('');
+    const readonlyFields = FIELD_GROUPS['System Attributes (Read-Only)'].map(fieldHtml).join('');
+
+    const insuranceCard = d.insurance ? `
+      <div class="bg-surface-container-lowest rounded-xl shadow-whisper p-6 border border-transparent hover:border-outline-variant transition-all">
+        <div class="flex items-center gap-3 mb-6">
+          <div class="w-10 h-10 rounded-lg bg-primary/5 flex items-center justify-center text-primary">
+            <span class="material-symbols-outlined">clinical_notes</span>
           </div>
+          <h3 class="font-bold tracking-tight">Insurance</h3>
         </div>
-        <div>
-          <div class="card" style="margin-bottom:14px">
-            <div class="card-header"><h3>Insurance</h3></div>
-            <div class="card-body">
-              ${d.insurance ? Object.entries(d.insurance).map(([k,v]) => `<div class="field-row"><span class="field-key">${k}</span><span class="field-val">${escHtml(String(v??''))||'—'}</span></div>`).join('') : '<div style="color:#aaa">No insurance info</div>'}
-            </div>
+        <div class="space-y-3">
+          ${Object.entries(d.insurance).map(([k,v]) => `<div class="flex justify-between items-center pb-2 border-b border-surface-container-low last:border-b-0">
+            <span class="text-[11px] font-bold uppercase tracking-widest text-on-surface-variant">${escHtml(k)}</span>
+            <span class="text-sm font-semibold mono-text">${escHtml(String(v??''))||'—'}</span>
+          </div>`).join('')}
+        </div>
+      </div>` : '';
+
+    const familyCard = `
+      <div class="bg-surface-container-lowest rounded-xl shadow-whisper p-6 border border-transparent hover:border-outline-variant transition-all">
+        <div class="flex items-center gap-3 mb-6">
+          <div class="w-10 h-10 rounded-lg bg-tertiary/5 flex items-center justify-center text-tertiary">
+            <span class="material-symbols-outlined">family_history</span>
           </div>
-          <div class="card" style="margin-bottom:14px">
-            <div class="card-header"><h3>Family Members (${d.family.length})</h3></div>
-            <div class="card-body">
-              ${d.family.length ? d.family.map(f => `<div class="field-row"><span class="field-key">${escHtml(f.firstName)} ${escHtml(f.lastName)}</span><span class="field-val" style="color:#888;font-size:12px">${deTime(f.dob)} · ${escHtml(f.insuranceType||'')}</span></div>`).join('') : '<div style="color:#aaa">No family members</div>'}
-            </div>
-          </div>
-          <div class="card">
-            <div class="card-header"><h3>Appointments (${d.appointments.length})</h3></div>
-            <div class="card-body">
-              ${d.appointments.length ? d.appointments.map(a => `<div class="field-row">
-                <span class="field-key" style="font-size:12px;color:#888">${deTime(a.createdAt)}</span>
-                <span><span class="badge ${APT_STATUS_BADGE[a.status]||'badge-grey'}">${APT_STATUS[a.status]||a.status}</span> <span style="font-size:12px">${escHtml(a.category)}</span></span>
-              </div>`).join('') : '<div style="color:#aaa">No appointments</div>'}
-            </div>
-          </div>
+          <h3 class="font-bold tracking-tight">Family Members (${d.family.length})</h3>
+        </div>
+        <div class="space-y-3">
+          ${d.family.length ? d.family.map(f => {
+            const initials = ((f.firstName||'?').charAt(0) + (f.lastName||'').charAt(0)).toUpperCase();
+            return `<div class="flex items-center justify-between p-3 rounded-lg hover:bg-surface-container-low transition-colors">
+              <div class="flex items-center gap-3">
+                <div class="w-8 h-8 rounded-full bg-secondary-container flex items-center justify-center text-on-secondary-container text-xs font-bold">${escHtml(initials)}</div>
+                <div>
+                  <p class="text-sm font-semibold">${escHtml(f.firstName||'')} ${escHtml(f.lastName||'')}</p>
+                  <p class="text-[10px] text-on-surface-variant uppercase tracking-tighter">${escHtml(f.insuranceType||'')} · ${escHtml(deTime(f.dob))}</p>
+                </div>
+              </div>
+              <div class="w-2 h-2 rounded-full bg-tertiary ring-4 ring-tertiary/10"></div>
+            </div>`;
+          }).join('') : '<div class="text-outline text-sm italic">No family members</div>'}
         </div>
       </div>`;
+
+    const apptCard = `
+      <div class="bg-surface-container-lowest rounded-xl shadow-whisper p-6 border border-transparent hover:border-outline-variant transition-all">
+        <div class="flex items-center justify-between mb-6">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-lg bg-secondary/5 flex items-center justify-center text-secondary">
+              <span class="material-symbols-outlined">calendar_month</span>
+            </div>
+            <h3 class="font-bold tracking-tight">Recent Appointments (${d.appointments.length})</h3>
+          </div>
+        </div>
+        ${d.appointments.length ? `<table class="w-full text-left">
+          <thead><tr class="border-b border-surface-container-low">
+            <th class="pb-3 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Date</th>
+            <th class="pb-3 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Category</th>
+            <th class="pb-3 text-right text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Status</th>
+          </tr></thead>
+          <tbody class="divide-y divide-surface-container-low">
+            ${d.appointments.map(a => {
+              const [bg, fg] = APT_STATUS_PILL[a.status] || APT_STATUS_PILL[0];
+              return `<tr>
+                <td class="py-3 text-xs font-semibold mono-text">${escHtml(deTime(a.createdAt))}</td>
+                <td class="py-3"><span class="px-2 py-0.5 ${bg} ${fg} text-[9px] font-bold rounded uppercase tracking-wider">${escHtml(a.category||'')}</span></td>
+                <td class="py-3 text-right"><span class="text-[10px] font-bold uppercase ${fg}">${escHtml(APT_STATUS[a.status]||a.status)}</span></td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>` : '<div class="text-outline text-sm italic">No appointments</div>'}
+      </div>`;
+
+    el.innerHTML = `<div class="p-8 max-w-[1600px] mx-auto">
+      <div class="flex items-center gap-4 mb-6">
+        <button class="flex items-center gap-2 text-slate-500 hover:text-primary transition-colors font-medium" onclick="renderUsers(document.getElementById('content'))">
+          <span class="material-symbols-outlined">arrow_back</span>
+          <span class="text-sm">Back to Users</span>
+        </button>
+        <div class="h-6 w-px bg-slate-200"></div>
+        <div class="flex flex-col">
+          <h2 class="text-sm font-bold tracking-tight text-slate-900 leading-tight">User Detail</h2>
+          <span class="text-xs text-slate-500">${escHtml(u.firstName||'')} ${escHtml(u.lastName||'')}</span>
+        </div>
+      </div>
+      <div class="grid grid-cols-10 gap-8">
+        <div class="col-span-10 lg:col-span-6 space-y-6">
+          <div class="bg-surface-container-lowest rounded-xl shadow-whisper overflow-hidden">
+            <div class="px-8 py-6 flex items-center justify-between bg-white border-b border-surface-container-low">
+              <div class="flex items-center gap-3">
+                <span class="material-symbols-outlined text-primary">badge</span>
+                <h3 class="font-bold text-lg tracking-tight">User Information</h3>
+              </div>
+              <div class="flex items-center gap-3">
+                ${!u.isVerified
+                  ? `<button class="px-4 py-2 bg-tertiary text-white rounded-lg text-sm font-semibold flex items-center gap-2 hover:opacity-90 active:scale-95 transition-all" onclick="verifyUser(${userId})">
+                      <span class="material-symbols-outlined text-[18px] ms-fill">verified</span>Verify User
+                    </button>`
+                  : `<span class="flex items-center gap-2 px-4 py-2 bg-tertiary/10 text-tertiary rounded-lg text-sm font-semibold">
+                      <span class="material-symbols-outlined text-[18px] ms-fill">verified</span>Verified
+                    </span>`}
+                <button id="saveBtn" class="px-4 py-2 bg-primary text-white rounded-lg text-sm font-semibold flex items-center gap-2 hover:opacity-90 active:scale-95 transition-all disabled:opacity-30 disabled:cursor-not-allowed" onclick="saveUserChanges(${userId})" disabled>
+                  <span class="material-symbols-outlined text-[18px]">save</span>Save Changes
+                </button>
+              </div>
+            </div>
+            <div class="p-8">
+              <h4 class="text-[11px] font-bold uppercase tracking-widest text-primary/70 mb-4">Editable Records</h4>
+              <div class="grid grid-cols-2 gap-x-8 gap-y-4 mb-8">${editableFields}</div>
+              <h4 class="text-[11px] font-bold uppercase tracking-widest text-on-surface-variant/70 mb-4">System Attributes (Read-Only)</h4>
+              <div class="grid grid-cols-2 gap-x-8 gap-y-4">${readonlyFields}</div>
+              <div id="dirtyFooter" class="mt-10 pt-6 border-t border-surface-container hidden items-center gap-2">
+                <span class="material-symbols-outlined text-amber-600 text-lg">warning</span>
+                <p class="text-sm font-semibold text-amber-700">Unsaved changes: <span id="dirtyList" class="mono-text text-xs"></span></p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="col-span-10 lg:col-span-4 space-y-6">
+          ${insuranceCard}
+          ${familyCard}
+          ${apptCard}
+        </div>
+      </div>
+    </div>`;
 
     window._userChanged = changed;
     window._userId = userId;
     window._origUser = { ...u };
-  } catch(e) { el.innerHTML = `<div class="error-msg">${escHtml(e.message)}</div>`; }
+  } catch(e) {
+    el.innerHTML = pageWrap(errorState(e.message));
+  }
 }
 
 function markChanged(key, val) {
   if (!window._userChanged) return;
-  window._userChanged[key] = val;
-  const inputs = document.querySelectorAll('.field-input');
-  inputs.forEach(i => {
-    if (i.dataset.key) i.classList.toggle('changed', window._userChanged[i.dataset.key] !== undefined && window._userChanged[i.dataset.key] !== String(window._origUser[i.dataset.key]||''));
+  const orig = String(window._origUser[key] ?? '');
+  if (val === orig) delete window._userChanged[key]; else window._userChanged[key] = val;
+
+  document.querySelectorAll('.user-field').forEach(i => {
+    const k = i.dataset.key;
+    i.classList.toggle('field-changed', window._userChanged[k] !== undefined);
   });
-  document.getElementById('saveBtn').disabled = !Object.keys(window._userChanged).length;
+  const keys = Object.keys(window._userChanged);
+  document.getElementById('saveBtn').disabled = !keys.length;
+  const footer = document.getElementById('dirtyFooter');
+  if (keys.length) {
+    footer.classList.remove('hidden');
+    footer.classList.add('flex');
+    document.getElementById('dirtyList').textContent = keys.join(', ');
+  } else {
+    footer.classList.add('hidden');
+    footer.classList.remove('flex');
+  }
 }
 
 async function saveUserChanges(userId) {
   const updates = {};
-  document.querySelectorAll('.field-input[data-key]').forEach(i => {
+  document.querySelectorAll('.user-field[data-key]').forEach(i => {
     const orig = String(window._origUser[i.dataset.key] ?? '');
     if (i.value !== orig) updates[i.dataset.key] = i.value;
   });
@@ -788,13 +1266,30 @@ async function saveUserChanges(userId) {
   if (!confirm(`Update ${Object.keys(updates).join(', ')} for user ${userId}?`)) return;
   try {
     const result = await apiPatch(`/api/users/${userId}`, updates);
-    if (result.error) { alert('Error: ' + result.error); return; }
-    alert('✅ Saved');
+    if (result.error) { showToast('Error: ' + result.error); return; }
+    showToast('✅ Saved');
     renderUserDetail(document.getElementById('content'), userId);
-  } catch(e) { alert('Error: ' + e.message); }
+  } catch(e) { showToast('Error: ' + e.message); }
 }
 
-// ─── AES-256-CBC decryption (same algorithm as the server) ───────────────────
+async function verifyUser(userId) {
+  const verifiedBy = prompt('Verified by (name):', 'Debugger');
+  if (verifiedBy === null) return;
+  const doc = prompt('Document type:', 'manual');
+  if (doc === null) return;
+  const docNumber = prompt('Document number:', 'manual');
+  if (docNumber === null) return;
+  try {
+    const res = await apiPost(`/api/users/${userId}/verify`, { verifiedBy, verifiedByDocument: doc, verifiedByDocumentNumber: docNumber });
+    if (res.error) { showToast('Error: ' + res.error); return; }
+    showToast('✅ User verified');
+    renderUserDetail(document.getElementById('content'), userId);
+  } catch(e) { showToast('Error: ' + e.message); }
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// AES-256-CBC decryption
+// ═════════════════════════════════════════════════════════════════════════
 async function importAesKey(keyStr) {
   const bytes = new TextEncoder().encode(keyStr);
   return crypto.subtle.importKey('raw', bytes, { name: 'AES-CBC' }, false, ['decrypt']);
@@ -817,101 +1312,98 @@ async function aesDecrypt(cryptoKey, encText) {
   return new TextDecoder().decode(plain);
 }
 
-// ─── Bookings ─────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════
+// BOOKINGS
+// ═════════════════════════════════════════════════════════════════════════
 let bkFilters = {}, bkTab = 'registered';
 
 async function renderBookings(el, page = 1) {
-  el.innerHTML = `<div class="page-title">Bookings</div><div class="loading">Loading...</div>`;
+  el.innerHTML = pageWrap(pageHero('Bookings') + loadingState());
   try {
     const endpoint = bkTab === 'registered' ? '/api/bookings' : '/api/guest-bookings';
     const p = new URLSearchParams({ ...bkFilters, page, pageSize: 50 });
     const data = await apiFetch(`${endpoint}?${p}`);
     setConnStatus('connected');
 
-    el.innerHTML = `
-      <div class="page-title">Bookings</div>
-      <div class="card">
-        <div class="card-body">
-          <div class="filter-row">
-            <div class="fld"><label>Date From</label><input type="date" value="${bkFilters.dateFrom||''}" oninput="bkFilters.dateFrom=this.value?this.value+'T00:00:00':''"></div>
-            <div class="fld"><label>Date To</label><input type="date" value="${bkFilters.dateTo||''}" oninput="bkFilters.dateTo=this.value?this.value+'T23:59:59':''"></div>
-            <div class="fld"><label>Praxis</label><input placeholder="lc_10" value="${bkFilters.praxisId||''}" oninput="bkFilters.praxisId=this.value" style="width:120px"></div>
-            <div class="fld"><label>Status</label>
-              <select oninput="bkFilters.status=this.value">
-                <option value="">All</option>
-                ${APT_STATUS.map((s,i) => `<option value="${i}" ${String(bkFilters.status)===String(i)?'selected':''}>${s}</option>`).join('')}
-              </select>
-            </div>
-            <div class="fld"><label>Category</label><input placeholder="category" value="${bkFilters.category||''}" oninput="bkFilters.category=this.value" style="width:130px"></div>
-            <div class="fld"><label>&nbsp;</label>
-              <div style="display:flex;gap:6px">
-                <button class="btn btn-primary" onclick="renderBookings(document.getElementById('content'))">Apply</button>
-                <button class="btn btn-ghost" onclick="bkFilters={};renderBookings(document.getElementById('content'))">Clear</button>
-              </div>
-            </div>
-            <div class="fld" id="bkKeyField" style="display:${bkTab==='guest'?'flex':'none'}">
-              <label>Decryption Key (32 chars)</label>
-              <div style="display:flex;gap:6px;align-items:center">
-                <input type="password" id="bkDecKey" placeholder="Paste 32-char key" style="width:220px;font-family:monospace" value="${escHtml(localStorage.getItem('bk_dec_key')||'')}" oninput="localStorage.setItem('bk_dec_key',this.value)">
-                <span id="bkKeyLen" style="font-size:11px;color:#aaa">${(localStorage.getItem('bk_dec_key')||'').length}/32</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="sub-tabs">
-        <div class="sub-tab ${bkTab==='registered'?'active':''}" onclick="bkTab='registered';renderBookings(document.getElementById('content'))">Registered (app_user_appointment)</div>
-        <div class="sub-tab ${bkTab==='guest'?'active':''}" onclick="bkTab='guest';renderBookings(document.getElementById('content'))">Guest Appointments</div>
-      </div>
-      <div class="card">
-        <div class="table-wrap">
-          <table><thead><tr>
-            ${bkTab === 'registered'
-              ? '<th>Created</th><th>Start Time</th><th>Patient</th><th>Email</th><th>Category</th><th>Status</th><th>Praxis</th><th>PMS ID</th>'
-              : '<th>Created</th><th>Start Time</th><th>Email</th><th>Category</th><th>Status</th><th>Praxis</th><th>Patient Info</th>'}
-          </tr></thead><tbody>
-            ${data.rows.map((r, ri) => bkTab === 'registered' ? `<tr>
-              <td style="font-size:12px;white-space:nowrap">${deTime(r.createdAt)}</td>
-              <td style="font-size:12px;white-space:nowrap">${deTime(r.startTime)}</td>
-              <td style="font-weight:600">${escHtml(r.firstName||'')} ${escHtml(r.lastName||'')}</td>
-              <td style="font-size:12px">${escHtml(r.email)||'—'}</td>
-              <td>${escHtml(r.category)}</td>
-              <td><span class="badge ${APT_STATUS_BADGE[r.status]||'badge-grey'}">${APT_STATUS[r.status]||r.status}</span></td>
-              <td>${escHtml(r.praxisId)}</td>
-              <td style="font-size:11px;color:#888">${escHtml(r.pmsAppointmentId)||'—'}</td>
-            </tr>` : `<tr>
-              <td style="font-size:12px;white-space:nowrap">${deTime(r.createdAt)}</td>
-              <td style="font-size:12px;white-space:nowrap">${deTime(r.startTime)}</td>
-              <td>${escHtml(r.email)||'—'}</td>
-              <td>${escHtml(r.category)}</td>
-              <td><span class="badge ${APT_STATUS_BADGE[r.status]||'badge-grey'}">${APT_STATUS[r.status]||r.status}</span></td>
-              <td>${escHtml(r.praxisId)}</td>
-              <td id="bkCell_${ri}">
-                ${r.encryptedUserInfo
-                  ? `<button class="btn btn-ghost btn-sm" onclick="decryptGuestRow(${ri}, '${escHtml(r.encryptedUserInfo)}')">🔐 Decrypt</button>`
-                  : '—'}
-              </td>
-            </tr>`).join('')}
-          </tbody></table>
-        </div>
-        <div id="bkPaging"></div>
-      </div>`;
+    const filterHtml =
+      fInput('Date From', `type="date" value="${bkFilters.dateFrom?.split('T')[0]||''}" oninput="bkFilters.dateFrom=this.value?this.value+'T00:00:00':''"`) +
+      fInput('Date To',   `type="date" value="${bkFilters.dateTo?.split('T')[0]||''}"   oninput="bkFilters.dateTo=this.value?this.value+'T23:59:59':''"`) +
+      fInput('Praxis', `placeholder="lc_10" value="${escHtml(bkFilters.praxisId||'')}" oninput="bkFilters.praxisId=this.value"`) +
+      fSelect('Status', [{value:'',label:'All'}, ...APT_STATUS.map((s,i) => ({value:i,label:s}))], `oninput="bkFilters.status=this.value"`, bkFilters.status ?? '') +
+      fInput('Category', `placeholder="category" value="${escHtml(bkFilters.category||'')}" oninput="bkFilters.category=this.value"`) +
+      `<div class="flex gap-2">${btnPrimary('Search', `renderBookings(document.getElementById('content'))`, { full: true, icon: 'search' })}${btnGhost('Clear', `bkFilters={};renderBookings(document.getElementById('content'))`)}</div>`;
+
+    const guestKeyRow = bkTab === 'guest' ? `
+      <section class="bg-surface-container-lowest rounded-xl shadow-whisper p-4 mb-6 flex items-center gap-4">
+        <span class="material-symbols-outlined text-primary">key</span>
+        <label class="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider">Decryption Key</label>
+        <input id="bkDecKey" type="password" placeholder="32-char AES-256 key" value="${escHtml(localStorage.getItem('bk_dec_key')||'')}" class="flex-1 max-w-md bg-surface-container-low border-none rounded-lg text-xs px-3 py-2 mono-text focus:ring-2 focus:ring-primary-fixed">
+        <span id="bkKeyLen" class="text-[10px] mono-text ${(localStorage.getItem('bk_dec_key')||'').length === 32 ? 'text-tertiary' : 'text-outline'}">${(localStorage.getItem('bk_dec_key')||'').length}/32</span>
+      </section>` : '';
+
+    const tabsHtml = `<div class="flex gap-1 border-b border-outline-variant/30 mb-6">
+      <button class="px-6 py-3 text-sm ${bkTab==='registered' ? 'font-semibold text-primary border-b-2 border-primary' : 'font-medium text-on-surface-variant hover:text-on-surface'} transition-all" onclick="bkTab='registered';renderBookings(document.getElementById('content'))">Registered Patients</button>
+      <button class="px-6 py-3 text-sm ${bkTab==='guest' ? 'font-semibold text-primary border-b-2 border-primary' : 'font-medium text-on-surface-variant hover:text-on-surface'} transition-all" onclick="bkTab='guest';renderBookings(document.getElementById('content'))">Guest Appointments</button>
+    </div>`;
+
+    const headers = bkTab === 'registered'
+      ? ['Created','Start Time','Patient','Email','Category','Status','Praxis','PMS ID']
+      : ['Created','Start Time','Email','Category','Status','Praxis','Patient Info'];
+
+    const rowsHtml = data.rows.map((r, ri) => {
+      const [bg, fg, dot] = APT_STATUS_PILL[r.status] || APT_STATUS_PILL[0];
+      const statusCell = `<span class="flex items-center gap-1.5 ${fg} font-medium text-xs"><span class="w-2 h-2 rounded-full ${dot} ring-2 ring-current/10"></span>${escHtml(APT_STATUS[r.status]||r.status)}</span>`;
+      if (bkTab === 'registered') {
+        return `<tr class="compact-row border-b border-surface-container hover:bg-surface-container-low transition-colors">
+          <td class="px-4 mono-text text-[11px] text-on-surface-variant whitespace-nowrap">${escHtml(deTime(r.createdAt))}</td>
+          <td class="px-4 mono-text text-[11px] font-medium whitespace-nowrap">${escHtml(deTime(r.startTime))}</td>
+          <td class="px-4 font-semibold text-primary text-sm">${escHtml(r.firstName||'')} ${escHtml(r.lastName||'')}</td>
+          <td class="px-4 text-outline text-sm truncate max-w-[180px]">${escHtml(r.email)||'—'}</td>
+          <td class="px-4"><span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${bg} ${fg}">${escHtml((r.category||'').toUpperCase())}</span></td>
+          <td class="px-4">${statusCell}</td>
+          <td class="px-4 text-xs font-medium">${escHtml(r.praxisId)}</td>
+          <td class="px-4 mono-text text-[10px] text-outline">${escHtml(r.pmsAppointmentId)||'—'}</td>
+        </tr>`;
+      } else {
+        return `<tr class="compact-row border-b border-surface-container hover:bg-surface-container-low transition-colors">
+          <td class="px-4 mono-text text-[11px] text-on-surface-variant whitespace-nowrap">${escHtml(deTime(r.createdAt))}</td>
+          <td class="px-4 mono-text text-[11px] font-medium whitespace-nowrap">${escHtml(deTime(r.startTime))}</td>
+          <td class="px-4 text-sm">${escHtml(r.email)||'—'}</td>
+          <td class="px-4"><span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${bg} ${fg}">${escHtml((r.category||'').toUpperCase())}</span></td>
+          <td class="px-4">${statusCell}</td>
+          <td class="px-4 text-xs font-medium">${escHtml(r.praxisId)}</td>
+          <td class="px-4 text-xs" id="bkCell_${ri}">
+            ${r.encryptedUserInfo
+              ? `<button class="flex items-center gap-1 px-2 py-1 bg-primary/10 text-primary rounded text-[10px] font-bold hover:bg-primary/20 transition-colors" onclick="decryptGuestRow(${ri}, '${escHtml(r.encryptedUserInfo)}')"><span class="material-symbols-outlined text-xs">lock_open</span>Decrypt</button>`
+              : '—'}
+          </td>
+        </tr>`;
+      }
+    }).join('');
+
+    el.innerHTML = pageWrap(
+      pageHero('Bookings', { sub: 'Patient and guest appointment ledger' }) +
+      tabsHtml +
+      filterCard(filterHtml, 6) +
+      guestKeyRow +
+      tableShell(headers, rowsHtml, 'bkPaging')
+    );
     renderPagination(document.getElementById('bkPaging'), data, (p) => renderBookings(document.getElementById('content'), p));
 
-    // Wire up key input live counter and show/hide based on tab
-    const keyField = document.getElementById('bkKeyField');
     const keyInput = document.getElementById('bkDecKey');
     const keyLen = document.getElementById('bkKeyLen');
-    if (keyField) keyField.style.display = bkTab === 'guest' ? 'flex' : 'none';
     if (keyInput && keyLen) {
       keyInput.addEventListener('input', () => {
         const l = keyInput.value.length;
         keyLen.textContent = `${l}/32`;
-        keyLen.style.color = l === 32 ? '#16a34a' : l > 32 ? '#dc2626' : '#aaa';
+        keyLen.className = `text-[10px] mono-text ${l === 32 ? 'text-tertiary' : l > 32 ? 'text-error' : 'text-outline'}`;
         localStorage.setItem('bk_dec_key', keyInput.value);
       });
     }
-  } catch(e) { setConnStatus('error'); el.innerHTML = `<div class="page-title">Bookings</div><div class="error-msg">${escHtml(e.message)}</div>`; }
+  } catch(e) {
+    setConnStatus('error');
+    el.innerHTML = pageWrap(pageHero('Bookings') + errorState(e.message));
+  }
 }
 
 async function decryptGuestRow(rowIndex, encryptedText) {
@@ -921,12 +1413,12 @@ async function decryptGuestRow(rowIndex, encryptedText) {
   if (!cell) return;
 
   if (key.length !== 32) {
-    cell.innerHTML = `<span style="color:#dc2626;font-size:12px">Enter a 32-char key above</span>`;
+    cell.innerHTML = `<span class="text-error text-xs font-medium">Enter a 32-char key above</span>`;
     keyInput?.focus();
     return;
   }
 
-  cell.innerHTML = `<span style="color:#aaa;font-size:12px">Decrypting...</span>`;
+  cell.innerHTML = `<span class="text-outline text-xs">Decrypting…</span>`;
   try {
     const cryptoKey = await importAesKey(key);
     const json = await aesDecrypt(cryptoKey, encryptedText);
@@ -935,19 +1427,20 @@ async function decryptGuestRow(rowIndex, encryptedText) {
     const email = obj.email || '';
     const phone = obj.phoneNumber || obj.phone_number || obj.phone || '';
     const dob = obj.dob || obj.dateOfBirth || '';
-    cell.innerHTML = `
-      <div style="font-size:12px;line-height:1.8">
-        ${name ? `<div><strong>${escHtml(name)}</strong></div>` : ''}
-        ${email ? `<div style="color:#4f46e5">${escHtml(email)}</div>` : ''}
-        ${phone ? `<div style="color:#555">${escHtml(phone)}</div>` : ''}
-        ${dob ? `<div style="color:#888">DOB: ${escHtml(dob)}</div>` : ''}
-      </div>`;
+    cell.innerHTML = `<div class="text-xs leading-relaxed">
+      ${name ? `<div class="font-semibold text-tertiary-container">${escHtml(name)}</div>` : ''}
+      ${email ? `<div class="text-primary">${escHtml(email)}</div>` : ''}
+      ${phone ? `<div class="text-on-surface-variant mono-text">${escHtml(phone)}</div>` : ''}
+      ${dob ? `<div class="text-on-surface-variant mono-text">DOB: ${escHtml(dob)}</div>` : ''}
+    </div>`;
   } catch(e) {
-    cell.innerHTML = `<span style="color:#dc2626;font-size:12px" title="${escHtml(e.message)}">Decrypt failed</span>`;
+    cell.innerHTML = `<span class="text-error text-xs font-medium" title="${escHtml(e.message)}">Decrypt failed</span>`;
   }
 }
 
-// ─── Query Runner ─────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════
+// QUERY RUNNER
+// ═════════════════════════════════════════════════════════════════════════
 let qrHistory = JSON.parse(localStorage.getItem('qr_history') || '[]');
 let qrWriteMode = false;
 
@@ -963,33 +1456,61 @@ const PRESET_QUERIES = [
 ];
 
 function renderQueryRunner(el) {
-  el.innerHTML = `
-    <div class="page-title">Query Runner</div>
-    <div class="card">
-      <div class="card-body">
-        <div style="display:flex;gap:8px;margin-bottom:8px">
-          <select id="qrPreset" onchange="document.getElementById('qrSql').value=PRESET_QUERIES[this.value].sql;this.value=''" style="flex:1;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:13px;outline:none">
+  el.innerHTML = `<div class="p-8 max-w-[1600px] mx-auto">
+    ${pageHero('Query Runner', { sub: 'Read-only by default · Ctrl+Enter to run' })}
+    <section class="bg-surface-container-lowest rounded-xl shadow-whisper overflow-hidden mb-6">
+      <div class="p-4 border-b border-slate-200 bg-white">
+        <div class="flex justify-between items-start mb-4">
+          <div>
+            <h3 class="text-lg font-bold tracking-tight">SQL Editor</h3>
+            <p class="text-xs text-on-surface-variant font-medium">Read-only by default</p>
+          </div>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <span class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Write Mode</span>
+            <div class="relative inline-flex items-center cursor-pointer">
+              <input id="writeMode" type="checkbox" class="sr-only peer" onchange="qrWriteMode=this.checked;document.getElementById('writeModeWarn').classList.toggle('hidden', !this.checked)">
+              <div class="w-8 h-4 bg-slate-200 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-error"></div>
+            </div>
+          </label>
+        </div>
+        <div class="flex items-center gap-2 mb-2">
+          <select id="qrPreset" class="flex-1 bg-surface-container-low border-none rounded-lg text-xs font-medium py-2 px-3 focus:ring-2 focus:ring-primary-fixed" onchange="if(this.value!==''){document.getElementById('qrSql').value=PRESET_QUERIES[this.value].sql;this.value='';}">
             <option value="">— Preset queries —</option>
             ${PRESET_QUERIES.map((q,i) => `<option value="${i}">${escHtml(q.label)}</option>`).join('')}
           </select>
-          ${qrHistory.length ? `<select id="qrHist" onchange="document.getElementById('qrSql').value=qrHistory[this.value];this.value=''" style="flex:1;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:13px;outline:none">
-            <option value="">— History —</option>
-            ${qrHistory.map((q,i) => `<option value="${i}">${escHtml(q.substring(0,60))}...</option>`).join('')}
+          ${qrHistory.length ? `<select class="flex-1 bg-surface-container-low border-none rounded-lg text-xs font-medium py-2 px-3 focus:ring-2 focus:ring-primary-fixed" onchange="if(this.value!==''){document.getElementById('qrSql').value=qrHistory[this.value];this.value='';}">
+            <option value="">— Recent queries —</option>
+            ${qrHistory.map((q,i) => `<option value="${i}">${escHtml(q.substring(0,80))}…</option>`).join('')}
           </select>` : ''}
-        </div>
-        <textarea class="sql-editor" id="qrSql" placeholder="SELECT * FROM app_user_info LIMIT 10"></textarea>
-        <div class="query-actions">
-          <button class="btn btn-primary" onclick="runQuery()">▶ Run</button>
-          <button class="btn btn-ghost" onclick="document.getElementById('qrSql').value=''">Clear</button>
-          <span style="font-size:12px;color:#888;margin-left:4px">Ctrl+Enter to run</span>
-          <label class="write-mode-toggle">
-            <input type="checkbox" id="writeMode" onchange="qrWriteMode=this.checked">
-            <span style="${qrWriteMode?'color:#dc2626;font-weight:700':''}">Write mode ${qrWriteMode?'ON ⚠️':'(off)'}</span>
-          </label>
+          <button class="px-3 py-2 text-xs font-medium text-slate-500 hover:text-primary hover:bg-primary/5 rounded-lg transition-colors flex items-center gap-1" onclick="document.getElementById('qrSql').value=''">
+            <span class="material-symbols-outlined text-sm">layers_clear</span>Clear
+          </button>
         </div>
       </div>
-    </div>
-    <div id="qrResult"></div>`;
+      <div class="code-bg relative group">
+        <textarea id="qrSql" class="w-full h-72 bg-transparent border-none focus:ring-0 text-jetbrains text-sm p-4 pr-14 text-indigo-300/90 leading-relaxed resize-none outline-none" spellcheck="false" placeholder="SELECT * FROM app_user_info LIMIT 10"></textarea>
+        <button class="absolute top-3 right-3 p-2 rounded-md bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white opacity-60 group-hover:opacity-100 transition-all" title="Copy SQL" onclick="copyQrSql()">
+          <span class="material-symbols-outlined text-sm">content_copy</span>
+        </button>
+      </div>
+      <div class="p-3 bg-surface-container-low flex justify-between items-center border-t border-slate-200">
+        <div class="flex items-center gap-4">
+          <button class="bg-gradient-to-br from-primary to-primary-container text-white px-5 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-all shadow-md active:scale-95" onclick="runQuery()">
+            <span class="material-symbols-outlined text-sm ms-fill">play_arrow</span>Run Query
+            <span class="opacity-50 font-normal">Ctrl+Enter</span>
+          </button>
+          <button class="bg-surface-container-high hover:bg-surface-variant text-on-surface-variant px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors" onclick="copyQrSql()" title="Copy SQL">
+            <span class="material-symbols-outlined text-sm">content_copy</span>Copy
+          </button>
+          <span class="text-[10px] mono-text text-slate-400">Status: Idle</span>
+        </div>
+        <div id="writeModeWarn" class="hidden flex items-center gap-2 text-error text-[10px] font-bold tracking-widest uppercase">
+          <span class="material-symbols-outlined text-sm">warning</span>Mutations enabled
+        </div>
+      </div>
+    </section>
+    <div id="qrResult"></div>
+  </div>`;
 
   document.getElementById('qrSql').addEventListener('keydown', e => {
     if (e.ctrlKey && e.key === 'Enter') runQuery();
@@ -1000,56 +1521,86 @@ async function runQuery() {
   const sql = document.getElementById('qrSql').value.trim();
   if (!sql) return;
   const resultEl = document.getElementById('qrResult');
-  resultEl.innerHTML = `<div class="loading">Running...</div>`;
+  resultEl.innerHTML = loadingState('Running query…');
 
   try {
     const data = await apiPost('/api/query', { sql, allowMutations: qrWriteMode });
     if (data.error) {
-      resultEl.innerHTML = `<div class="error-msg">${escHtml(data.error)}</div>`; return;
+      resultEl.innerHTML = errorState(data.error); return;
     }
 
     qrHistory = [sql, ...qrHistory.filter(q => q !== sql)].slice(0, 20);
     localStorage.setItem('qr_history', JSON.stringify(qrHistory));
 
-    if (!data.rows.length) { resultEl.innerHTML = `<div class="card"><div class="empty-state">Query returned 0 rows</div></div>`; return; }
+    if (!data.rows.length) { resultEl.innerHTML = emptyState('Query returned 0 rows', 'inbox'); return; }
 
     const cols = Object.keys(data.rows[0]);
-    resultEl.innerHTML = `
-      <div class="card">
-        <div class="card-header"><h3>Results</h3><span style="font-size:13px;color:#888">${data.count} rows</span></div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr>${cols.map(c => `<th>${escHtml(c)}</th>`).join('')}</tr></thead>
-            <tbody>${data.rows.map(r => `<tr>${cols.map(c => `<td title="${escHtml(String(r[c]??''))}">${escHtml(String(r[c]??''))||'<span style="color:#bbb">null</span>'}</td>`).join('')}</tr>`).join('')}</tbody>
-          </table>
-        </div>
-      </div>`;
-  } catch(e) { resultEl.innerHTML = `<div class="error-msg">${escHtml(e.message)}</div>`; }
+    const rowsHtml = data.rows.map(r => `<tr class="zebra-row hover:bg-surface-container transition-colors">${cols.map(c => `<td class="px-4 py-2 mono-text text-xs truncate max-w-[260px]" title="${escHtml(String(r[c]??''))}">${escHtml(String(r[c]??''))||'<span class="text-outline italic">null</span>'}</td>`).join('')}</tr>`).join('');
+
+    resultEl.innerHTML = `<section class="bg-surface-container-lowest rounded-xl shadow-whisper overflow-hidden">
+      <div class="px-6 py-4 flex justify-between items-center bg-white border-b border-surface-container-low">
+        <h3 class="text-lg font-bold tracking-tight">Results</h3>
+        <span class="text-xs mono-text text-on-surface-variant">${data.count} rows</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-left border-collapse">
+          <thead class="bg-surface-container-low text-on-surface-variant"><tr>${cols.map(c => `<th class="px-4 py-3 text-[0.7rem] font-bold uppercase tracking-widest mono-text">${escHtml(c)}</th>`).join('')}</tr></thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </div>
+    </section>`;
+  } catch(e) { resultEl.innerHTML = errorState(e.message); }
 }
 
-// ─── AI Query Builder ─────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════
+// AI ASSISTANT
+// ═════════════════════════════════════════════════════════════════════════
 let aiMessages = [];
 const AI_MODEL = 'eu.anthropic.claude-sonnet-4-5-20250929-v1:0';
 
 function renderAIQuery(el) {
   aiMessages = [];
-  el.innerHTML = `
-    <div class="page-title">AI Assistant</div>
-    <div style="font-size:13px;color:#888;margin-bottom:14px">Describe what you want to find or do in plain language. The AI will generate SQL you can review and run.</div>
-    <div class="card">
-      <div class="chat-messages" id="chatMessages">
-        <div class="msg msg-ai">
-          <div class="msg-bubble">Hi! I know your full database schema. Ask me something like:<br><br>
-          • "find all bookings for March 2nd"<br>
-          • "show users who registered this week for praxis lc_10"<br>
-          • "how many cancelled appointments per praxis last month"</div>
+  el.innerHTML = `<div class="h-full flex flex-col">
+    <div class="p-4 border-b border-slate-200 bg-white/80 backdrop-blur-md flex justify-between items-center flex-shrink-0">
+      <div class="flex items-center gap-3">
+        <h2 class="text-lg font-bold tracking-tight text-on-surface">AI Assistant</h2>
+        <span class="bg-surface-container-high px-2 py-0.5 rounded-full text-[10px] font-bold text-slate-600 uppercase border border-slate-300">Claude Sonnet 4.5</span>
+      </div>
+      <button class="p-2 hover:bg-slate-100 rounded-lg transition-colors" onclick="aiMessages=[];renderAIQuery(document.getElementById('content'))">
+        <span class="material-symbols-outlined text-slate-500">refresh</span>
+      </button>
+    </div>
+    <div class="flex-1 overflow-y-auto p-6 space-y-6 atelier-grid" id="chatMessages">
+      <div class="flex flex-col items-start">
+        <div class="max-w-[90%] bg-white p-5 rounded-xl rounded-tl-none shadow-sm border border-slate-100 text-sm leading-relaxed">
+          <p class="text-on-surface mb-3 font-medium">Hi! I know your full database schema. Try asking:</p>
+          <ul class="text-sm text-on-surface-variant space-y-1.5 list-disc pl-5">
+            <li>"find all bookings for March 2nd"</li>
+            <li>"show users who registered this week for praxis lc_10"</li>
+            <li>"how many cancelled appointments per praxis last month"</li>
+          </ul>
+        </div>
+        <span class="text-[10px] text-slate-400 mt-1 ml-1">AI</span>
+      </div>
+    </div>
+    <div class="p-6 bg-white border-t border-slate-200 flex-shrink-0">
+      <div class="relative bg-surface-container-low rounded-xl border-2 border-transparent focus-within:border-primary/20 transition-all">
+        <textarea id="aiInput" placeholder="Ask about the database…" rows="2" class="w-full bg-transparent border-none focus:ring-0 p-4 text-sm text-on-surface placeholder:text-slate-400 resize-none outline-none" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAiMessage()}"></textarea>
+        <div class="flex justify-between items-center px-4 pb-3">
+          <div class="flex gap-2 text-slate-400">
+            <span class="material-symbols-outlined">database</span>
+            <span class="text-[10px] font-medium uppercase tracking-wider">Schema-aware</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <span class="text-[10px] text-slate-400 font-medium">Enter to send · Shift+Enter for newline</span>
+            <button class="bg-primary text-white h-9 w-9 flex items-center justify-center rounded-lg shadow-md hover:bg-primary-container transition-all" onclick="sendAiMessage()">
+              <span class="material-symbols-outlined ms-fill">send</span>
+            </button>
+          </div>
         </div>
       </div>
-      <div class="chat-input-row">
-        <textarea class="chat-input" id="aiInput" placeholder="Describe what you want..." rows="1" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAiMessage()}"></textarea>
-        <button class="btn btn-primary" onclick="sendAiMessage()">Send</button>
-      </div>
-    </div>`;
+    </div>
+  </div>`;
 }
 
 async function sendAiMessage() {
@@ -1061,8 +1612,16 @@ async function sendAiMessage() {
   aiMessages.push({ role: 'user', content: text });
   const chatEl = document.getElementById('chatMessages');
 
-  chatEl.innerHTML += `<div class="msg msg-user"><div class="msg-bubble">${escHtml(text)}</div></div>`;
-  chatEl.innerHTML += `<div class="msg msg-ai" id="aiTyping"><div class="msg-bubble" style="color:#aaa">Generating SQL...</div></div>`;
+  const time = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  chatEl.innerHTML += `<div class="flex flex-col items-end">
+    <div class="max-w-[85%] bg-primary text-white p-4 rounded-xl rounded-tr-none shadow-lg text-sm leading-relaxed">${escHtml(text)}</div>
+    <span class="text-[10px] text-slate-400 mt-1 mr-1">${time}</span>
+  </div>`;
+  chatEl.innerHTML += `<div id="aiTyping" class="flex flex-col items-start">
+    <div class="bg-white p-4 rounded-xl rounded-tl-none shadow-sm border border-slate-100 text-sm text-outline">
+      <span class="material-symbols-outlined animate-spin text-base mr-2">progress_activity</span>Generating SQL…
+    </div>
+  </div>`;
   chatEl.scrollTop = chatEl.scrollHeight;
 
   try {
@@ -1070,28 +1629,41 @@ async function sendAiMessage() {
     document.getElementById('aiTyping')?.remove();
 
     if (data.error) {
-      chatEl.innerHTML += `<div class="msg msg-ai"><div class="msg-bubble" style="color:#dc2626">Error: ${escHtml(data.error)}</div></div>`;
+      chatEl.innerHTML += `<div class="flex flex-col items-start">
+        <div class="bg-error-container p-4 rounded-xl rounded-tl-none shadow-sm border border-error/20 text-sm text-on-error-container">Error: ${escHtml(data.error)}</div>
+        <span class="text-[10px] text-slate-400 mt-1 ml-1">AI</span>
+      </div>`;
     } else {
       const sql = data.sql;
       aiMessages.push({ role: 'assistant', content: sql });
       const msgId = 'ai_' + Date.now();
-      chatEl.innerHTML += `
-        <div class="msg msg-ai">
-          <div class="msg-bubble">
-            Here's the query:
-            <div class="sql-block">${escHtml(sql)}</div>
-            <div class="sql-actions">
-              <button class="btn btn-primary btn-sm" onclick="runAiSql('${msgId}')">▶ Run</button>
-              <button class="btn btn-ghost btn-sm" onclick="copyToQueryRunner('${msgId}')">Open in Query Runner</button>
-            </div>
+      const t = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+      chatEl.innerHTML += `<div class="flex flex-col items-start">
+        <div class="max-w-[90%] bg-white p-5 rounded-xl rounded-tl-none shadow-md border-l-4 border-l-emerald-500 border-r border-t border-b border-slate-100">
+          <p class="text-sm text-on-surface mb-3 font-medium">Here's the query:</p>
+          <div class="code-bg rounded-lg p-4 mb-3 relative group">
+            <pre class="text-jetbrains text-xs text-indigo-300 overflow-x-auto whitespace-pre-wrap break-all">${escHtml(sql)}</pre>
+            <button class="absolute top-2 right-2 p-1.5 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-800 rounded-md text-white" onclick="navigator.clipboard.writeText(window['_ai_sql_${msgId}']);showToast('Copied SQL')">
+              <span class="material-symbols-outlined text-xs">content_copy</span>
+            </button>
           </div>
+          <div class="flex gap-2 mb-2">
+            <button class="flex items-center gap-1.5 px-3 py-1.5 bg-primary/10 text-primary text-[11px] font-bold rounded-lg hover:bg-primary/20 transition-colors" onclick="runAiSql('${msgId}')">
+              <span class="material-symbols-outlined text-sm ms-fill">play_circle</span>Run
+            </button>
+            <button class="flex items-center gap-1.5 px-3 py-1.5 text-slate-500 hover:text-on-surface text-[11px] font-bold transition-colors" onclick="copyToQueryRunner('${msgId}')">
+              <span class="material-symbols-outlined text-sm">open_in_new</span>Open in Query Runner
+            </button>
+          </div>
+          <div id="${msgId}_result"></div>
         </div>
-        <div id="${msgId}_result"></div>`;
+        <span class="text-[10px] text-slate-400 mt-1 ml-1">AI · ${t}</span>
+      </div>`;
       window['_ai_sql_' + msgId] = sql;
     }
   } catch(e) {
     document.getElementById('aiTyping')?.remove();
-    chatEl.innerHTML += `<div class="msg msg-ai"><div class="msg-bubble" style="color:#dc2626">Error: ${escHtml(e.message)}</div></div>`;
+    chatEl.innerHTML += `<div class="flex flex-col items-start"><div class="bg-error-container p-4 rounded-xl text-sm text-on-error-container">Error: ${escHtml(e.message)}</div></div>`;
   }
   chatEl.scrollTop = chatEl.scrollHeight;
 }
@@ -1100,25 +1672,24 @@ async function runAiSql(msgId) {
   const sql = window['_ai_sql_' + msgId];
   const resultEl = document.getElementById(msgId + '_result');
   if (!resultEl || !sql) return;
-  resultEl.innerHTML = `<div class="loading" style="padding:10px">Running...</div>`;
+  resultEl.innerHTML = `<div class="text-xs text-on-surface-variant py-2">Running…</div>`;
 
   try {
     const data = await apiPost('/api/query', { sql, allowMutations: false });
-    if (data.error) { resultEl.innerHTML = `<div class="error-msg">${escHtml(data.error)}</div>`; return; }
-    if (!data.rows.length) { resultEl.innerHTML = `<div style="padding:8px;font-size:13px;color:#888">0 rows returned</div>`; return; }
+    if (data.error) { resultEl.innerHTML = `<div class="bg-error-container text-on-error-container p-3 rounded-lg text-xs">${escHtml(data.error)}</div>`; return; }
+    if (!data.rows.length) { resultEl.innerHTML = `<div class="text-xs text-on-surface-variant py-2">0 rows returned</div>`; return; }
     const cols = Object.keys(data.rows[0]);
-    resultEl.innerHTML = `
-      <div class="card" style="margin-bottom:10px">
-        <div style="padding:8px 12px;font-size:12px;color:#888">${data.count} rows</div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr>${cols.map(c => `<th>${escHtml(c)}</th>`).join('')}</tr></thead>
-            <tbody>${data.rows.slice(0,100).map(r => `<tr>${cols.map(c => `<td title="${escHtml(String(r[c]??''))}">${escHtml(String(r[c]??''))||'<span style="color:#bbb">null</span>'}</td>`).join('')}</tr>`).join('')}</tbody>
-          </table>
-        </div>
-      </div>`;
+    resultEl.innerHTML = `<div class="border rounded-lg overflow-hidden border-slate-200 mt-2">
+      <div class="px-3 py-2 text-[10px] mono-text text-on-surface-variant bg-slate-50 border-b border-slate-100">${data.count} rows</div>
+      <div class="overflow-x-auto max-h-72">
+        <table class="w-full text-left text-[10px]">
+          <thead class="bg-slate-50 sticky top-0"><tr>${cols.map(c => `<th class="px-2 py-1.5 mono-text font-bold">${escHtml(c)}</th>`).join('')}</tr></thead>
+          <tbody>${data.rows.slice(0,100).map(r => `<tr class="border-t border-slate-50">${cols.map(c => `<td class="px-2 py-1 mono-text truncate max-w-[160px]" title="${escHtml(String(r[c]??''))}">${escHtml(String(r[c]??''))||'<span class="text-outline italic">null</span>'}</td>`).join('')}</tr>`).join('')}</tbody>
+        </table>
+      </div>
+    </div>`;
     document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
-  } catch(e) { resultEl.innerHTML = `<div class="error-msg">${escHtml(e.message)}</div>`; }
+  } catch(e) { resultEl.innerHTML = `<div class="bg-error-container text-on-error-container p-3 rounded-lg text-xs">${escHtml(e.message)}</div>`; }
 }
 
 function copyToQueryRunner(msgId) {
@@ -1127,108 +1698,112 @@ function copyToQueryRunner(msgId) {
   setTimeout(() => { const el = document.getElementById('qrSql'); if (el) el.value = sql; }, 100);
 }
 
-// ─── AWS Monitor ─────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════
+// MONITOR
+// ═════════════════════════════════════════════════════════════════════════
 function renderMonitoring(el) {
-  el.innerHTML = `<div style="margin:-20px;height:calc(100vh - 100px)"><iframe src="/monitoring.html" style="width:100%;height:100%;border:none;border-radius:0"></iframe></div>`;
+  el.innerHTML = `<iframe src="/monitoring.html" allowfullscreen class="w-full h-full border-none" style="height:calc(100vh - 144px)"></iframe>`;
 }
 
-// ─── CSV Decryptor ────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════
+// CSV DECRYPTOR
+// ═════════════════════════════════════════════════════════════════════════
 function renderCsvDecrypt(el) {
-  el.innerHTML = `
-    <div class="page-title">CSV Decryptor</div>
-    <iframe src="/tools/decrypt_viewer.html" style="width:100%;height:calc(100vh - 200px);border:none;border-radius:10px;background:white"></iframe>`;
+  el.innerHTML = `<iframe src="/tools/decrypt_viewer.html" class="w-full border-none bg-white" style="height:calc(100vh - 144px)"></iframe>`;
 }
 
-// ─── Verify User ─────────────────────────────────────────────────────────────
-async function verifyUser(userId) {
-  const verifiedBy = prompt('Verified by (name):', 'Debugger');
-  if (verifiedBy === null) return;
-  const doc = prompt('Document type:', 'manual');
-  if (doc === null) return;
-  const docNumber = prompt('Document number:', 'manual');
-  if (docNumber === null) return;
-  try {
-    const res = await apiPost(`/api/users/${userId}/verify`, { verifiedBy, verifiedByDocument: doc, verifiedByDocumentNumber: docNumber });
-    if (res.error) { alert('Error: ' + res.error); return; }
-    alert('✅ User verified');
-    renderUserDetail(document.getElementById('content'), userId);
-  } catch(e) { alert('Error: ' + e.message); }
-}
-
-// ─── Send Notification ────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════
+// SEND NOTIFICATION
+// ═════════════════════════════════════════════════════════════════════════
 let fcmConfigured = false;
+let snSelectedTokens = [];
 
 async function renderSendNotification(el) {
-  el.innerHTML = `<div class="page-title">Send Notification</div><div class="loading">Loading...</div>`;
+  el.innerHTML = pageWrap(pageHero('Send Notification') + loadingState());
   const cfg = await apiFetch('/api/fcm/config');
   fcmConfigured = cfg.configured;
 
-  el.innerHTML = `
-    <div class="page-title">Send Notification</div>
-
-    ${!fcmConfigured ? `
-    <div class="card" style="margin-bottom:14px;border-left:4px solid #f59e0b">
-      <div class="card-header"><h3>⚙️ Firebase Setup Required</h3></div>
-      <div class="card-body">
-        <p style="font-size:13px;color:#666;margin-bottom:12px">Paste your Firebase service account JSON to enable push notifications. Get it from Firebase Console → Project Settings → Service Accounts → Generate new private key.</p>
-        <textarea id="fcmJson" placeholder='{"type":"service_account","project_id":"..."}' style="width:100%;min-height:120px;font-family:monospace;font-size:12px;border:1px solid #ddd;border-radius:8px;padding:10px;outline:none;resize:vertical"></textarea>
-        <div style="margin-top:10px">
-          <button class="btn btn-primary" onclick="saveFcmConfig()">Save Configuration</button>
-        </div>
+  const setupCard = !fcmConfigured ? `
+    <section class="bg-surface-container-lowest rounded-xl shadow-whisper p-6 mb-6 border-l-4 border-amber-400">
+      <div class="flex items-center gap-3 mb-4">
+        <span class="material-symbols-outlined text-amber-600 text-2xl">settings</span>
+        <h3 class="font-bold text-lg tracking-tight">Firebase Setup Required</h3>
       </div>
-    </div>` : `
-    <div class="card" style="margin-bottom:14px;border-left:4px solid #16a34a">
-      <div class="card-body" style="display:flex;align-items:center;gap:10px">
-        <span class="dot dot-green"></span>
-        <span style="font-size:13px">Firebase configured — project: <strong>${escHtml(cfg.projectId)}</strong></span>
-        <button class="btn btn-ghost btn-sm" onclick="clearFcmConfig()">Change</button>
-      </div>
-    </div>`}
+      <p class="text-sm text-on-surface-variant mb-4">Paste your Firebase service account JSON to enable push notifications. Get it from Firebase Console → Project Settings → Service Accounts → Generate new private key.</p>
+      <textarea id="fcmJson" placeholder='{"type":"service_account","project_id":"..."}' class="w-full min-h-[140px] bg-surface-container-low border border-outline-variant rounded-lg p-3 mono-text text-xs focus:ring-2 focus:ring-primary-fixed focus:border-primary outline-none resize-y"></textarea>
+      <div class="mt-4">${btnPrimary('Save Configuration', 'saveFcmConfig()')}</div>
+    </section>` : `
+    <section class="bg-surface-container-lowest rounded-xl shadow-whisper p-4 mb-6 border-l-4 border-tertiary flex items-center gap-3">
+      <span class="w-2.5 h-2.5 rounded-full bg-tertiary pulse-dot"></span>
+      <span class="text-sm">Firebase configured · project <strong>${escHtml(cfg.projectId)}</strong></span>
+      <button class="ml-auto px-3 py-1 text-xs font-bold text-on-surface-variant hover:bg-surface-container rounded transition-colors" onclick="clearFcmConfig()">Change</button>
+    </section>`;
 
-    <div class="card" style="${!fcmConfigured ? 'opacity:0.5;pointer-events:none' : ''}">
-      <div class="card-header"><h3>Compose Notification</h3></div>
-      <div class="card-body" style="display:flex;flex-direction:column;gap:12px">
-        <div class="filter-row" style="align-items:flex-start">
-          <div class="fld" style="flex:1">
-            <label>Find User</label>
-            <div style="display:flex;gap:8px">
-              <input id="snUserSearch" placeholder="name / email / phone" style="flex:1;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:13px;outline:none" onkeydown="if(event.key==='Enter')searchNotifUser()">
-              <button class="btn btn-ghost" onclick="searchNotifUser()">Search</button>
+  el.innerHTML = pageWrap(
+    pageHero('Send Notification', { sub: 'Push notifications via Firebase Cloud Messaging' }) +
+    setupCard +
+    `<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 ${!fcmConfigured ? 'opacity-50 pointer-events-none' : ''}">
+      <section class="bg-surface-container-lowest rounded-xl shadow-whisper p-6">
+        <div class="flex justify-between items-start mb-6">
+          <div>
+            <h2 class="text-lg font-bold tracking-tight mb-1">Compose</h2>
+            <div class="flex items-center gap-2 text-xs text-on-surface-variant mono-text">
+              <span class="w-2 h-2 rounded-full bg-tertiary"></span>
+              <span>Firebase ready · ${escHtml(cfg.projectId||'—')}</span>
             </div>
-            <div id="snUserResults" style="margin-top:8px"></div>
+          </div>
+          <span class="material-symbols-outlined text-slate-300">send</span>
+        </div>
+        <div class="space-y-4">
+          <div>
+            <label class="block text-[10px] uppercase tracking-wider font-bold text-on-surface-variant mb-1.5">Recipient Search</label>
+            <div class="flex gap-2">
+              <input id="snUserSearch" placeholder="name / email / phone" class="flex-1 bg-surface-container border-none rounded-lg text-sm px-3 py-2.5 focus:ring-2 focus:ring-primary-fixed mono-text" onkeydown="if(event.key==='Enter')searchNotifUser()">
+              <button class="px-4 py-2 bg-surface-container-high text-on-surface-variant rounded-lg text-xs font-bold hover:bg-surface-variant" onclick="searchNotifUser()">Search</button>
+            </div>
+            <div id="snUserResults" class="mt-2"></div>
+          </div>
+          <div id="snTokenSection" class="hidden">
+            <label class="block text-[10px] uppercase tracking-wider font-bold text-on-surface-variant mb-2">Devices</label>
+            <div id="snTokenList" class="space-y-2"></div>
+          </div>
+          <div>
+            <label class="block text-[10px] uppercase tracking-wider font-bold text-on-surface-variant mb-1.5">Title</label>
+            <input id="snTitle" placeholder="Notification title" class="w-full bg-surface-container border-none rounded-lg text-sm px-3 py-2.5 focus:ring-2 focus:ring-primary-fixed font-medium">
+          </div>
+          <div>
+            <label class="block text-[10px] uppercase tracking-wider font-bold text-on-surface-variant mb-1.5">Body</label>
+            <textarea id="snBody" placeholder="Notification message" rows="3" class="w-full bg-surface-container border-none rounded-lg text-sm px-3 py-2.5 focus:ring-2 focus:ring-primary-fixed resize-none"></textarea>
+          </div>
+          <div class="pt-2 flex items-center justify-between">
+            <button id="snSendBtn" class="px-6 py-2.5 bg-gradient-to-br from-primary to-primary-container text-white rounded-lg text-sm font-bold shadow-md shadow-primary/20 active:scale-95 transition-transform flex items-center gap-2 disabled:opacity-30 disabled:cursor-not-allowed" onclick="sendNotification()" disabled>
+              <span class="material-symbols-outlined text-sm ms-fill">send</span>Send Notification
+            </button>
+            <div id="snResult"></div>
           </div>
         </div>
-
-        <div id="snTokenSection" style="display:none">
-          <div style="font-size:12px;font-weight:700;color:#888;text-transform:uppercase;margin-bottom:8px">Device Tokens</div>
-          <div id="snTokenList"></div>
-        </div>
-
-        <div class="fld">
-          <label>Title</label>
-          <input id="snTitle" placeholder="Notification title" style="width:100%;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 10px;font-size:13px;outline:none">
-        </div>
-        <div class="fld">
-          <label>Body</label>
-          <textarea id="snBody" placeholder="Notification message" style="width:100%;min-height:80px;border:1px solid #ddd;border-radius:6px;padding:10px;font-size:13px;outline:none;resize:vertical;font-family:inherit"></textarea>
-        </div>
-        <div>
-          <button class="btn btn-primary" id="snSendBtn" onclick="sendNotification()" disabled>📣 Send Notification</button>
-        </div>
-        <div id="snResult"></div>
-      </div>
-    </div>`;
+      </section>
+      <section class="bg-surface-container-lowest rounded-xl shadow-whisper p-6">
+        <h2 class="text-lg font-bold tracking-tight mb-4">Tips</h2>
+        <ul class="space-y-3 text-sm text-on-surface-variant">
+          <li class="flex gap-3"><span class="material-symbols-outlined text-primary text-lg">info</span>Title appears bold above the body in the system tray.</li>
+          <li class="flex gap-3"><span class="material-symbols-outlined text-primary text-lg">info</span>Test on staging first — push targets real devices.</li>
+          <li class="flex gap-3"><span class="material-symbols-outlined text-primary text-lg">info</span>Tokens older than 270 days may have rotated.</li>
+        </ul>
+      </section>
+    </div>`
+  );
 }
 
 async function saveFcmConfig() {
   const json = document.getElementById('fcmJson').value.trim();
-  if (!json) { alert('Paste your service account JSON first'); return; }
+  if (!json) { showToast('Paste your service account JSON first'); return; }
   try {
     const res = await fetch('/api/fcm/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ serviceAccount: json }) });
     const data = await res.json();
-    if (data.error) { alert('Error: ' + data.error); return; }
+    if (data.error) { showToast('Error: ' + data.error); return; }
     renderSendNotification(document.getElementById('content'));
-  } catch(e) { alert('Error: ' + e.message); }
+  } catch(e) { showToast('Error: ' + e.message); }
 }
 
 async function clearFcmConfig() {
@@ -1236,41 +1811,47 @@ async function clearFcmConfig() {
   renderSendNotification(document.getElementById('content'));
 }
 
-let snSelectedTokens = [];
-
 async function searchNotifUser() {
   const q = document.getElementById('snUserSearch').value.trim();
   if (!q) return;
   const data = await apiFetch(`/api/users?q=${encodeURIComponent(q)}&pageSize=5`);
   const resultsEl = document.getElementById('snUserResults');
-  if (!data.rows.length) { resultsEl.innerHTML = `<div style="font-size:13px;color:#aaa">No users found</div>`; return; }
-  resultsEl.innerHTML = data.rows.map(u => `
-    <div onclick="selectNotifUser(${u.id}, '${escHtml(u.firstName)} ${escHtml(u.lastName)}')" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;cursor:pointer;border:1px solid #e5e7eb;margin-bottom:4px;background:white" onmouseover="this.style.background='#f5f5ff'" onmouseout="this.style.background='white'">
-      <div>
-        <div style="font-size:13px;font-weight:600">${escHtml(u.firstName)} ${escHtml(u.lastName)}</div>
-        <div style="font-size:12px;color:#888">${escHtml(u.email)} · ${escHtml(u.praxisId||'')}</div>
+  if (!data.rows.length) { resultsEl.innerHTML = `<div class="text-sm text-outline italic">No users found</div>`; return; }
+  resultsEl.innerHTML = `<div class="bg-white border border-slate-100 rounded-lg shadow-md overflow-hidden divide-y divide-slate-50">${data.rows.map(u => {
+    const initials = ((u.firstName||'?').charAt(0) + (u.lastName||'').charAt(0)).toUpperCase();
+    return `<div class="p-2 hover:bg-indigo-50 cursor-pointer flex items-center gap-3" onclick="selectNotifUser(${u.id}, '${escHtml(u.firstName||'')} ${escHtml(u.lastName||'')}')">
+      <div class="w-7 h-7 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-[10px] font-bold">${escHtml(initials)}</div>
+      <div class="flex-1">
+        <div class="text-xs font-semibold">${escHtml(u.firstName||'')} ${escHtml(u.lastName||'')}</div>
+        <div class="text-[10px] text-on-surface-variant">${escHtml(u.email)} · ${escHtml(u.praxisId||'')}</div>
       </div>
-    </div>`).join('');
+      <span class="text-[10px] mono-text text-outline">ID ${u.id}</span>
+    </div>`;
+  }).join('')}</div>`;
 }
 
 async function selectNotifUser(userId, name) {
-  document.getElementById('snUserResults').innerHTML = `<div style="font-size:13px;color:#16a34a;font-weight:600">✓ ${escHtml(name)}</div>`;
+  document.getElementById('snUserResults').innerHTML = `<div class="text-sm text-tertiary font-bold flex items-center gap-2"><span class="material-symbols-outlined text-base ms-fill">check_circle</span>${escHtml(name)}</div>`;
   const tokens = await apiFetch(`/api/users/${userId}/tokens`);
   const tokenSection = document.getElementById('snTokenSection');
   const tokenList = document.getElementById('snTokenList');
   snSelectedTokens = tokens.map(t => t.token);
-  tokenSection.style.display = 'block';
+  tokenSection.classList.remove('hidden');
   if (!tokens.length) {
-    tokenList.innerHTML = `<div style="font-size:13px;color:#aaa">No device tokens found for this user</div>`;
+    tokenList.innerHTML = `<div class="text-sm text-outline italic">No device tokens for this user</div>`;
     document.getElementById('snSendBtn').disabled = true;
     return;
   }
-  tokenList.innerHTML = tokens.map((t, i) => `
-    <label style="display:flex;align-items:center;gap:8px;font-size:13px;padding:6px 0;cursor:pointer">
-      <input type="checkbox" checked data-token="${escHtml(t.token)}" onchange="updateSnTokens()">
-      <span class="badge ${t.platform === 'ios' ? 'badge-blue' : t.platform === 'android' ? 'badge-green' : 'badge-grey'}">${escHtml(t.platform)}</span>
-      <span style="color:#888;font-size:11px">${escHtml(t.deviceId)} · last used ${deTime(t.lastUsedAt)}</span>
-    </label>`).join('');
+  tokenList.innerHTML = tokens.map(t => {
+    const colorMap = { ios: 'blue', android: 'emerald' };
+    const c = colorMap[t.platform] || 'slate';
+    return `<label class="flex items-center gap-3 p-3 bg-surface-container-low rounded-lg hover:bg-surface-container cursor-pointer">
+      <input type="checkbox" checked data-token="${escHtml(t.token)}" onchange="updateSnTokens()" class="w-4 h-4 rounded text-primary border-slate-300 focus:ring-primary">
+      ${statusBadge(t.platform, c)}
+      <span class="text-xs text-on-surface-variant flex-1 mono-text">${escHtml(t.deviceId)}</span>
+      <span class="text-[10px] text-outline">last used ${escHtml(deTime(t.lastUsedAt))}</span>
+    </label>`;
+  }).join('');
   document.getElementById('snSendBtn').disabled = false;
 }
 
@@ -1282,30 +1863,30 @@ function updateSnTokens() {
 async function sendNotification() {
   const title = document.getElementById('snTitle').value.trim();
   const body = document.getElementById('snBody').value.trim();
-  if (!title || !body) { alert('Title and body are required'); return; }
-  if (!snSelectedTokens.length) { alert('No tokens selected'); return; }
+  if (!title || !body) { showToast('Title and body are required'); return; }
+  if (!snSelectedTokens.length) { showToast('No tokens selected'); return; }
   if (!confirm(`Send "${title}" to ${snSelectedTokens.length} device(s)?`)) return;
 
   document.getElementById('snSendBtn').disabled = true;
   const resultEl = document.getElementById('snResult');
-  resultEl.innerHTML = `<div style="font-size:13px;color:#888">Sending...</div>`;
+  resultEl.innerHTML = `<span class="text-xs text-on-surface-variant">Sending…</span>`;
 
   try {
     const data = await apiPost('/api/fcm/send', { tokens: snSelectedTokens, title, body });
-    if (data.error) { resultEl.innerHTML = `<div class="error-msg">${escHtml(data.error)}</div>`; }
-    else {
-      resultEl.innerHTML = `<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:12px;font-size:13px">
-        ✅ Sent to <strong>${data.sent}</strong> device(s)${data.failed ? ` · <span style="color:#dc2626">${data.failed} failed</span>` : ''}
-        ${data.results.map(r => `<div style="font-size:12px;margin-top:4px;color:${r.ok?'#888':'#dc2626'}">...${r.token}: ${r.ok ? 'OK' : r.error}</div>`).join('')}
-      </div>`;
+    if (data.error) {
+      resultEl.innerHTML = `<span class="text-xs text-error font-bold">${escHtml(data.error)}</span>`;
+    } else {
+      resultEl.innerHTML = `<span class="text-xs text-tertiary font-bold flex items-center gap-1"><span class="material-symbols-outlined text-sm ms-fill">check_circle</span>Sent to ${data.sent} device(s)${data.failed ? ` · ${data.failed} failed` : ''}</span>`;
     }
-  } catch(e) { resultEl.innerHTML = `<div class="error-msg">${escHtml(e.message)}</div>`; }
+  } catch(e) { resultEl.innerHTML = `<span class="text-xs text-error font-bold">${escHtml(e.message)}</span>`; }
   document.getElementById('snSendBtn').disabled = false;
 }
 
-// ─── Future Calls ─────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════
+// FUTURE CALLS
+// ═════════════════════════════════════════════════════════════════════════
 async function renderFutureCalls(el, page = 1) {
-  el.innerHTML = `<div class="page-title">Future Calls</div><div class="loading">Loading...</div>`;
+  el.innerHTML = pageWrap(pageHero('Future Calls') + loadingState());
   try {
     const data = await apiFetch(`/api/future-calls?page=${page}&pageSize=100`);
     setConnStatus('connected');
@@ -1314,34 +1895,98 @@ async function renderFutureCalls(el, page = 1) {
     const overdue = data.rows.filter(r => new Date(r.time) < now).length;
     const upcoming = data.rows.length - overdue;
 
-    el.innerHTML = `
-      <div class="page-title">Future Calls</div>
-      <div class="stats-row">
-        <div class="stat-card blue"><div class="stat-label">Total</div><div class="stat-value">${data.total}</div></div>
-        <div class="stat-card red"><div class="stat-label">Overdue</div><div class="stat-value">${overdue}</div></div>
-        <div class="stat-card green"><div class="stat-label">Upcoming</div><div class="stat-value">${upcoming}</div></div>
-      </div>
-      <div class="card">
-        <div class="table-wrap">
-          <table><thead><tr><th>Scheduled Time</th><th>Name</th><th>Identifier</th><th>Server</th><th>Status</th><th></th></tr></thead>
-          <tbody id="fcBody">
-            ${data.rows.map(r => {
-              const isOverdue = new Date(r.time) < now;
-              return `<tr>
-                <td style="white-space:nowrap${isOverdue ? ';color:#dc2626;font-weight:600' : ''}">${deTime(r.time)}</td>
-                <td style="font-weight:500">${escHtml(r.name)}</td>
-                <td style="font-size:12px;color:#888">${escHtml(r.identifier||'—')}</td>
-                <td style="font-size:12px;color:#888">${escHtml(r.serverId)}</td>
-                <td>${isOverdue ? '<span class="badge badge-orange">Overdue</span>' : '<span class="badge badge-blue">Scheduled</span>'}</td>
-                <td><button class="btn btn-ghost btn-sm" style="color:#dc2626" onclick="cancelFutureCall(${r.id}, this)">Cancel</button></td>
-              </tr>`;
-            }).join('')}
-          </tbody></table>
-        </div>
-        <div id="fcPaging"></div>
+    const statTile = (label, value, color) => {
+      const map = {
+        indigo: ['bg-indigo-50','border-indigo-500','text-indigo-600','text-indigo-900'],
+        red: ['bg-error-container/30','border-error','text-error','text-error'],
+        emerald: ['bg-tertiary-container/15','border-tertiary-container','text-tertiary-container','text-tertiary'],
+      };
+      const [bg, bd, lbl, val] = map[color];
+      return `<div class="${bg} border-t-[3px] ${bd} px-5 py-3 rounded-lg flex flex-col min-w-[100px]">
+        <span class="text-[10px] uppercase tracking-tighter ${lbl} font-bold">${escHtml(label)}</span>
+        <span class="text-2xl font-black mono-text ${val} leading-tight">${escHtml(value)}</span>
       </div>`;
+    };
+
+    const rowsHtml = data.rows.map(r => {
+      const isOverdue = new Date(r.time) < now;
+      const trClass = isOverdue ? 'bg-error-container/10 border-l-2 border-error' : 'hover:bg-surface-container-low transition-colors border-b border-surface-container/40';
+      return `<tr class="row-compact ${trClass} cursor-pointer fc-row" data-id="${r.id}">
+        <td class="px-3 py-1 mono-text text-sm whitespace-nowrap ${isOverdue ? 'text-error font-bold' : ''}">${escHtml(deTime(r.time))}</td>
+        <td class="px-3 py-1 font-medium text-sm">${escHtml(r.name)}</td>
+        <td class="px-3 py-1 mono-text text-xs opacity-60">${escHtml(r.identifier||'—')}</td>
+        <td class="px-3 py-1 mono-text text-xs opacity-60">${escHtml(r.serverId)}</td>
+        <td class="px-3 py-1">${isOverdue ? `<span class="bg-error text-white text-[9px] font-black px-1.5 py-0.5 rounded uppercase">Overdue</span>` : `<span class="bg-tertiary-container/10 text-tertiary-container text-[9px] font-bold px-1.5 py-0.5 rounded uppercase border border-tertiary-container/20">Scheduled</span>`}</td>
+        <td class="px-3 py-1 text-right">
+          <button class="text-error border border-error/30 hover:bg-error hover:text-white px-2 py-0.5 rounded transition-colors text-[10px] font-bold" onclick="event.stopPropagation();cancelFutureCall(${r.id}, this)">Cancel</button>
+        </td>
+      </tr>`;
+    }).join('');
+
+    el.innerHTML = pageWrap(
+      pageHero('Future Calls', { sub: 'Scheduled server jobs',
+        actions: `<div class="flex gap-3">${statTile('Total', data.total, 'indigo')}${statTile('Overdue', overdue, 'red')}${statTile('Upcoming', upcoming, 'emerald')}</div>` }) +
+      tableShell(['Scheduled Time','Name','Identifier','Server','Status','Cancel'], rowsHtml, 'fcPaging')
+    );
+
+    // Wire row clicks → expand serializedObject as formatted JSON
+    document.querySelectorAll('.fc-row').forEach(tr => {
+      tr.addEventListener('click', () => toggleFutureCallDetail(tr, tr.dataset.id));
+    });
+
     renderPagination(document.getElementById('fcPaging'), data, (p) => renderFutureCalls(document.getElementById('content'), p));
-  } catch(e) { setConnStatus('error'); el.innerHTML = `<div class="page-title">Future Calls</div><div class="error-msg">${escHtml(e.message)}</div>`; }
+  } catch(e) {
+    setConnStatus('error');
+    el.innerHTML = pageWrap(pageHero('Future Calls') + errorState(e.message));
+  }
+}
+
+// Lazily fetch and render a future-call's serializedObject as pretty JSON
+// in an expandable row beneath, mirroring the Session Logs pattern.
+const fcCache = {};
+async function toggleFutureCallDetail(tr, id) {
+  const existing = tr.nextElementSibling;
+  if (existing && existing.classList.contains('fc-expand-row')) {
+    existing.remove();
+    tr.classList.remove('bg-surface-container-low','border-l-4','border-primary');
+    return;
+  }
+  tr.classList.add('bg-surface-container-low','border-l-4','border-primary');
+  const expandTr = document.createElement('tr');
+  expandTr.className = 'fc-expand-row bg-surface-container-low/50';
+  expandTr.innerHTML = `<td class="p-6" colspan="6"><div class="text-on-surface-variant text-sm">Loading…</div></td>`;
+  tr.after(expandTr);
+
+  try {
+    const detail = fcCache[id] || await apiFetch(`/api/future-calls/${id}`);
+    fcCache[id] = detail;
+
+    let pretty = '', parseError = '';
+    const raw = detail.serializedObject;
+    if (raw === null || raw === undefined || raw === '') {
+      pretty = '(no serializedObject)';
+    } else {
+      try { pretty = JSON.stringify(JSON.parse(raw), null, 2); }
+      catch (e) { pretty = String(raw); parseError = 'Not valid JSON — showing raw value.'; }
+    }
+
+    expandTr.innerHTML = `<td colspan="6" class="p-0">
+      <div class="p-6 border-l-4 border-primary bg-surface-container-low/40">
+        <div class="flex items-center justify-between mb-3">
+          <h4 class="text-xs font-black uppercase tracking-widest text-on-surface-variant flex items-center gap-2">
+            <span class="material-symbols-outlined text-sm">data_object</span> serializedObject
+          </h4>
+          <button class="text-on-surface-variant hover:text-primary p-1 rounded hover:bg-primary/5 transition-colors flex items-center gap-1 text-[11px] font-bold" title="Copy JSON" onclick="event.stopPropagation();copyText(decodeEntities('${escHtml(pretty)}'), 'Copied JSON')">
+            <span class="material-symbols-outlined text-sm">content_copy</span>Copy
+          </button>
+        </div>
+        ${parseError ? `<div class="text-[11px] text-amber-700 mb-2">${escHtml(parseError)}</div>` : ''}
+        <pre class="code-bg text-xs mono-text text-indigo-300 p-4 rounded-lg whitespace-pre-wrap break-all max-h-96 overflow-y-auto leading-relaxed">${escHtml(pretty)}</pre>
+      </div>
+    </td>`;
+  } catch (e) {
+    expandTr.innerHTML = `<td colspan="6" class="p-6"><div class="bg-error-container text-on-error-container text-sm rounded-lg p-3">Error: ${escHtml(e.message)}</div></td>`;
+  }
 }
 
 async function cancelFutureCall(id, btn) {
@@ -1350,113 +1995,145 @@ async function cancelFutureCall(id, btn) {
   try {
     const res = await fetch(`/api/future-calls/${id}`, { method: 'DELETE', headers: dbHeaders() });
     const data = await res.json();
-    if (data.error) { alert('Error: ' + data.error); btn.disabled = false; return; }
+    if (data.error) { showToast('Error: ' + data.error); btn.disabled = false; return; }
     btn.closest('tr').style.opacity = '0.4';
     btn.textContent = 'Cancelled';
-  } catch(e) { alert(e.message); btn.disabled = false; }
+  } catch(e) { showToast(e.message); btn.disabled = false; }
 }
 
-// ─── Server Health ────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════
+// SERVER HEALTH
+// ═════════════════════════════════════════════════════════════════════════
 async function renderHealth(el) {
-  el.innerHTML = `<div class="page-title">Server Health</div><div class="loading">Loading...</div>`;
+  el.innerHTML = pageWrap(pageHero('Server Health') + loadingState());
   try {
     const data = await apiFetch('/api/health');
     setConnStatus('connected');
 
-    // Group metrics by name, take latest value
     const latest = {};
     for (const m of data.metrics) {
       if (!latest[m.name] || new Date(m.timestamp) > new Date(latest[m.name].timestamp)) latest[m.name] = m;
     }
     const conn = data.connections[0];
 
-    el.innerHTML = `
-      <div class="page-title">Server Health</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
-        <div class="card">
-          <div class="card-header"><h3>Health Metrics</h3></div>
-          <div class="card-body">
-            ${Object.values(latest).length ? Object.values(latest).map(m => `
-              <div class="field-row">
-                <span class="field-key" style="text-transform:none">${escHtml(m.name)}</span>
-                <span style="display:flex;align-items:center;gap:8px">
-                  <span class="dot ${m.isHealthy ? 'dot-green' : 'dot-red'}"></span>
-                  <span class="field-val">${m.value.toFixed(2)}</span>
-                  <span style="font-size:11px;color:#aaa">${deTime(m.timestamp)}</span>
-                </span>
-              </div>`).join('') : '<div style="color:#aaa">No metrics available</div>'}
-          </div>
+    const metricsHtml = Object.values(latest).length ? Object.values(latest).map(m => `
+      <div class="flex items-center justify-between border-b border-slate-50 pb-2.5">
+        <span class="text-xs mono-text text-on-surface-variant">${escHtml(m.name)}</span>
+        <div class="flex items-center gap-2">
+          <span class="mono-text font-bold text-sm">${m.value.toFixed(2)}</span>
+          <span class="w-1.5 h-1.5 rounded-full ${m.isHealthy ? 'bg-tertiary' : 'bg-error'}"></span>
         </div>
-        <div class="card">
-          <div class="card-header"><h3>DB Connection Pool</h3></div>
-          <div class="card-body">
-            ${conn ? `
-              <div class="field-row"><span class="field-key">Active</span><span class="field-val" style="color:#4f46e5;font-size:20px;font-weight:700">${conn.active}</span></div>
-              <div class="field-row"><span class="field-key">Idle</span><span class="field-val" style="color:#16a34a;font-size:20px;font-weight:700">${conn.idle}</span></div>
-              <div class="field-row"><span class="field-key">Closing</span><span class="field-val" style="color:#d97706;font-size:20px;font-weight:700">${conn.closing}</span></div>
-              <div class="field-row"><span class="field-key">Server</span><span class="field-val" style="font-size:13px">${escHtml(conn.serverId)}</span></div>
-              <div class="field-row"><span class="field-key">Last updated</span><span class="field-val" style="font-size:12px;color:#888">${deTime(conn.timestamp)}</span></div>
-            ` : '<div style="color:#aaa">No connection data</div>'}
-          </div>
-        </div>
+      </div>`).join('') : '<div class="text-outline text-sm italic">No metrics</div>';
+
+    const poolHtml = conn ? `<div class="space-y-6">
+      <div class="flex items-end gap-3">
+        <span class="text-3xl font-black mono-text text-tertiary leading-none">${conn.active}</span>
+        <span class="text-[10px] font-bold uppercase tracking-widest mb-1">Active</span>
       </div>
-      <div class="card">
-        <div class="card-header"><h3>Metric History</h3><button class="btn btn-ghost btn-sm" onclick="renderHealth(document.getElementById('content'))">↻ Refresh</button></div>
-        <div class="table-wrap">
-          <table><thead><tr><th>Time</th><th>Name</th><th>Server</th><th>Healthy</th><th>Value</th></tr></thead>
-          <tbody>
-            ${data.metrics.slice(0, 50).map(m => `<tr>
-              <td style="font-size:12px;white-space:nowrap">${deTime(m.timestamp)}</td>
-              <td>${escHtml(m.name)}</td>
-              <td style="font-size:12px;color:#888">${escHtml(m.serverId)}</td>
-              <td>${m.isHealthy ? '<span class="dot dot-green"></span>' : '<span class="dot dot-red"></span>'}</td>
-              <td>${m.value.toFixed(3)}</td>
-            </tr>`).join('')}
-          </tbody></table>
+      <div class="flex items-end gap-3">
+        <span class="text-3xl font-black mono-text text-slate-400 leading-none">${conn.idle}</span>
+        <span class="text-[10px] font-bold uppercase tracking-widest mb-1">Idle</span>
+      </div>
+      <div class="flex items-end gap-3">
+        <span class="text-3xl font-black mono-text text-amber-500 leading-none">${conn.closing}</span>
+        <span class="text-[10px] font-bold uppercase tracking-widest mb-1">Closing</span>
+      </div>
+      <p class="text-[10px] text-slate-400 italic mt-4">Updated ${escHtml(deTime(conn.timestamp))}</p>
+    </div>` : '<div class="text-outline text-sm italic">No connection data</div>';
+
+    const historyRowsHtml = data.metrics.slice(0, 50).map(m => `<tr class="zebra-row hover:bg-surface-container">
+      <td class="px-4 py-2 mono-text text-xs whitespace-nowrap">${escHtml(deTime(m.timestamp))}</td>
+      <td class="px-4 py-2 text-sm">${escHtml(m.name)}</td>
+      <td class="px-4 py-2 mono-text text-xs text-on-surface-variant">${escHtml(m.serverId)}</td>
+      <td class="px-4 py-2">${m.isHealthy ? '<span class="w-2 h-2 inline-block rounded-full bg-tertiary"></span>' : '<span class="w-2 h-2 inline-block rounded-full bg-error"></span>'}</td>
+      <td class="px-4 py-2 mono-text font-bold">${m.value.toFixed(3)}</td>
+    </tr>`).join('');
+
+    el.innerHTML = pageWrap(
+      pageHero('Server Health', { sub: `Host: ${escHtml(conn?.serverId||'—')}`,
+        actions: `<button class="text-on-surface-variant hover:text-primary flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider" onclick="renderHealth(document.getElementById('content'))"><span class="material-symbols-outlined text-sm">refresh</span>Refresh</button>` }) +
+      `<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        <section class="bg-surface-container-lowest rounded-xl shadow-whisper p-6">
+          <h2 class="text-lg font-bold tracking-tight mb-6">Health Metrics</h2>
+          <div class="space-y-3">${metricsHtml}</div>
+        </section>
+        <section class="bg-surface-container-lowest rounded-xl shadow-whisper p-6">
+          <h2 class="text-lg font-bold tracking-tight mb-6">DB Connection Pool</h2>
+          ${poolHtml}
+        </section>
+      </div>` +
+      `<section class="bg-surface-container-lowest rounded-xl shadow-whisper overflow-hidden">
+        <div class="px-6 py-4 flex justify-between items-center bg-white border-b border-surface-container-low">
+          <h3 class="text-lg font-bold tracking-tight">Metric History</h3>
+          <span class="text-xs mono-text text-on-surface-variant">${data.metrics.length} samples</span>
         </div>
-      </div>`;
-  } catch(e) { setConnStatus('error'); el.innerHTML = `<div class="page-title">Server Health</div><div class="error-msg">${escHtml(e.message)}</div>`; }
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse">
+            <thead class="bg-surface-container-low text-on-surface-variant"><tr>
+              <th class="px-4 py-3 text-[0.7rem] font-bold uppercase tracking-widest">Time</th>
+              <th class="px-4 py-3 text-[0.7rem] font-bold uppercase tracking-widest">Name</th>
+              <th class="px-4 py-3 text-[0.7rem] font-bold uppercase tracking-widest">Server</th>
+              <th class="px-4 py-3 text-[0.7rem] font-bold uppercase tracking-widest">Healthy</th>
+              <th class="px-4 py-3 text-[0.7rem] font-bold uppercase tracking-widest">Value</th>
+            </tr></thead>
+            <tbody>${historyRowsHtml}</tbody>
+          </table>
+        </div>
+      </section>`
+    );
+  } catch(e) {
+    setConnStatus('error');
+    el.innerHTML = pageWrap(pageHero('Server Health') + errorState(e.message));
+  }
 }
 
-// ─── API Keys ─────────────────────────────────────────────────────────────────
-const API_KEY_STATUS = { 0: ['Active', 'badge-green'], 1: ['Inactive', 'badge-grey'], 2: ['Expired', 'badge-red'] };
+// ═════════════════════════════════════════════════════════════════════════
+// API KEYS
+// ═════════════════════════════════════════════════════════════════════════
+const API_KEY_STATUS = { 0: ['Active','tertiary','bg-tertiary'], 1: ['Inactive','slate','bg-slate-300'], 2: ['Expired','error','bg-error'] };
 
 async function renderApiKeys(el) {
-  el.innerHTML = `<div class="page-title">API Keys</div><div class="loading">Loading...</div>`;
+  el.innerHTML = pageWrap(pageHero('API Keys') + loadingState());
   try {
     const rows = await apiFetch('/api/api-keys');
     setConnStatus('connected');
 
-    el.innerHTML = `
-      <div class="page-title">API Keys</div>
-      <div class="card">
-        <div class="table-wrap">
-          <table><thead><tr><th>Customer</th><th>Status</th><th>Usage</th><th>Last Used</th><th>Expires</th><th>Permissions</th><th>Actions</th></tr></thead>
-          <tbody>
-            ${rows.map(r => {
-              const [label, cls] = API_KEY_STATUS[r.status] || ['Unknown', 'badge-grey'];
-              const perms = typeof r.permissions === 'object' ? Object.entries(r.permissions).filter(([,v])=>v).map(([k])=>k).join(', ') : String(r.permissions);
-              return `<tr>
-                <td>
-                  <div style="font-weight:600">${escHtml(r.customerName)}</div>
-                  <div style="font-size:11px;color:#888">${escHtml(r.customerUUID)}</div>
-                </td>
-                <td><span class="badge ${cls}">${label}</span></td>
-                <td style="font-weight:600">${r.usageCount.toLocaleString()}</td>
-                <td style="font-size:12px;white-space:nowrap">${deTime(r.lastUsedAt)}</td>
-                <td style="font-size:12px;white-space:nowrap${new Date(r.expiresAt) < new Date() ? ';color:#dc2626' : ''}">${deTime(r.expiresAt)}</td>
-                <td style="font-size:12px;color:#888;max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${escHtml(perms)}">${escHtml(perms)||'—'}</td>
-                <td>
-                  ${r.status === 0
-                    ? `<button class="btn btn-ghost btn-sm" style="color:#dc2626" onclick="setApiKeyStatus(${r.id}, 1, this)">Disable</button>`
-                    : `<button class="btn btn-ghost btn-sm" style="color:#16a34a" onclick="setApiKeyStatus(${r.id}, 0, this)">Enable</button>`}
-                </td>
-              </tr>`;
-            }).join('')}
-          </tbody></table>
-        </div>
-      </div>`;
-  } catch(e) { setConnStatus('error'); el.innerHTML = `<div class="page-title">API Keys</div><div class="error-msg">${escHtml(e.message)}</div>`; }
+    const rowsHtml = rows.map(r => {
+      const [label, color, dot] = API_KEY_STATUS[r.status] || ['Unknown','slate','bg-slate-400'];
+      const perms = typeof r.permissions === 'object' ? Object.entries(r.permissions).filter(([,v])=>v).map(([k])=>k).join(', ') : String(r.permissions);
+      const expired = new Date(r.expiresAt) < new Date();
+      return `<tr class="row-compact hover:bg-surface-container-low transition-colors group border-t border-surface-container/40">
+        <td class="px-4 py-2">
+          <div class="font-bold text-sm">${escHtml(r.customerName)}</div>
+          <div class="text-[10px] mono-text text-on-surface-variant truncate max-w-[180px]">${escHtml(r.customerUUID)}</div>
+        </td>
+        <td class="px-4 py-2">
+          <div class="flex items-center gap-1.5 text-${color}">
+            <span class="w-1.5 h-1.5 rounded-full ${dot}"></span>
+            <span class="text-xs font-medium">${escHtml(label)}</span>
+          </div>
+        </td>
+        <td class="px-4 py-2 mono-text text-sm font-bold">${r.usageCount.toLocaleString()}</td>
+        <td class="px-4 py-2 mono-text text-xs opacity-60 whitespace-nowrap">${escHtml(deTime(r.lastUsedAt))}</td>
+        <td class="px-4 py-2 mono-text text-xs ${expired ? 'text-error' : ''} whitespace-nowrap">${escHtml(deTime(r.expiresAt))}</td>
+        <td class="px-4 py-2 text-xs text-on-surface-variant truncate max-w-[200px]" title="${escHtml(perms)}">${escHtml(perms)||'—'}</td>
+        <td class="px-4 py-2 text-right">
+          ${r.status === 0
+            ? `<button class="text-error opacity-0 group-hover:opacity-100 font-black uppercase tracking-tighter text-[10px] transition-opacity" onclick="setApiKeyStatus(${r.id}, 1, this)">Disable</button>`
+            : `<button class="text-primary opacity-0 group-hover:opacity-100 font-black uppercase tracking-tighter text-[10px] transition-opacity" onclick="setApiKeyStatus(${r.id}, 0, this)">Enable</button>`}
+        </td>
+      </tr>`;
+    }).join('');
+
+    el.innerHTML = pageWrap(
+      pageHero('API Keys', { sub: 'Customer access tokens',
+        actions: `<button class="bg-surface-container-high text-on-surface-variant px-4 py-2 rounded-lg text-[11px] font-black uppercase tracking-widest hover:bg-surface-variant transition-colors" onclick="showToast('Local-only tool — Issue New Key disabled')">Issue New Key</button>` }) +
+      tableShell(['Customer','Status','Usage','Last Used','Expires','Permissions','Actions'], rowsHtml)
+    );
+  } catch(e) {
+    setConnStatus('error');
+    el.innerHTML = pageWrap(pageHero('API Keys') + errorState(e.message));
+  }
 }
 
 async function setApiKeyStatus(id, status, btn) {
@@ -1466,13 +2143,31 @@ async function setApiKeyStatus(id, status, btn) {
   try {
     const res = await fetch(`/api/api-keys/${id}/status`, { method: 'PATCH', headers: dbHeaders(), body: JSON.stringify({ status }) });
     const data = await res.json();
-    if (data.error) { alert('Error: ' + data.error); btn.disabled = false; return; }
+    if (data.error) { showToast('Error: ' + data.error); btn.disabled = false; return; }
     renderApiKeys(document.getElementById('content'));
-  } catch(e) { alert(e.message); btn.disabled = false; }
+  } catch(e) { showToast(e.message); btn.disabled = false; }
 }
 
-// ─── Init ─────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════
+// UPTIME TICKER (decorative)
+// ═════════════════════════════════════════════════════════════════════════
+const _started = Date.now();
+function tickUptime() {
+  const ms = Date.now() - _started;
+  const h = Math.floor(ms/3600000);
+  const m = Math.floor((ms%3600000)/60000);
+  const s = Math.floor((ms%60000)/1000);
+  document.getElementById('uptimeDisplay').textContent = `${String(h).padStart(2,'0')}H ${String(m).padStart(2,'0')}M ${String(s).padStart(2,'0')}S`;
+}
+setInterval(tickUptime, 1000);
+tickUptime();
+
+// ═════════════════════════════════════════════════════════════════════════
+// INIT
+// ═════════════════════════════════════════════════════════════════════════
 loadConfigFromStorage();
+const tzEl = document.getElementById('tzDisplay');
+if (tzEl) tzEl.textContent = LOCAL_TZ;
 const initView = window.location.hash.replace('#', '') || 'session-logs';
 navigate(initView);
 </script>
