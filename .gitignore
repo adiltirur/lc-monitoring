@@ -1,3 +1,4 @@
 node_modules/
 .env
 .fcm_service_account.json
+.gbp_token.json

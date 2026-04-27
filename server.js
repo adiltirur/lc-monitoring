@@ -93,6 +93,204 @@ app.get('/api/env-config', (req, res) => {
   });
 });
 
+// ─── PMS (principa FHIR) proxy ────────────────────────────────────────────────
+// Mirrors the backend's `FHIRApiCaller` + `JwtProvider` (Dart) so the helper
+// can list a user's medications and documents from PMS. All calls are made
+// server-side; the browser never sees the secret.
+const crypto = require('crypto');
+
+// Both lcTestIdentifier and lcProdIdentifier are 'app.lillian-care.de' in
+// LillianCare-Core/.../const/fhir_string.dart:9-10 — test + prod share the
+// same identifier system, so one constant is enough.
+const PMS_IDENTIFIER = 'app.lillian-care.de';
+
+const PMS_CONFIG = {
+  dev:        { baseUrl: process.env.PMS_BASE_URL_DEV,     secret: process.env.PMS_SECRET_TEST },
+  staging:    { baseUrl: process.env.PMS_BASE_URL_STAGING, secret: process.env.PMS_SECRET_TEST },
+  production: { baseUrl: process.env.PMS_BASE_URL_PROD,    secret: process.env.PMS_SECRET_PROD },
+};
+
+// HS256 JWT cache keyed by secret. Matches JwtProvider: 10-min TTL, refresh
+// 60 s before expiry, drop on 401.
+const jwtCache = new Map();
+function pmsJwt(secret) {
+  const now = Math.floor(Date.now() / 1000);
+  const cached = jwtCache.get(secret);
+  if (cached && now < cached.expiresAt - 60) return cached.token;
+  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+  const body   = Buffer.from(JSON.stringify({ iat: now, exp: now + 600 })).toString('base64url');
+  const sig    = crypto.createHmac('sha256', secret).update(`${header}.${body}`).digest('base64url');
+  const token  = `${header}.${body}.${sig}`;
+  jwtCache.set(secret, { token, expiresAt: now + 600 });
+  return token;
+}
+
+function pmsConfigFromReq(req) {
+  const env = req.headers['x-env'] || 'dev';
+  const cfg = PMS_CONFIG[env];
+  if (!cfg || !cfg.baseUrl || !cfg.secret) {
+    const err = new Error(`PMS not configured for env "${env}" — set PMS_BASE_URL_* and PMS_SECRET_* in .env`);
+    err.status = 503;
+    throw err;
+  }
+  return cfg;
+}
+
+async function pmsFetch(req, path) {
+  const cfg = pmsConfigFromReq(req);
+  const url = cfg.baseUrl.replace(/\/$/, '') + '/' + path.replace(/^\//, '');
+  const hit = async () => fetch(url, {
+    headers: { 'Accept': 'application/fhir+json', 'Authorization': `Bearer ${pmsJwt(cfg.secret)}` },
+  });
+  let res = await hit();
+  if (res.status === 401) { jwtCache.delete(cfg.secret); res = await hit(); }
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    const hdrs = {};
+    res.headers.forEach((v, k) => { hdrs[k] = v; });
+    console.error(`[pms] ${res.status} ${url}\n  headers: ${JSON.stringify(hdrs)}\n  body: ${text || '(empty)'}`);
+    // FHIR servers return OperationOutcome on errors; pull the issue.diagnostics
+    // if present for a more useful message.
+    let msg = text;
+    try {
+      const j = JSON.parse(text);
+      if (j.resourceType === 'OperationOutcome' && Array.isArray(j.issue) && j.issue[0]) {
+        const iss = j.issue[0];
+        msg = iss.diagnostics || iss.details?.text || iss.code || text;
+      }
+    } catch { /* not JSON */ }
+    throw Object.assign(new Error(`PMS ${res.status}: ${(msg || '(empty body)').toString().slice(0, 400)}`), { status: res.status });
+  }
+  return res.json();
+}
+
+// Bundle parsers. We pull just the fields the UI surfaces — light-touch,
+// mirrors the Dart mappers (ApiUserDocument, ApiMedicationRes) for debug use.
+function parseDocumentBundle(bundle) {
+  const entries = (bundle && bundle.entry) || [];
+  return entries
+    .map(e => e.resource)
+    .filter(r => r && r.resourceType === 'DocumentReference')
+    .map(doc => {
+      const content = (doc.content || [])[0] || {};
+      const attachment = content.attachment || {};
+      const binaryRef = attachment.url || '';
+      // binary ref is typically "Binary/<id>" — strip the prefix for our /api/pms/binary/:id route.
+      const binaryID = binaryRef.replace(/^Binary\//, '');
+      const typeCoding = (doc.type && doc.type.coding && doc.type.coding[0]) || {};
+      return {
+        id: doc.id || '',
+        binaryID,
+        title: attachment.title || doc.description || '(untitled)',
+        description: doc.description || '',
+        contentType: attachment.contentType || '',
+        createdAt: attachment.creation || doc.date || '',
+        documentType: typeCoding.display || typeCoding.code || '',
+      };
+    })
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+}
+
+function parseMedicationBundle(bundle) {
+  const entries = (bundle && bundle.entry) || [];
+  const resources = entries.map(e => e.resource).filter(Boolean);
+  const medById = {};
+  for (const r of resources) {
+    if (r.resourceType === 'Medication' && r.id) medById[`Medication/${r.id}`] = r;
+  }
+  const requests = resources.filter(r => r.resourceType === 'MedicationRequest');
+  return requests
+    .map(req => {
+      const medRef = (req.medicationReference && req.medicationReference.reference) || '';
+      const med = medById[medRef];
+      const medCoding = (med && med.code && med.code.coding && med.code.coding[0]) || {};
+      const medName =
+        (med && med.code && med.code.text) ||
+        medCoding.display ||
+        (req.medicationCodeableConcept && req.medicationCodeableConcept.text) ||
+        '(unnamed medication)';
+      // PZN is typically in Medication.code.coding with system containing "pzn".
+      const pzn = ((med && med.code && med.code.coding) || [])
+        .find(c => c.system && /pzn/i.test(c.system));
+      const dosage = (req.dosageInstruction || []).map(d => ({
+        text: d.text || d.patientInstruction || '',
+        asNeeded: d.asNeededBoolean === true,
+        doseQuantity: (d.doseAndRate && d.doseAndRate[0] && d.doseAndRate[0].doseQuantity) || null,
+      }));
+      const reason =
+        (req.reasonCode || [])
+          .map(r => (r.text || (r.coding && r.coding[0] && r.coding[0].display) || ''))
+          .filter(Boolean)
+          .join(', ');
+      const form = (med && med.form && med.form.coding && med.form.coding[0] && med.form.coding[0].display) || '';
+      return {
+        id: req.id || '',
+        medicationName: medName,
+        status: req.status || '',
+        intent: req.intent || '',
+        authoredOn: req.authoredOn || '',
+        pzn: pzn ? pzn.code : null,
+        form,
+        reason,
+        dosage,
+        manufacturer: (med && med.manufacturer && med.manufacturer.display) || null,
+        note: (req.note || []).map(n => n.text).filter(Boolean).join('\n'),
+        validityEnd: req.dispenseRequest && req.dispenseRequest.validityPeriod && req.dispenseRequest.validityPeriod.end || null,
+      };
+    })
+    .sort((a, b) => String(b.authoredOn).localeCompare(String(a.authoredOn)));
+}
+
+// URLs below match the exact wire format the Dart backend sends via
+// Uri.parse(): `|` encoded to %7C; `:` / `/` inside _profile stay RAW.
+// HAPI FHIR's _profile matching rejects the fully-encoded form.
+app.get('/api/pms/users/:lcAccountId/documents', async (req, res) => {
+  try {
+    const id = encodeURIComponent(req.params.lcAccountId);
+    const path =
+      `DocumentReference?subject.identifier=${PMS_IDENTIFIER}%7C${id}` +
+      `&_profile=https://app.lillian-care.de/DocumentReference`;
+    const bundle = await pmsFetch(req, path);
+    res.json({ documents: parseDocumentBundle(bundle) });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
+app.get('/api/pms/users/:lcAccountId/medications', async (req, res) => {
+  try {
+    const id = encodeURIComponent(req.params.lcAccountId);
+    const path =
+      `MedicationRequest?subject:Patient.identifier=${PMS_IDENTIFIER}%7C${id}` +
+      `&_include=Medication&_profile=http://medicationrequest.lilliancare.de`;
+    const bundle = await pmsFetch(req, path);
+    res.json({ medications: parseMedicationBundle(bundle) });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
+// Debug: hits PMS `metadata` (CapabilityStatement) — no query params, just
+// tests baseUrl + JWT auth. If this returns a Bundle/CapabilityStatement,
+// the 400 on searches is a URL-encoding issue, not auth.
+app.get('/api/pms/debug/metadata', async (req, res) => {
+  try {
+    const bundle = await pmsFetch(req, 'metadata');
+    res.json({ ok: true, resourceType: bundle.resourceType, fhirVersion: bundle.fhirVersion, software: bundle.software });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
+app.get('/api/pms/binary/:id', async (req, res) => {
+  try {
+    const bin = await pmsFetch(req, `Binary/${encodeURIComponent(req.params.id)}`);
+    res.json({ contentType: bin.contentType || '', base64: bin.data || '' });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
 // ─── Routes: connection test ──────────────────────────────────────────────────
 app.get('/api/connection-test', async (req, res) => {
   try {
@@ -465,6 +663,629 @@ app.get('/api/future-calls/:id', async (req, res) => {
     const rows = await query(req, `SELECT id, name, "time", "serverId", identifier, "serializedObject" FROM serverpod_future_call WHERE id = $1`, [parseInt(req.params.id)]);
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
     res.json(rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Routes: Analytics (per-praxis monthly metrics) ──────────────────────────
+// Port of LillianCare-Core/.../endpoints/admin/analytics/admin_analytics.dart.
+// All counts + lists come from the same Postgres DB we already connect to —
+// no Serverpod call, no external service.
+
+// Overview across ALL praxes for a date range.
+//
+// Scaling: one aggregate query per table using GROUP BY "praxisId" — each is a
+// single indexed scan regardless of praxis count. We do NOT return row lists
+// (no `allAppAppointments` etc.) and no daily time series, so the payload is
+// ~10 fields × praxes count, typically under 10 KB even for 100 praxes.
+// Total wall time ≈ the slowest single GROUP BY, since everything runs in
+// Promise.all. Safe to hit on prod without hanging the DB.
+app.get('/api/analytics/overview', async (req, res) => {
+  try {
+    const now = new Date();
+    const parseDate = (s, fb) => { if (!s) return fb; const d = new Date(s); return isNaN(d) ? fb : d; };
+    const defaultEnd   = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    const defaultStart = new Date(defaultEnd.getTime() - 30 * 86400000);
+    const start = parseDate(req.query.startDate, defaultStart);
+    const end   = parseDate(req.query.endDate,   defaultEnd);
+    if (end <= start) return res.status(400).json({ error: 'endDate must be after startDate' });
+
+    const pad = n => String(n).padStart(2, '0');
+    const isoNaive = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    const rangeStart = isoNaive(start);
+    const rangeEnd   = isoNaive(end);
+    const rangeStartIso = start.toISOString();
+    const rangeEndIso   = end.toISOString();
+
+    // Each of these returns [{ praxisId, ...counts }, ...] or a global count.
+    const [
+      appApptByPraxis,
+      guestApptByPraxis,
+      appTookPlaceByPraxis,
+      guestTookPlaceByPraxis,
+      npsSentByPraxis,
+      fhirNpsByPraxis,
+      docRequestByPraxis,
+      openConsultByPraxis,
+      newRegByPraxis,
+      patientsByPraxis,
+      totalCancellations,
+      totalQuestionnaires,
+      totalDeletions,
+      pmsDowntimeSum,
+    ] = await Promise.all([
+      query(req, `SELECT "praxisId", COUNT(*)::int AS c FROM app_user_appointment
+                  WHERE "praxisId" IS NOT NULL AND "createdAt">=$1 AND "createdAt"<$2 GROUP BY "praxisId"`, [rangeStart, rangeEnd]),
+      query(req, `SELECT "praxisId",
+                    COUNT(*)::int AS total,
+                    COUNT(*) FILTER (WHERE "isBookedFromPraxis"=true)::int AS praxis,
+                    COUNT(*) FILTER (WHERE "isBookedFromPraxis" IS NOT TRUE)::int AS web,
+                    COUNT(*) FILTER (WHERE "isBookedFromPraxis"=true AND "hasEmail"=false)::int AS praxis_no_email
+                  FROM guest_appointment
+                  WHERE "praxisId" IS NOT NULL AND "createdAt">=$1 AND "createdAt"<$2 GROUP BY "praxisId"`, [rangeStart, rangeEnd]),
+      query(req, `SELECT "praxisId", COUNT(*)::int AS c FROM app_user_appointment
+                  WHERE "praxisId" IS NOT NULL AND "startTime" IS NOT NULL
+                    AND "startTime">=$1 AND "startTime"<$2 GROUP BY "praxisId"`, [rangeStartIso, rangeEndIso]),
+      query(req, `SELECT "praxisId",
+                    COUNT(*)::int AS total,
+                    COUNT(*) FILTER (WHERE "isBookedFromPraxis"=true)::int AS praxis,
+                    COUNT(*) FILTER (WHERE "isBookedFromPraxis" IS NOT TRUE)::int AS web
+                  FROM guest_appointment
+                  WHERE "praxisId" IS NOT NULL AND "startTime" IS NOT NULL
+                    AND "startTime">=$1 AND "startTime"<$2 GROUP BY "praxisId"`, [rangeStartIso, rangeEndIso]),
+      query(req, `SELECT "praxisId", COUNT(*)::int AS c FROM app_user_nps_sent
+                  WHERE "createdAt">=$1 AND "createdAt"<$2 GROUP BY "praxisId"`, [rangeStart, rangeEnd]),
+      query(req, `SELECT "praxisId",
+                    COUNT(*)::int AS total,
+                    COUNT(*) FILTER (WHERE "hasEmail"=false)::int AS no_email
+                  FROM fhir_nps WHERE "createdAt">=$1 AND "createdAt"<$2 GROUP BY "praxisId"`, [rangeStart, rangeEnd]),
+      query(req, `SELECT "praxisId",
+                    COUNT(*)::int AS total,
+                    COUNT(*) FILTER (WHERE "isFromWeb"=false)::int AS from_app,
+                    COUNT(*) FILTER (WHERE "isFromWeb"=true)::int  AS from_web
+                  FROM app_user_document_request
+                  WHERE "createdAt">=$1 AND "createdAt"<$2 GROUP BY "praxisId"`, [rangeStart, rangeEnd]),
+      query(req, `SELECT "praxisId", COUNT(*)::int AS c FROM app_user_open_consultation
+                  WHERE "createdAt">=$1 AND "createdAt"<$2 GROUP BY "praxisId"`, [rangeStart, rangeEnd]),
+      query(req, `SELECT "praxisId",
+                    COUNT(*)::int AS total,
+                    COUNT(*) FILTER (WHERE "isVerified"=true)::int AS verified
+                  FROM app_user_info
+                  WHERE "praxisId" IS NOT NULL AND "createdAt">=$1 AND "createdAt"<$2 GROUP BY "praxisId"`, [rangeStart, rangeEnd]),
+      query(req, `SELECT "praxisId",
+                    COUNT(*)::int AS total,
+                    COUNT(*) FILTER (WHERE "isVerified"=true)::int AS verified
+                  FROM app_user_info WHERE "praxisId" IS NOT NULL GROUP BY "praxisId"`, []),
+      query(req, `SELECT COUNT(*)::int AS c FROM app_user_appointment_cancellation_reason WHERE "createdAt">=$1 AND "createdAt"<$2`, [rangeStart, rangeEnd]),
+      query(req, `SELECT COUNT(*)::int AS c FROM app_user_questionnaire WHERE "answeredAt">=$1 AND "answeredAt"<$2`, [rangeStart, rangeEnd]),
+      query(req, `SELECT COUNT(*)::int AS c FROM app_user_deletion_feedback WHERE "createdAt">=$1 AND "createdAt"<$2`, [rangeStart, rangeEnd]),
+      query(req, `SELECT COALESCE(SUM("totalDownTimeInSeconds"), 0)::bigint AS s FROM analytics_pms_downtime WHERE "createdAt">=$1 AND "createdAt"<$2`, [rangeStart, rangeEnd]),
+    ]);
+
+    // Merge into one row per praxisId.
+    const byPraxis = {};
+    const touch = id => (byPraxis[id] ||= {
+      praxisId: id,
+      appAppointments: 0, guestAppointments: 0,
+      guestBookedFromWeb: 0, guestBookedFromPraxis: 0, guestBookedFromPraxisNoEmail: 0,
+      appointmentsTotal: 0,
+      appTookPlace: 0, guestTookPlaceWeb: 0, guestTookPlacePraxis: 0,
+      tookPlaceTotal: 0,
+      npsEmailsSent: 0, guestNPS: 0, guestNPSNoEmail: 0, totalNPS: 0,
+      docRequests: 0, docRequestsFromApp: 0, docRequestsFromWeb: 0,
+      openConsultations: 0,
+      newRegistrations: 0, newVerifiedRegistrations: 0,
+      totalPatients: 0, totalVerifiedPatients: 0,
+    });
+
+    for (const r of appApptByPraxis)   touch(r.praxisId).appAppointments = r.c;
+    for (const r of guestApptByPraxis) {
+      const p = touch(r.praxisId);
+      p.guestAppointments           = r.total;
+      p.guestBookedFromPraxis       = r.praxis;
+      p.guestBookedFromWeb          = r.web;
+      p.guestBookedFromPraxisNoEmail= r.praxis_no_email;
+    }
+    for (const r of appTookPlaceByPraxis)   touch(r.praxisId).appTookPlace = r.c;
+    for (const r of guestTookPlaceByPraxis) {
+      const p = touch(r.praxisId);
+      p.guestTookPlaceWeb    = r.web;
+      p.guestTookPlacePraxis = r.praxis;
+    }
+    for (const r of npsSentByPraxis) touch(r.praxisId).npsEmailsSent = r.c;
+    for (const r of fhirNpsByPraxis) {
+      const p = touch(r.praxisId);
+      p.guestNPS        = r.total;
+      p.guestNPSNoEmail = r.no_email;
+    }
+    for (const r of docRequestByPraxis) {
+      const p = touch(r.praxisId);
+      p.docRequests        = r.total;
+      p.docRequestsFromApp = r.from_app;
+      p.docRequestsFromWeb = r.from_web;
+    }
+    for (const r of openConsultByPraxis) touch(r.praxisId).openConsultations = r.c;
+    for (const r of newRegByPraxis) {
+      const p = touch(r.praxisId);
+      p.newRegistrations         = r.total;
+      p.newVerifiedRegistrations = r.verified;
+    }
+    for (const r of patientsByPraxis) {
+      const p = touch(r.praxisId);
+      p.totalPatients         = r.total;
+      p.totalVerifiedPatients = r.verified;
+    }
+
+    // Derive totals per praxis + rates.
+    const praxes = Object.values(byPraxis).map(p => {
+      p.appointmentsTotal = p.appAppointments + p.guestBookedFromWeb + p.guestBookedFromPraxis + p.guestBookedFromPraxisNoEmail;
+      p.tookPlaceTotal = p.appTookPlace + p.guestTookPlaceWeb + p.guestTookPlacePraxis;
+      p.totalNPS = p.npsEmailsSent + p.guestNPS;
+      p.npsCoveragePercentage = p.appointmentsTotal > 0 ? (p.totalNPS / p.appointmentsTotal) * 100 : 0;
+      p.verificationRate      = p.newRegistrations > 0 ? (p.newVerifiedRegistrations / p.newRegistrations) * 100 : 0;
+      return p;
+    }).sort((a, b) => b.appointmentsTotal - a.appointmentsTotal);
+
+    // Grand totals across all praxes.
+    const sumAll = key => praxes.reduce((s, p) => s + (p[key] || 0), 0);
+    const summary = {
+      praxesCount:             praxes.length,
+      appointmentsTotal:       sumAll('appointmentsTotal'),
+      tookPlaceTotal:          sumAll('tookPlaceTotal'),
+      newRegistrations:        sumAll('newRegistrations'),
+      newVerifiedRegistrations:sumAll('newVerifiedRegistrations'),
+      totalPatients:           sumAll('totalPatients'),
+      totalVerifiedPatients:   sumAll('totalVerifiedPatients'),
+      docRequests:             sumAll('docRequests'),
+      openConsultations:       sumAll('openConsultations'),
+      npsEmailsSent:           sumAll('npsEmailsSent'),
+      guestNPS:                sumAll('guestNPS'),
+      guestNPSNoEmail:         sumAll('guestNPSNoEmail'),
+      totalNPS:                sumAll('totalNPS'),
+      // Global (not per-praxis in the schema)
+      totalCancellations:      totalCancellations[0].c,
+      totalQuestionnaires:     totalQuestionnaires[0].c,
+      totalDeletions:          totalDeletions[0].c,
+      pmsDowntimeSeconds:      parseInt(pmsDowntimeSum[0].s, 10) || 0,
+      pmsDowntimeMinutes:      (parseInt(pmsDowntimeSum[0].s, 10) || 0) / 60,
+    };
+
+    res.json({
+      rangeStart: start.toISOString(),
+      rangeEnd:   end.toISOString(),
+      summary,
+      praxes,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Praxis names — {lcId: "Name"} map. Queried once per DB connection and
+// cached for 5 minutes. Tiny table (~100 rows), minimal pressure on the DB.
+const praxisNameCache = new Map(); // cacheKey -> { map, expiresAt }
+app.get('/api/praxis-names', async (req, res) => {
+  try {
+    const ck = (req.headers['x-db-host'] || '') + '|' + (req.headers['x-db-name'] || '');
+    const now = Date.now();
+    const hit = praxisNameCache.get(ck);
+    if (hit && hit.expiresAt > now && req.query.refresh !== '1') {
+      return res.json({ cached: true, names: hit.map });
+    }
+    const rows = await query(req, `SELECT "lcId", name, "shortName" FROM praxis_config ORDER BY "lcId"`);
+    const map = {};
+    for (const r of rows) map[r.lcId] = r.name || r.shortName || r.lcId;
+    praxisNameCache.set(ck, { map, expiresAt: now + 5 * 60 * 1000 });
+    res.json({ cached: false, names: map });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/analytics/praxes', async (req, res) => {
+  try {
+    const rows = await query(
+      req,
+      `SELECT DISTINCT "praxisId" FROM app_user_info
+       WHERE "praxisId" IS NOT NULL AND "praxisId" <> ''
+       ORDER BY "praxisId"`
+    );
+    res.json({ praxes: rows.map(r => r.praxisId) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Port of GetEnhancedAdminAnalytics + EnhancedPraxisAnalyticsCalculator.
+// Returns counters, derived rates, daily time series, and top-10 category
+// breakdowns — everything the praxis app's analytics_screen.dart renders.
+app.get('/api/analytics', async (req, res) => {
+  try {
+    const praxisId = (req.query.praxisId || '').toString().trim();
+    if (!praxisId) return res.status(400).json({ error: 'praxisId is required' });
+
+    const now = new Date();
+    const parseDate = (s, fallback) => {
+      if (!s) return fallback;
+      const d = new Date(s);
+      return isNaN(d.getTime()) ? fallback : d;
+    };
+    // Default = last 30 days ending tomorrow 00:00 (exclusive upper).
+    const defaultEnd   = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    const defaultStart = new Date(defaultEnd.getTime() - 30 * 86400000);
+    const start = parseDate(req.query.startDate, defaultStart);
+    const end   = parseDate(req.query.endDate,   defaultEnd);
+    if (end <= start) return res.status(400).json({ error: 'endDate must be after startDate' });
+
+    const isoNaive = d => {
+      const pad = n => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    };
+    const rangeStart = isoNaive(start);
+    const rangeEnd   = isoNaive(end);
+    // startTime on appointments is stored as ISO text ('2026-04-05T10:00:00'),
+    // so compare against the ISO form (no space).
+    const rangeStartIso = start.toISOString();
+    const rangeEndIso   = end.toISOString();
+
+    const countOne = (sql, params) => query(req, sql, params).then(r => parseInt(r[0].count));
+
+    const [
+      npsEmailsSent,
+      guestNPSSent,
+      guestNPSRequestWithoutEmail,
+      totalPatients,
+      totalVerifiedPatients,
+      appointmentsTookPlaceFromApp,
+      appointmentsTookPlaceFromWeb,
+      appointmentsTookPlaceFromPraxis,
+      appointmentsTookPlaceFromPraxisWithoutEmail,
+      appAppointmentsInRange,
+      webAppointmentsInRange,
+      pmsDowntimes,
+      openConsultations,
+      cancellationReasons,
+      newRegistrations,
+      documentRequestsInRange,
+      questionnairesAnswered,
+      deletionFeedback,
+    ] = await Promise.all([
+      countOne(`SELECT COUNT(*) FROM app_user_nps_sent WHERE "praxisId"=$1 AND "createdAt">=$2 AND "createdAt"<$3`, [praxisId, rangeStart, rangeEnd]),
+      countOne(`SELECT COUNT(*) FROM fhir_nps          WHERE "praxisId"=$1 AND "createdAt">=$2 AND "createdAt"<$3`, [praxisId, rangeStart, rangeEnd]),
+      countOne(`SELECT COUNT(*) FROM fhir_nps          WHERE "praxisId"=$1 AND "createdAt">=$2 AND "createdAt"<$3 AND "hasEmail"=false`, [praxisId, rangeStart, rangeEnd]),
+      countOne(`SELECT COUNT(*) FROM app_user_info     WHERE "praxisId"=$1`, [praxisId]),
+      countOne(`SELECT COUNT(*) FROM app_user_info     WHERE "praxisId"=$1 AND "isVerified"=true`, [praxisId]),
+      countOne(`SELECT COUNT(*) FROM app_user_appointment WHERE "praxisId"=$1 AND "startTime" IS NOT NULL AND "startTime">=$2 AND "startTime"<$3`, [praxisId, rangeStartIso, rangeEndIso]),
+      countOne(`SELECT COUNT(*) FROM guest_appointment    WHERE "praxisId"=$1 AND "startTime" IS NOT NULL AND "startTime">=$2 AND "startTime"<$3 AND ("isBookedFromPraxis" IS NOT TRUE)`, [praxisId, rangeStartIso, rangeEndIso]),
+      countOne(`SELECT COUNT(*) FROM guest_appointment    WHERE "praxisId"=$1 AND "startTime" IS NOT NULL AND "startTime">=$2 AND "startTime"<$3 AND "isBookedFromPraxis"=true`, [praxisId, rangeStartIso, rangeEndIso]),
+      countOne(`SELECT COUNT(*) FROM guest_appointment    WHERE "praxisId"=$1 AND "startTime" IS NOT NULL AND "startTime">=$2 AND "startTime"<$3 AND "isBookedFromPraxis"=true AND "hasEmail"=false`, [praxisId, rangeStartIso, rangeEndIso]),
+      query(req, `SELECT id, "userId", "familyMemberId", category, reason, "appointmentId", "pmsAppointmentId", status, "praxisId", "startTime", "createdAt" FROM app_user_appointment WHERE "praxisId"=$1 AND "createdAt">=$2 AND "createdAt"<$3`, [praxisId, rangeStart, rangeEnd]),
+      query(req, `SELECT id, "bookingId", "patientId", "praxisId", category, "hasEmail", "isBookedFromPraxis", "createdAt" FROM guest_appointment WHERE "praxisId"=$1 AND "createdAt">=$2 AND "createdAt"<$3`, [praxisId, rangeStart, rangeEnd]),
+      query(req, `SELECT id, "totalDownTimeInSeconds", "createdAt" FROM analytics_pms_downtime WHERE "createdAt">=$1 AND "createdAt"<$2`, [rangeStart, rangeEnd]),
+      query(req, `SELECT id, "userId", category, reason, "praxisId", status, "createdAt" FROM app_user_open_consultation WHERE "praxisId"=$1 AND "createdAt">=$2 AND "createdAt"<$3`, [praxisId, rangeStart, rangeEnd]),
+      query(req, `SELECT id, "userId", reason, "createdAt" FROM app_user_appointment_cancellation_reason WHERE "createdAt">=$1 AND "createdAt"<$2`, [rangeStart, rangeEnd]),
+      query(req, `SELECT id, "firstName", "lastName", email, "praxisId", "isVerified", "createdAt" FROM app_user_info WHERE "praxisId"=$1 AND "createdAt">=$2 AND "createdAt"<$3`, [praxisId, rangeStart, rangeEnd]),
+      query(req, `SELECT id, "userId", category, "praxisId", "isFromWeb", "createdAt" FROM app_user_document_request WHERE "praxisId"=$1 AND "createdAt">=$2 AND "createdAt"<$3`, [praxisId, rangeStart, rangeEnd]),
+      query(req, `SELECT id, "userInfoId", "questionnaireId", "answeredAt", "createdAt" FROM app_user_questionnaire WHERE "answeredAt">=$1 AND "answeredAt"<$2`, [rangeStart, rangeEnd]),
+      query(req, `SELECT id, reason, "createdAt" FROM app_user_deletion_feedback WHERE "createdAt">=$1 AND "createdAt"<$2`, [rangeStart, rangeEnd]),
+    ]);
+
+    // Derived counts from the in-range appointment lists (matches the Dart
+    // calculator's getters so numbers always agree with the lists we return).
+    const appointmentsBookedFromApp    = appAppointmentsInRange.length;
+    const appointmentsBookedFromWeb    = webAppointmentsInRange.filter(a => a.isBookedFromPraxis !== true).length;
+    const appointmentsBookedFromPraxis = webAppointmentsInRange.filter(a => a.isBookedFromPraxis === true).length;
+    const appointmentsBookedFromPraxisWithoutEmail = webAppointmentsInRange.filter(a => a.isBookedFromPraxis === true && a.hasEmail !== true).length;
+    const totalAppointments = appointmentsBookedFromApp + appointmentsBookedFromWeb + appointmentsBookedFromPraxis + appointmentsBookedFromPraxisWithoutEmail;
+
+    const newVerifiedRegistrations = newRegistrations.filter(u => u.isVerified === true).length;
+    const familyMemberAppointments = appAppointmentsInRange.filter(a => a.familyMemberId != null).length;
+
+    const documentRequestFromApp = documentRequestsInRange.filter(d => d.isFromWeb === false).length;
+    const documentRequestFromWeb = documentRequestsInRange.filter(d => d.isFromWeb === true).length;
+    const documentRequestUnknown = documentRequestsInRange.filter(d => d.isFromWeb === null).length;
+    const totalDocumentRequests  = documentRequestFromApp + documentRequestFromWeb + documentRequestUnknown;
+
+    const totalCancellations = cancellationReasons.length;
+    const cancellationRate = totalAppointments > 0 ? (totalCancellations / totalAppointments) * 100 : 0;
+    const verificationRate = newRegistrations.length > 0 ? (newVerifiedRegistrations / newRegistrations.length) * 100 : 0;
+    const familyMemberBookingRate = totalAppointments > 0 ? (familyMemberAppointments / totalAppointments) * 100 : 0;
+    const totalNPSSent = npsEmailsSent + guestNPSSent;
+    const npsCoveragePercentage = totalAppointments > 0 ? (totalNPSSent / totalAppointments) * 100 : 0;
+    const pmsDowntimeSeconds = pmsDowntimes.reduce((s, d) => s + (d.totalDownTimeInSeconds || 0), 0);
+    const pmsDowntimeMinutes = pmsDowntimeSeconds / 60;
+    const totalAppointmentsTookPlace = appointmentsTookPlaceFromApp + appointmentsTookPlaceFromWeb + appointmentsTookPlaceFromPraxis;
+
+    // Daily time-series — one bucket per calendar day in [start, end).
+    const dateKey = d => {
+      const x = new Date(d);
+      const pad = n => String(n).padStart(2, '0');
+      return `${x.getFullYear()}-${pad(x.getMonth()+1)}-${pad(x.getDate())}`;
+    };
+    const dailyBuckets = [];
+    for (let cursor = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+         cursor < end;
+         cursor.setDate(cursor.getDate() + 1)) {
+      dailyBuckets.push(dateKey(cursor));
+    }
+    const initCounts = () => Object.fromEntries(dailyBuckets.map(k => [k, 0]));
+    const c = {
+      app: initCounts(), web: initCounts(), praxis: initCounts(),
+      reg: initCounts(), ver: initCounts(),
+      docApp: initCounts(), docWeb: initCounts(),
+      oc: initCounts(), cancel: initCounts(), q: initCounts(),
+    };
+    for (const a of appAppointmentsInRange) c.app[dateKey(a.createdAt)]++;
+    for (const a of webAppointmentsInRange) {
+      const k = dateKey(a.createdAt);
+      if (a.isBookedFromPraxis === true) c.praxis[k]++; else c.web[k]++;
+    }
+    for (const u of newRegistrations) {
+      const k = dateKey(u.createdAt);
+      c.reg[k]++;
+      if (u.isVerified === true) c.ver[k]++;
+    }
+    for (const d of documentRequestsInRange) {
+      const k = dateKey(d.createdAt);
+      if (d.isFromWeb === true) c.docWeb[k]++;
+      else if (d.isFromWeb === false) c.docApp[k]++;
+    }
+    for (const oc of openConsultations) c.oc[dateKey(oc.createdAt)]++;
+    for (const x of cancellationReasons) c.cancel[dateKey(x.createdAt)]++;
+    for (const q of questionnairesAnswered) c.q[dateKey(q.answeredAt)]++;
+
+    const dailyTimeSeries = dailyBuckets.map(k => ({
+      date: k,
+      appointmentsApp:         c.app[k],
+      appointmentsWeb:         c.web[k],
+      appointmentsPraxis:      c.praxis[k],
+      newRegistrations:        c.reg[k],
+      verifiedRegistrations:   c.ver[k],
+      documentRequestsApp:     c.docApp[k],
+      documentRequestsWeb:     c.docWeb[k],
+      openConsultations:       c.oc[k],
+      cancellations:           c.cancel[k],
+      questionnairesCompleted: c.q[k],
+    }));
+
+    // Top-10 category breakdowns.
+    const topCategories = (counts) =>
+      Object.entries(counts).sort((a,b) => b[1] - a[1]).slice(0, 10)
+        .map(([category, count]) => ({ category, count }));
+
+    const apptCatCounts = {};
+    for (const a of appAppointmentsInRange) apptCatCounts[a.category||'—'] = (apptCatCounts[a.category||'—'] || 0) + 1;
+    for (const a of webAppointmentsInRange) apptCatCounts[a.category||'—'] = (apptCatCounts[a.category||'—'] || 0) + 1;
+    const appointmentCategories = topCategories(apptCatCounts);
+
+    // cancellationReasons.reason is a JSON array in Postgres (json type), pg
+    // driver returns it as an actual array.
+    const cancelReasonCounts = {};
+    for (const row of cancellationReasons) {
+      const list = Array.isArray(row.reason) ? row.reason : [];
+      for (const r of list) cancelReasonCounts[String(r)] = (cancelReasonCounts[String(r)] || 0) + 1;
+    }
+    const cancellationReasonsTop = topCategories(cancelReasonCounts);
+
+    const deletionReasonCounts = {};
+    for (const row of deletionFeedback) {
+      const list = Array.isArray(row.reason) ? row.reason : [];
+      for (const r of list) deletionReasonCounts[String(r)] = (deletionReasonCounts[String(r)] || 0) + 1;
+    }
+    const deletionReasons = topCategories(deletionReasonCounts);
+
+    res.json({
+      praxisId,
+      rangeStart: start.toISOString(),
+      rangeEnd:   end.toISOString(),
+      // Counters
+      npsEmailsSent, guestNPSSent, guestNPSRequestWithoutEmail, totalNPSSent,
+      totalPatients, totalVerifiedPatients,
+      appointmentsBookedFromApp, appointmentsBookedFromWeb,
+      appointmentsBookedFromPraxis, appointmentsBookedFromPraxisWithoutEmail,
+      totalAppointments,
+      appointmentsTookPlaceFromApp, appointmentsTookPlaceFromWeb,
+      appointmentsTookPlaceFromPraxis, appointmentsTookPlaceFromPraxisWithoutEmail,
+      totalAppointmentsTookPlace,
+      totalNewRegistrations: newRegistrations.length,
+      totalNewVerifiedRegistrations: newVerifiedRegistrations,
+      verificationRate,
+      totalDocumentRequests, documentRequestFromApp, documentRequestFromWeb, documentRequestUnknown,
+      totalOpenConsultations: openConsultations.length,
+      totalCancellations, cancellationRate,
+      totalQuestionnairesCompleted: questionnairesAnswered.length,
+      familyMemberAppointments, familyMemberBookingRate,
+      npsCoveragePercentage,
+      pmsDowntimeSeconds, pmsDowntimeMinutes,
+      // Charts
+      dailyTimeSeries,
+      appointmentCategories,
+      cancellationReasons: cancellationReasonsTop,
+      deletionReasons,
+      // Raw lists for debug-style tables
+      pmsDowntimes,
+      appAppointmentsInRange,
+      webAppointmentsInRange,
+      openConsultations,
+      newRegistrations,
+      documentRequestsInRange,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Routes: Message Outbox (Brevo email/SMS durable queue) ───────────────────
+const OUTBOX_CHANNELS = ['email', 'sms'];
+const OUTBOX_STATUSES = ['pending', 'sending', 'sent', 'failed', 'dead'];
+const OUTBOX_ERROR_CLASSES = ['permanent', 'transient'];
+
+app.get('/api/message-outbox', async (req, res) => {
+  try {
+    const { status, channel, dateFrom, dateTo, correlationId, recipient, lastHttpStatus, lastErrorClass, page = 1, pageSize = 50 } = req.query;
+    const filters = [];
+    if (status) {
+      const list = String(status).split(',').map(s => s.trim()).filter(Boolean);
+      const idxs = list.map(s => OUTBOX_STATUSES.indexOf(s)).filter(i => i >= 0);
+      if (idxs.length) filters.push(['status', '= ANY', idxs]);
+    }
+    if (channel) {
+      const idx = OUTBOX_CHANNELS.indexOf(String(channel));
+      if (idx >= 0) filters.push(['channel', '=', idx]);
+    }
+    if (lastErrorClass) {
+      const idx = OUTBOX_ERROR_CLASSES.indexOf(String(lastErrorClass));
+      if (idx >= 0) filters.push(['"lastErrorClass"', '=', idx]);
+    }
+    if (dateFrom) filters.push(['"createdAt"', '>=', dateFrom]);
+    if (dateTo) filters.push(['"createdAt"', '<=', dateTo]);
+    if (correlationId) filters.push(['"correlationId"', 'ILIKE', `%${correlationId}%`]);
+    if (recipient) filters.push(['payload', 'ILIKE', `%${recipient}%`]);
+    if (lastHttpStatus) filters.push(['"lastHttpStatus"', '=', parseInt(lastHttpStatus)]);
+
+    const clauses = [];
+    const params = [];
+    for (const [col, op, val] of filters) {
+      if (val === null || val === undefined || val === '') continue;
+      if (Array.isArray(val) && val.length === 0) continue;
+      params.push(val);
+      if (op === '= ANY') {
+        clauses.push(`${col} = ANY($${params.length}::int[])`);
+      } else {
+        clauses.push(`${col} ${op} $${params.length}`);
+      }
+    }
+    const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : '';
+    const baseSql = `SELECT id, channel, status, "attemptCount", "maxAttempts", "lastHttpStatus", "lastErrorClass", "nextAttemptAt", "firstTeamsNotifiedAt", "correlationId", "createdAt", "updatedAt", "sentAt", "deadAt" FROM core_message_outbox ${where} ORDER BY "createdAt" DESC`;
+    const countSql = `SELECT COUNT(*) FROM core_message_outbox ${where}`;
+    const result = await paginate(req, baseSql, countSql, params, parseInt(page), parseInt(pageSize));
+
+    result.rows = result.rows.map(r => ({
+      ...r,
+      channel: OUTBOX_CHANNELS[r.channel] ?? r.channel,
+      status: OUTBOX_STATUSES[r.status] ?? r.status,
+      lastErrorClass: r.lastErrorClass === null ? null : (OUTBOX_ERROR_CLASSES[r.lastErrorClass] ?? r.lastErrorClass),
+    }));
+
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/message-outbox/stats', async (req, res) => {
+  try {
+    const rows = await query(
+      req,
+      `SELECT channel, status, COUNT(*)::int AS count
+       FROM core_message_outbox
+       WHERE "createdAt" > NOW() - INTERVAL '30 days'
+       GROUP BY channel, status`
+    );
+    const sentLast24hRows = await query(
+      req,
+      `SELECT channel, COUNT(*)::int AS count
+       FROM core_message_outbox
+       WHERE status = 2 AND "sentAt" > NOW() - INTERVAL '24 hours'
+       GROUP BY channel`
+    );
+
+    const stats = {};
+    for (const ch of OUTBOX_CHANNELS) {
+      stats[ch] = { pending: 0, sending: 0, sent: 0, failed: 0, dead: 0, sentLast24h: 0 };
+    }
+    for (const r of rows) {
+      const ch = OUTBOX_CHANNELS[r.channel];
+      const st = OUTBOX_STATUSES[r.status];
+      if (ch && st && stats[ch]) stats[ch][st] = r.count;
+    }
+    for (const r of sentLast24hRows) {
+      const ch = OUTBOX_CHANNELS[r.channel];
+      if (ch && stats[ch]) stats[ch].sentLast24h = r.count;
+    }
+    res.json(stats);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/message-outbox/:id', async (req, res) => {
+  try {
+    const rows = await query(
+      req,
+      `SELECT * FROM core_message_outbox WHERE id = $1`,
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    const r = rows[0];
+    let decodedPayload = null;
+    try { decodedPayload = JSON.parse(r.payload); } catch { decodedPayload = r.payload; }
+    res.json({
+      ...r,
+      channel: OUTBOX_CHANNELS[r.channel] ?? r.channel,
+      status: OUTBOX_STATUSES[r.status] ?? r.status,
+      lastErrorClass: r.lastErrorClass === null ? null : (OUTBOX_ERROR_CLASSES[r.lastErrorClass] ?? r.lastErrorClass),
+      decodedPayload,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/message-outbox/:id/retry', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const existing = await query(req, `SELECT id FROM core_message_outbox WHERE id = $1`, [id]);
+    if (!existing.length) return res.status(404).json({ error: 'Not found' });
+
+    await query(
+      req,
+      `UPDATE core_message_outbox
+       SET status = 0, "nextAttemptAt" = NOW(), "attemptCount" = 0, "firstTeamsNotifiedAt" = NULL, "updatedAt" = NOW()
+       WHERE id = $1`,
+      [id]
+    );
+
+    const identifier = `messageOutbox_${id}_manual_${Date.now()}`;
+    const payload = JSON.stringify({ outboxId: id });
+    await query(
+      req,
+      `INSERT INTO serverpod_future_call (name, "time", "serializedObject", "serverId", identifier)
+       VALUES ($1, NOW(), $2, 'helper', $3)`,
+      ['messageOutboxDispatchFutureCall', payload, identifier]
+    );
+
+    const updated = await query(req, `SELECT * FROM core_message_outbox WHERE id = $1`, [id]);
+    const r = updated[0];
+    res.json({
+      ok: true,
+      row: {
+        ...r,
+        channel: OUTBOX_CHANNELS[r.channel] ?? r.channel,
+        status: OUTBOX_STATUSES[r.status] ?? r.status,
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/message-outbox/:id/kill', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const existing = await query(req, `SELECT id FROM core_message_outbox WHERE id = $1`, [id]);
+    if (!existing.length) return res.status(404).json({ error: 'Not found' });
+
+    const killMsg = `killed by operator at ${new Date().toISOString()}`;
+    await query(
+      req,
+      `UPDATE core_message_outbox
+       SET status = 4, "deadAt" = NOW(), "lastErrorClass" = 0, "lastErrorBody" = $1, "updatedAt" = NOW()
+       WHERE id = $2`,
+      [killMsg, id]
+    );
+    res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -1465,6 +2286,237 @@ app.get('/api/monitor/endpoints/health', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// ─── Google Business Profile (GBP) ────────────────────────────────────────────
+// Manages OAuth2 with Google's Business Profile APIs and exposes a small REST
+// surface the UI (and later the Dart backend) can call to list accounts/
+// locations and edit regularHours. The flow is standard Authorization Code
+// with offline access — tokens persist in a gitignored JSON file.
+//
+// APIs used:
+//   - mybusinessaccountmanagement.googleapis.com/v1 → list accounts
+//   - mybusinessbusinessinformation.googleapis.com/v1 → list locations, PATCH hours
+//
+// Setup: see .env.example for the GCP steps. Credentials must come from env:
+//   GBP_CLIENT_ID, GBP_CLIENT_SECRET
+const { OAuth2Client } = require('google-auth-library');
+
+const GBP_TOKEN_PATH = path.join(__dirname, '.gbp_token.json');
+const GBP_REDIRECT_URI = 'http://localhost:3333/api/gbp/oauth/callback';
+const GBP_SCOPE = 'https://www.googleapis.com/auth/business.manage';
+const GBP_DAYS = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY'];
+
+function gbpLoadToken() {
+  try {
+    if (!fs.existsSync(GBP_TOKEN_PATH)) return null;
+    return JSON.parse(fs.readFileSync(GBP_TOKEN_PATH, 'utf8'));
+  } catch { return null; }
+}
+function gbpSaveToken(tokens) {
+  const existing = gbpLoadToken() || {};
+  const merged = { ...existing, ...tokens };
+  fs.writeFileSync(GBP_TOKEN_PATH, JSON.stringify(merged, null, 2), { mode: 0o600 });
+}
+function gbpClearToken() {
+  if (fs.existsSync(GBP_TOKEN_PATH)) fs.unlinkSync(GBP_TOKEN_PATH);
+}
+
+function gbpClientConfigured() {
+  return !!(process.env.GBP_CLIENT_ID && process.env.GBP_CLIENT_SECRET);
+}
+
+// Returns an OAuth2Client pre-loaded with any saved token. When the library
+// auto-refreshes an access_token it emits a `tokens` event — we persist the
+// new values so subsequent boots don't need re-auth.
+function gbpOAuthClient() {
+  if (!gbpClientConfigured()) return null;
+  const client = new OAuth2Client(process.env.GBP_CLIENT_ID, process.env.GBP_CLIENT_SECRET, GBP_REDIRECT_URI);
+  const saved = gbpLoadToken();
+  if (saved) client.setCredentials(saved);
+  client.on('tokens', (tokens) => gbpSaveToken(tokens));
+  return client;
+}
+
+// Wraps fetch with a Bearer token from the OAuth client, refreshing access if
+// needed. Throws with the Google error body on non-2xx.
+async function gbpFetch(urlPath, init = {}) {
+  const client = gbpOAuthClient();
+  if (!client) throw new Error('Google Business Profile credentials not configured.');
+  if (!gbpLoadToken()) throw new Error('Not connected to Google. Click Connect first.');
+  const { token } = await client.getAccessToken();
+  if (!token) throw new Error('Failed to obtain access token — re-auth required.');
+  const res = await fetch(urlPath, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      ...(init.headers || {}),
+    },
+  });
+  const body = await res.text();
+  let json = null;
+  try { json = body ? JSON.parse(body) : null; } catch { /* keep raw */ }
+  if (!res.ok) {
+    const msg = json?.error?.message || body || `HTTP ${res.status}`;
+    throw new Error(`Google API ${res.status}: ${msg}`);
+  }
+  return json;
+}
+
+// Simple { MONDAY: ['09:00','18:00'] } ⇄ Google periods[] conversion.
+// Google periods use 24h "HH:MM" → { hours, minutes }, openDay/closeDay in
+// enum form ("MONDAY"). Days omitted from `dict` are treated as closed.
+function gbpPeriodsFromSimple(dict) {
+  const periods = [];
+  for (const day of GBP_DAYS) {
+    const pair = dict?.[day];
+    if (!pair || pair === 'closed' || !pair[0] || !pair[1]) continue;
+    const [oh, om] = String(pair[0]).split(':').map(n => parseInt(n, 10));
+    const [ch, cm] = String(pair[1]).split(':').map(n => parseInt(n, 10));
+    periods.push({
+      openDay: day,
+      openTime: { hours: oh || 0, minutes: om || 0 },
+      closeDay: day,
+      closeTime: { hours: ch || 0, minutes: cm || 0 },
+    });
+  }
+  return { periods };
+}
+function gbpSimpleFromPeriods(regularHours) {
+  const out = {};
+  const periods = regularHours?.periods || [];
+  for (const p of periods) {
+    const pad = (n) => String(n || 0).padStart(2, '0');
+    const open = `${pad(p.openTime?.hours)}:${pad(p.openTime?.minutes)}`;
+    const close = `${pad(p.closeTime?.hours)}:${pad(p.closeTime?.minutes)}`;
+    // Most GBP entries use same day for open/close. Cross-midnight spans are
+    // rare for praxis locations; if encountered, we surface the open day only.
+    out[p.openDay] = [open, close];
+  }
+  return out;
+}
+
+// GET /api/gbp/status — drives the UI state (setup required / connect / ready)
+app.get('/api/gbp/status', (req, res) => {
+  const clientConfigured = gbpClientConfigured();
+  const token = gbpLoadToken();
+  res.json({
+    clientConfigured,
+    connected: !!(clientConfigured && token && (token.refresh_token || token.access_token)),
+    scope: token?.scope || null,
+    expiresAt: token?.expiry_date || null,
+    redirectUri: GBP_REDIRECT_URI,
+  });
+});
+
+// GET /api/gbp/oauth/start — redirect the user to Google's consent screen.
+// `prompt:'consent'` forces a refresh_token on every authorization (Google
+// only returns one the first time unless explicitly re-prompted).
+app.get('/api/gbp/oauth/start', (req, res) => {
+  const client = gbpOAuthClient();
+  if (!client) return res.status(400).send('GBP credentials not configured. See .env.example.');
+  const url = client.generateAuthUrl({
+    access_type: 'offline',
+    prompt: 'consent',
+    scope: [GBP_SCOPE],
+  });
+  res.redirect(url);
+});
+
+// GET /api/gbp/oauth/callback — Google redirects here with ?code. We exchange
+// it for tokens, save them, and close the popup (signaling the opener).
+app.get('/api/gbp/oauth/callback', async (req, res) => {
+  try {
+    const code = req.query.code;
+    const err = req.query.error;
+    if (err) throw new Error(String(err));
+    if (!code) throw new Error('Missing ?code in callback');
+    const client = gbpOAuthClient();
+    if (!client) throw new Error('GBP credentials not configured.');
+    const { tokens } = await client.getToken(String(code));
+    gbpSaveToken(tokens);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(`<!doctype html><meta charset="utf-8"><title>Connected</title>
+<style>body{font:14px/1.5 system-ui;background:#0a0a0b;color:#e7e7ea;display:grid;place-items:center;height:100vh;margin:0}
+.card{border:1px solid #222;border-radius:12px;padding:24px 28px;text-align:center;max-width:380px}
+.ok{color:#62d08c;font-weight:600;letter-spacing:.08em;text-transform:uppercase;font-size:11px}
+h1{font-size:18px;margin:.4em 0}</style>
+<div class="card"><div class="ok">✓ Connected</div><h1>Google Business Profile linked</h1>
+<p>You can close this tab.</p></div>
+<script>
+  try { window.opener && window.opener.postMessage({ type:'gbp-connected' }, '*'); } catch(e){}
+  setTimeout(() => { try { window.close(); } catch(e){} }, 400);
+</script>`);
+  } catch (e) {
+    res.status(500).send(`OAuth callback failed: ${e.message}`);
+  }
+});
+
+// POST /api/gbp/disconnect — remove the saved token file.
+app.post('/api/gbp/disconnect', (req, res) => {
+  try {
+    gbpClearToken();
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/gbp/accounts — list GBP accounts visible to the authorized user.
+app.get('/api/gbp/accounts', async (req, res) => {
+  try {
+    const data = await gbpFetch('https://mybusinessaccountmanagement.googleapis.com/v1/accounts');
+    res.json({ accounts: data?.accounts || [] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/gbp/locations?account=accounts/123 — list locations under the account
+// with the fields we render (title, address summary, regularHours).
+app.get('/api/gbp/locations', async (req, res) => {
+  try {
+    const account = String(req.query.account || '').trim();
+    if (!account) return res.status(400).json({ error: 'account query param required (e.g. accounts/123)' });
+    const readMask = encodeURIComponent('name,title,storefrontAddress,regularHours');
+    const url = `https://mybusinessbusinessinformation.googleapis.com/v1/${encodeURIComponent(account)}/locations?readMask=${readMask}&pageSize=100`;
+    const data = await gbpFetch(url);
+    const locations = (data?.locations || []).map(loc => ({
+      name: loc.name,
+      title: loc.title,
+      address: loc.storefrontAddress
+        ? [
+            (loc.storefrontAddress.addressLines || []).join(', '),
+            [loc.storefrontAddress.postalCode, loc.storefrontAddress.locality].filter(Boolean).join(' '),
+            loc.storefrontAddress.regionCode,
+          ].filter(Boolean).join(' · ')
+        : '',
+      regularHours: loc.regularHours || { periods: [] },
+      hoursSimple: gbpSimpleFromPeriods(loc.regularHours),
+    }));
+    res.json({ locations });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PATCH /api/gbp/locations — body: { name:'locations/123', hours:{MONDAY:[...]} }
+// or { name, regularHours:{periods:[...]} }. Uses updateMask=regularHours so we
+// don't accidentally clobber other location fields.
+app.patch('/api/gbp/locations', async (req, res) => {
+  try {
+    const { name, hours, regularHours } = req.body || {};
+    if (!name || !/^locations\//.test(name)) return res.status(400).json({ error: 'name (locations/...) required' });
+    const payload = regularHours
+      ? { regularHours }
+      : { regularHours: gbpPeriodsFromSimple(hours || {}) };
+    const url = `https://mybusinessbusinessinformation.googleapis.com/v1/${encodeURIComponent(name)}?updateMask=regularHours`;
+    const data = await gbpFetch(url, { method: 'PATCH', body: JSON.stringify(payload) });
+    res.json({
+      ok: true,
+      location: {
+        name: data?.name || name,
+        title: data?.title,
+        regularHours: data?.regularHours || payload.regularHours,
+        hoursSimple: gbpSimpleFromPeriods(data?.regularHours || payload.regularHours),
+      },
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ─── Static files ─────────────────────────────────────────────────────────────
