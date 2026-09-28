@@ -2,3 +2,15 @@ node_modules/
 .env
 .fcm_service_account.json
 .gbp_token.json
+backups/
+exports/
+.local-stack/
+.impeccable/review/
+.impeccable/live/
+mac/build/
+mac/.build/
+.release/
+.investigations-state/
+.DS_Store
+.claude/settings.local.json
+.impeccable/questions/

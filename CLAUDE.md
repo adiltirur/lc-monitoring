@@ -42,6 +42,53 @@ helper/
       decrypt_viewer.html     — CSV bulk decryptor (iframe)
 ```
 
+## Mac app (`mac/`) and always-on server
+
+- `mac/` is a Swift Package (AppKit + WKWebView) that wraps `http://localhost:3333`
+  as **LC Helper.app** (`~/Applications`). `mac/install.sh` builds it and installs
+  the LaunchAgent `care.lillian.helper.server` which runs `node server.js`
+  (RunAtLoad + KeepAlive, logs in `~/Library/Logs/LCHelper/server.log`).
+  Re-run `install.sh` after switching nvm Node versions (node path is baked in).
+- The app is a menu-bar item + a window on demand. Closing the window does not
+  stop anything; quitting the app does not stop the server.
+- Web changes need no rebuild (⌘R in the app). `server.js` changes need
+  "Restart Helper Server" in the menu bar (`launchctl kickstart -k`).
+- The shell injects `data-shell="mac"` on `<html>` and `window.lcNative.post(type, payload)`
+  (`drag`, `zoom`, `notify`, `setEnv`). Elements with `data-drag-region` drag the
+  window; mark popovers inside them `data-no-drag`. The page calls `setEnv` so the
+  native window tints red and badges "PROD" on production.
+- WKWebView has no built-in `alert/confirm/prompt`, file picker, downloads or
+  `window.open` — the shell implements all of them. Non-localhost navigations open
+  in the default browser (Google OAuth refuses embedded webviews).
+
+## Local Stack (`/api/local-stack/*`, view `#local-stack`)
+
+Keeps the local backend running so the `dev` preset works: Docker Desktop →
+`docker compose up -d` (Postgres :8090, Redis :8091) in
+`../LillianCare-Core/lillian_care_core_server`, then `dart run bin/main.dart --mode development`
+(API :8080). Serverpod is spawned **detached** with a PID file in `.local-stack/`
+(gitignored), so restarting the helper does not kill it. State/config/log live in
+`.local-stack/` (`config.json`: `autostart` default true, `applyMigrations` default
+false). Docker's CLI is not on launchd's PATH — `LS_PATH` in `server.js` adds it.
+Override the Serverpod dir with `LC_SERVERPOD_DIR`.
+
+## Visual system
+
+`PRODUCT.md` holds product context; `DESIGN.md` the visual system. The UI follows
+the **LillianCare CI** from `../apps-frontend/packages/design_system` (petrol
+`#004E64` primary, logo turquoise `#2BD2C9`/`#B0EFEC`, Manrope, white grounds,
+8px radius). Brand assets live in `public/brand/` (logo SVGs copied from the
+praxis app) and `public/vendor/fonts/` (Manrope TTFs, Material Symbols).
+Shared tokens: `public/theme.css` + `public/theme.js` are **generated** by
+`scripts/gen-theme.js` — edit the generator, then `node scripts/gen-theme.js public`.
+`theme.js` also exports `window.LC_TAILWIND_CONFIG`, which maps every Tailwind
+colour (Material tokens and stock hues) onto theme variables, so utility classes in
+views re-theme for Day/Night automatically. Day is the brand look; Night is a
+deep-petrol variant. Everything is served locally, so the app works offline.
+Environment plates: 1 dev (white), 2 test (blue), 3 staging (amber), 4 production
+(the whole header becomes a red band). Destructive wizard steps carry
+`class="lc-destructive" data-band="…"` for a red header band.
+
 ## Architecture & Key Patterns
 
 **DB credentials flow:**
@@ -53,12 +100,13 @@ helper/
 
 **Environment presets** (in `index.html` `PRESETS` constant):
 - `dev` → `localhost:8090/lillian_care_core`
+- `test` → `database-test.lillian.care:5432/serverpod`
 - `staging` → `database-staging.lillian.care:5432/serverpod`
 - `production` → `database.lillian.care:5432/serverpod`
 
 **Secret loading:**
 - `require('dotenv').config()` at the top of `server.js` loads `.env`
-- `GET /api/env-config` serves `{ passwords: { dev, staging, production }, decryptKeys: { dev, staging, production } }` to the frontend
+- `GET /api/env-config` serves `{ passwords: { dev, test, staging, production }, decryptKeys: { dev, staging, production } }` to the frontend
 - Frontend fetches this on load and uses it to auto-fill the password field when a preset is selected
 
 **Navigation:** Hash-based routing via `navigate(view)`. Each view has a `renderXxx(el)` function. Add new views by: nav item in sidebar → route in `navigate()` → `renderXxx()` function.
@@ -90,3 +138,318 @@ helper/
 3. Add `else if (view === 'xxx') renderXxx(content);` in the `navigate()` function
 4. Add `function renderXxx(el) { ... }` following existing patterns
 5. For monitoring features: add to `monitoring.html` instead
+
+## Praxis Refresh feature (`/api/praxis/*`, view `#praxis-refresh`)
+
+Wizard for refreshing staging praxis data from prod:
+1. Schema-drift check → 2. Backup both envs → 3. Wipe staging → 4. Import prod → staging
+→ 5. Scrub contacts → 6. Set default praxis on all users.
+
+**Hardcoded table list (`PRAXIS_CONFIG_TABLES` in `server.js`)** — when the
+backend adds a new `praxis_*_config` or `cockpit_*` table that's praxis-scoped,
+add it to this constant. Step 0 (drift check) queries the live target schema
+for any column named `praxisId` and flags tables not in this list, so an
+out-of-date enumeration will surface on the next run.
+
+**Two-env operations** — the import endpoint takes BOTH `x-src-db-*` and
+`x-tgt-db-*` header sets. The frontend pulls passwords from `/api/env-config`
+once on view init, then constructs both header sets from `PRESETS`.
+
+**Destructive guards** — `POST /api/praxis/wipe-staging` requires:
+- `x-env-label: staging`
+- `x-allow-destructive: yes`
+- body `confirmation` exactly `WIPE STAGING`
+
+`scrub-contacts` and `set-default` refuse if `x-env-label` is `production` or
+`prod`.
+
+**Why historical data isn't wiped** — we delete only the 25 praxis-config
+tables. The 14 historical tables (`app_user_appointment`, `admin_audit_log`,
+`fhir_nps`, `guest_appointment`, etc.) keep their `praxisId` columns but those
+references become orphaned after wipe. This is intentional: it preserves test
+history and matches what the user asked for. `app_user_info.praxisId` and
+`admin_user_info.associatedPraxisIds` get fixed by step 5; the rest stay
+orphaned and harmless because Serverpod treats `praxisId` as a filter string,
+not an enforced FK.
+
+**Backups** — written to `helper/backups/<env>/<ISO-timestamp>/<lcId>.json`.
+The `backups/` directory is gitignored.
+
+**Cross-table FK skip list (`PRAXIS_CONFIG_TABLES_SKIP_IMPORT`)** — some
+praxis-config tables have a NOT NULL FK to a non-praxis table (e.g.,
+`praxis_device_config.userInfoId → app_user_info.id`). Importing rows from
+prod would violate that FK on staging because prod's user ids don't exist
+there. These tables are still backed up and wiped, but skipped on import.
+If you add a new praxis-config table that references users/admins, add it
+to this set in `server.js`.
+
+## Cockpit Fill feature (`/api/cockpit/*`, view `#cockpit-fill`)
+
+Bulk-fills a praxis's standard-week schedule from a Master Excel.
+
+**Excel structure** — one sheet per praxis (`*_Neu` suffix). Each sheet has 3
+blocks identified by header text in column A:
+- "Öffnungszeiten" — practice opening hours (1 row, no person)
+- "Sprechstundenzeiten" — per-person consultation slots (many rows: col A
+  carries the person name down, col B is the resource label like "Arzt 1 vor
+  Ort", "Akutsprechstunde", "Nicht buchbare Zeiten")
+- "Arbeitszeiten" — per-role staff working hours (col B has role labels:
+  "Arzt", "PA", "MFA")
+
+Each row has 5 days × {AM start, AM end, PM start, PM end} in cols 3-22.
+Time cells can be strings ("8:00:00"), Excel time serials (numbers), or Date
+objects — `cellToHHMM()` normalizes all three to "HH:MM".
+
+**DB writes** (per mapped sheet):
+- Replace mode: DELETE existing rows on `praxis_hours_config`,
+  `cockpit_standard_week_version`, `cockpit_week_override` for that praxisId
+- INSERT one `praxis_hours_config` row per opening slot (day stored as int
+  enum: monday=0…friday=4)
+- INSERT one `cockpit_standard_week_version` row per praxis with three JSON
+  blobs (`openingHoursJson`, `consultationHoursJson`, `workHoursJson`) matching
+  the praxis app's domain models (OpeningSlot / ConsultationSlot / WorkSlot)
+
+**Personnel resolution** — Excel uses person NAMES, but cockpit slots need
+Personio numeric `employeeId`s. The view fetches Personio's `/v1/company/employees`
+(via `PERSONIO_CLIENT_ID/SECRET` in `.env`) and shows an auto-suggested match
+per name (Levenshtein similarity threshold 0.6). If creds aren't set, the UI
+falls back to manual numeric entry per person.
+
+**workHoursJson derivation** — derived from consultationSlots, not from Block 3
+of the Excel. Each (employeeId, weekday) pair gets one work slot spanning the
+earliest start to the latest end across that person's consultation slots that
+day. Block 3 in the Excel is per-role (not per-person) so it can't be mapped
+1:1 to the cockpit's per-employee work-hour model.
+
+**Triple-gated on production** — when `x-env-label` is `production`/`prod`,
+the import endpoint additionally requires `x-allow-destructive: yes` AND
+`body.confirmation === 'IMPORT COCKPIT TO PRODUCTION'`. The Cockpit Fill UI
+surfaces a confirmation block (checkbox + typed phrase) when the target
+preset is Production. Staging/dev are unaffected.
+
+**Timezone invariant** — Times are wall-clock Europe/Berlin throughout. DB
+columns (`praxis_hours_config.start`/`"end"` and the three `*HoursJson` blobs
+in `cockpit_standard_week_version`) store `"HH:MM"` text only. The backend
+and praxis app pass these through as strings — never construct a `DateTime`
+from them. `cellToHHMM` in `server.js` reads `getHours/getMinutes` (NOT
+`getUTCHours`) because SheetJS with `cellDates: true` encodes Excel
+time-of-day into the **local** components of the Date object — e.g. cell
+`08:15` returns a Date `d` with `d.getHours()===8` regardless of host TZ;
+the absolute UTC instant is offset by the host's TZ at the Excel epoch
+(1899-12-30, no DST), so `getUTCHours()` would silently shift every time
+by the host's offset (1 hour earlier when the helper runs on a CET/CEST
+machine).
+
+## Cockpit Sync feature (`/api/cockpit/source-summary`, `/api/cockpit/cross-env-copy`, view `#cockpit-sync`)
+
+Cross-env copy of the cockpit-related tables for selected praxes. Same two
+header sets as Praxis Refresh import (`x-src-db-*` + `x-tgt-db-*`), but scoped
+to the cockpit subset (constant `COCKPIT_SYNC_TABLES` in `server.js`):
+
+```
+praxis_hours_config
+cockpit_standard_week_version
+cockpit_appointment_type_matrix
+cockpit_week_override
+cockpit_person_duration_exception
+```
+
+**Praxis matching** — by `lcId`. Numeric `praxisId` FKs are looked up on
+target and remapped on insert. If a source `lcId` doesn't exist on the target,
+that praxis is skipped (logged in result). Personio `employeeId` values inside
+the JSON blobs are global IDs and pass through unchanged.
+
+**Replace mode** (default) — DELETE target rows for the praxis on each table
+before INSERTing source rows, so the target ends up exactly mirroring source
+for the selected praxes. Append mode is available but will likely violate
+UNIQUE constraints on `cockpit_appointment_type_matrix(praxisId, appointmentTypeKey)`.
+
+**Production target is refused** — `x-tgt-env-label: production|prod` errors
+out. To overwrite cockpit data on prod, do it through the praxis app cockpit
+UI directly (which has audit logging).
+
+The whole copy runs in one transaction on the target connection — any error
+rolls back the entire batch.
+
+## Praxis Cleanup feature (`/api/praxis/cleanup-preview`, `/api/praxis/cleanup`, view `#praxis-cleanup`)
+
+Single-praxis deep delete. Used when a praxis is in a broken state (e.g.
+duplicate-creation collision) and you want every reference to it gone so it
+can be safely recreated.
+
+**Three triple-gated requirements** — server rejects with a clear message
+unless all are satisfied:
+- `x-env-label` is NOT `production` / `prod`
+- `x-allow-destructive: yes` header
+- body `confirmation` exactly equals the `lcId`
+
+**Per-table action map (`CLEANUP_NON_CONFIG_TABLES` in `server.js`)**:
+
+| Table | Action | Why |
+|---|---|---|
+| 24 praxis-config child tables | DELETE | Standard config wipe. |
+| `praxis_config` (root) | DELETE | Removes the praxis row last. |
+| `app_user_appointment_reminder`, `cockpit_person_duration_exception`, `praxis_hours_sync_target` | DELETE (numeric FK) | Praxis-specific data. |
+| `app_user_appointment`, `app_user_open_consultation`, `app_user_document_request`, `app_user_reserved_appointment`, `app_user_nps_sent`, `guest_appointment`, `questionnaire_reservation`, `fhir_nps`, `app_user_pms_invitation` | DELETE (string lcId) | Historical data tied to this praxis only. |
+| `app_user_info` | UPDATE praxisId = NULL | Preserve the user account. |
+| `admin_user_info` | UPDATE associatedPraxisIds (filter the lcId out of JSON array) | Preserve the admin account. |
+| `admin_audit_log` | KEEP | Historical record — should survive even if its praxis is gone. |
+
+When a new praxis-scoped table is added in the backend, add it here with the
+right action mode.
+
+**Re-creation after cleanup** — once cleanup succeeds, you can re-create the
+praxis (e.g. via Praxis Refresh import or the praxis app) without lcId
+collisions. Users and admins that were previously linked have their references
+nulled / filtered, so reassigning them to the new praxis row is a separate
+follow-up step.
+
+## DB Refresh feature (`/api/db-refresh/*`, view `#db-refresh`)
+
+Wipes an ENTIRE target database and mirrors the full public schema from
+another env. Source: dev/test/staging/production. Target: dev/test/staging —
+**production can never be a target**. Uses dedicated `pg.Client`s (never the
+shared pools) because it sets session GUCs. (Replaces the old Test DB Refresh;
+`#test-refresh` redirects here.)
+
+**Safety model:**
+- `x-tgt-env-label` must be in `DB_REFRESH_TARGET_ENVS` (`dev`/`test`/`staging`)
+- Target host is refused outright if it's a production host
+  (`DB_REFRESH_PROTECTED_HOSTS` = CNAME + raw RDS endpoint), AND must belong to
+  the labelled env in `DB_REFRESH_ENV_HOSTS` — a label can't be spoofed onto
+  another env's host. Unknown hosts fail.
+- Source host must be a known env, and source env ≠ target env
+- `run` additionally requires `x-allow-destructive: yes` + body
+  `confirmation === 'REFRESH <TARGET ENV>'` (e.g. `REFRESH STAGING`)
+- The source session is opened with `default_transaction_read_only = on` and
+  the whole read happens inside a `REPEATABLE READ READ ONLY` transaction —
+  even a code bug cannot write to the source env.
+- All guards live in `drAssertSafeTarget()` in `server.js`, called by both
+  endpoints.
+
+**Skip list (`DB_REFRESH_SKIP_TABLES`)** — Serverpod log/telemetry tables
+(`serverpod_log`, `serverpod_session_log`, `serverpod_query_log`,
+`serverpod_message_log`, `serverpod_health_*`, `serverpod_readwrite_test`).
+They ARE truncated on the target but NOT refilled (prod logs are huge and useless on
+the target — `serverpod_readwrite_test` alone had 4.2M rows on dev).
+
+**Schema drift** — preflight and run both diff table sets and per-table
+columns/types (skip tables excluded). Column drift on shared tables refuses the
+copy (migrate the target first), except lossless widenings in
+`DB_REFRESH_SAFE_WIDENINGS` (e.g. int4→int8 — older envs have int4 ids, fresh
+DBs int8). Tables on only one side don't block: source-only ones are not copied
+(e.g. hand-made `channel` on staging), target-only ones are emptied. `serverpod_migrations` IS copied, so after a refresh
+the target's migration registry mirrors the source.
+
+**Copy algorithm** (`POST /api/db-refresh/run`): one transaction on target →
+`SET LOCAL session_replication_role = replica` (verified via `SHOW`; aborts
+pre-wipe if unavailable — preflight probes this too) → single
+`TRUNCATE <all tables> RESTART IDENTITY CASCADE` → per-table cursor streaming
+(`FETCH 1000`, chunked multi-row INSERTs under the 65535-param limit,
+`bindValue()` for json/jsonb, `id`s preserved) → `setval` per id-table →
+COMMIT. Any error or client disconnect rolls the whole thing back, so the target
+reverts to its pre-run state.
+
+**Progress protocol** — the run endpoint streams NDJSON events
+(`start`/`table`/`done`/`error`) on the POST response. HTTP 200 is committed
+before the copy runs, so the frontend treats a stream that ends without `done`
+as failure.
+
+**Frontend** — source and target dropdowns (target: dev/test/staging only;
+the same env can't be picked on both sides). Step 1 preflight gates Step 2
+(typed `REFRESH <TARGET>` confirmation). Needs the matching `DB_*_PASSWORD`s
+in `.env`.
+## Build & Release feature (`/api/release/*`, view `#release`)
+
+Builds the two Flutter apps in `../apps-frontend/apps` (override with
+`LC_APPS_DIR`) and ships web builds. Config lives in `RL_APPS` / `RL_ENVS` in
+`server.js`:
+
+| App key | Folder | Web test bucket → CF dist | Web prod bucket → CF dist |
+|---|---|---|---|
+| `praxis` | `lillian_care_praxis_app` | `lillian-care-praxis-test` → `E212FAFCAG5Y7B` | `lillian-care-praxis-prod` → `E2HT4R4XMWOKKS` |
+| `app` | `lillian_care_app` | `lillian-care-app-test` → `E1CDAZB8YO8U4C` | `lillian-care-app-prod` → `EOIX3XODFOSC1` |
+
+(`lillian-care-app-test-v2` / `app-test.lillian.care` exists but is deliberately
+not a deploy target.) Envs: `test` = flavor `atest` + `lib/main_atest.dart`,
+`prod` = flavor `prod` + `lib/main_prod.dart`.
+
+**Build** — every build runs in the app folder with the Flutter SDK pinned
+by the **workspace root** `apps-frontend/.fvmrc`, invoked directly from
+`~/fvm/versions/<ver>/bin/flutter` (both apps share one pub workspace, so an app
+folder's own `.fvmrc` — praxis pins an older SDK — is ignored): `flutter clean` → `flutter pub get` → one of
+`flutter build web --release -t …` / `flutter build apk|appbundle --release --flavor … -t …`
+(APK or AAB picked per build) / `flutter build ipa --flavor … -t …` (default
+App Store export). Mobile outputs are revealed in Finder (`open -R`).
+`RL_ENV` adds `LANG` (CocoaPods needs UTF-8; launchd doesn't set it).
+
+**Deploy (web only, separate step)** — `aws s3 sync build/web/ s3://<bucket> --delete --exclude "index.html"`
+(index.html is never uploaded) → `aws cloudfront create-invalidation --paths "/*"`.
+The server only deploys a `build/web` it built itself for the SAME env
+(recorded in `.release/state.json`, gitignored; cleared when any build of that
+app starts, since `flutter clean` wipes `build/`). Prod requires body
+`confirmation === 'DEPLOY <APP KEY> PROD'` (`DEPLOY PRAXIS PROD` / `DEPLOY APP PROD`).
+
+**Jobs** — one at a time (shared pub workspace + `flutter clean`), held in
+memory with the log (lost on helper restart). Children spawn `detached` so
+Cancel kills the whole process group. The view polls `/api/release/status?since=<logEnd>`
+every 1.5 s and posts a native `notify` when a job finishes.
+
+## Investigations feature (`/api/investigations/*`, view `#investigations`)
+
+AI-assisted prod investigations. Notes are markdown files in the **shared folder**
+`../investigations/` (override with `LC_INVESTIGATIONS_DIR`) — the same files
+Claude Code sessions read, so an investigation can move between the helper and
+a Claude Code session. Playbooks (`../investigations/playbooks/*.md`) are fed to
+the AI as context.
+
+**Flow** — the user describes the problem or pastes logs → text is scrubbed →
+Bedrock (`INV_MODEL`, override with `LC_INVESTIGATION_MODEL`) replies via a forced
+`reply` tool: `message`, optional `proposed_sql` + `purpose`, optional `log_entry`
+→ the user reviews/edits the SQL and clicks Run → rows are shown raw in the UI,
+scrubbed, appended to the chat → the AI is asked for the next step automatically.
+"Add to log" appends a finding to the note's `## Log` section.
+
+**Scrubbing** — single source is the offline tool
+`../investigations/tools/principa-log-scrubber.html`; `invCreateScrubber()` loads
+the code between `// CORE-START` and `// CORE-END` (reloaded on file change). Edit
+the scrubber there, not here. Placeholders are stable per investigation: the
+mapping is persisted and seeds every scrub, and known names/emails are also
+replaced when they reappear in free text. The AI may write placeholders inside SQL
+literals; `invUnscrubSql()` fills in the real values locally (quotes doubled)
+right before execution.
+
+**Read-only guard (`invReadOnlyQuery`)** — never use the Query Runner path for
+AI-proposed SQL. Queries run as `SELECT * FROM (<sql>) LIMIT 201` via the extended
+protocol (`queryMode: 'extended'` — Postgres rejects multiple commands) inside
+`BEGIN TRANSACTION READ ONLY` with `statement_timeout` 20 s, always rolled back.
+Verified to reject DELETE, data-modifying CTEs, COMMIT escapes, multi-statements,
+`set_config(transaction_read_only)` and `nextval()`.
+
+**Local state** — `.investigations-state/<file>.json` (gitignored, 0600) holds the
+placeholder→original mapping (PII), extra redaction terms (PII) and the scrubbed
+AI conversation. Raw query rows are never persisted (browser memory only). The
+markdown notes must not contain PII — internal IDs only.
+
+**Code analysis (`POST/GET/DELETE /api/investigations/:file/code`)** — spawns a
+headless Claude Code session (`INV_CLAUDE_BIN`, default `~/.local/bin/claude`,
+override `LC_CLAUDE_BIN`) in `../LillianCare-Core` (override `LC_CORE_DIR`) with
+`--restricted --tools Read,Grep,Glob --strict-mcp-config --permission-mode dontAsk
+--no-session-persistence` and a `--settings` deny list for `passwords.yaml`, `.env*`,
+the FCM key and key files (verified: Read is refused, Grep skips the file). The
+prompt holds only the scrubbed notes and the scrubbed question. The briefing is
+appended under `## Code analysis` in the note (inserted before `## Log`), so the
+Bedrock chat sees it as context. One in-memory job per investigation (lost on
+restart), `stream-json` progress, 10 min timeout, process group killed on cancel.
+The first message of a new investigation runs it first (checkbox, on by default).
+
+**Correspondence (`POST /api/investigations/:file/correspondence`)** — vendor or
+practice replies (and what we sent) are scrubbed, filed under `## Correspondence`
+in the note, and added to the chat before the AI is asked for the next step.
+
+**Scrub preview (`POST /api/investigations/:file/scrub-preview`)** — scrubs without
+saving the mapping. The composer shows it before sending (toggle, stored in
+`localStorage.inv_preview`, default on) so names in free text that the scrubber
+could not recognise can be caught. The scrubber also redacts names after titles
+and greetings (Frau/Herr/Dr./Hallo …) and logins after "user"/"Benutzer", but keeps
+technical actors such as SYSTEM, which are evidence.

@@ -4,188 +4,130 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>LC Monitor</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link href="https://fonts.googleapis.com/icon?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20,300,0,0" rel="stylesheet">
+<script src="/theme.js"></script>
+  <script src="/datepicker.js" defer></script>
+<link rel="stylesheet" href="/theme.css">
 <style>
-/* ── Bridge theme additions ── */
-.material-symbols-outlined {
-  font-family: 'Material Symbols Outlined' !important;
-  font-weight: normal !important; font-style: normal !important;
-  letter-spacing: normal !important; text-transform: none !important;
-  display: inline-block; white-space: nowrap; word-wrap: normal; direction: ltr;
-  font-feature-settings: 'liga' !important; -webkit-font-feature-settings: 'liga' !important;
-  line-height: 1; vertical-align: middle;
-}
-.ms-fill { font-variation-settings: 'FILL' 1; }
-.cyber-panel {
-  background: var(--surface); backdrop-filter: blur(12px);
-  border: 1px solid var(--border-primary-dim);
-  box-shadow: inset 0 1px 0 0 rgba(0,255,160,0.05);
-  position: relative; overflow: hidden; border-radius: 6px;
-}
-.scanline {
-  width: 100%; height: 2px;
-  background: linear-gradient(to right, transparent, var(--border-glow-active), transparent);
-  position: absolute; bottom: 0; left: 0;
-}
-.pulse-dot { animation: cyber-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
-@keyframes cyber-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .4; transform: scale(0.9); } }
-.data-glow { text-shadow: 0 0 6px rgba(122,165,255,0.35); }
-.hdr-brand-box {
-  width: 20px; height: 20px;
-  display: inline-flex; align-items: center; justify-content: center;
-  border: 1px solid var(--primary); position: relative; margin-right: 8px;
-  background: rgba(0,255,160,0.12);
-  box-shadow: 0 0 0 1px rgba(0,255,160,0.18), 0 0 8px rgba(0,255,160,0.18);
-}
-.hdr-brand-box .ms-icon { font-size: 14px; color: var(--primary); }
-.hdr-brand-box::after {
-  content: ''; position: absolute; top: -2px; right: -2px;
-  width: 6px; height: 6px; background: var(--primary); border-radius: 50%;
-  animation: cyber-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-}
+/* ==========================================================================
+   LC MONITOR — LillianCare CI.
+   Every view reads like a departures board: time first (bold, tabular),
+   then what happened, then where (boxed platform column).
+   Colours: tokens from /theme.css only. Signal colours carry state;
+   greys never do.
+   ========================================================================== */
 
-/* ── Design Tokens: Bridge ── */
-:root {
-  --primary: #00ffa0;
-  --primary-dim: #00e479;
-  --secondary: #7aa5ff;
-  --error: #ff5374;
-  --warning: #ffb454;
-  --surface-base: #0a0e14;
-  --surface: #11151c;
-  --surface-low: #181d26;
-  --surface-container: #181d26;
-  --surface-high: #232934;
-  --surface-highest: #2a303c;
-  --text: #e6edf3;
-  --text-muted: rgba(230,237,243,0.55);
-  --text-faded: rgba(230,237,243,0.38);
-  --text-dim: rgba(230,237,243,0.28);
-  --text-ts: rgba(160,168,180,0.75);
-  --warning-dark: #ff9020;
-  --error-wash: rgba(255,83,116,0.10);
-  --error-ghost: rgba(255,83,116,0.30);
-  --error-light: #ff8098;
-  --secondary-muted: rgba(122,165,255,0.70);
-  --secondary-dim: rgba(122,165,255,0.55);
-  --secondary-faint: rgba(122,165,255,0.40);
-  --secondary-ghost: rgba(122,165,255,0.30);
-  --border-primary: rgba(255,255,255,0.09);
-  --border-primary-faint: rgba(255,255,255,0.06);
-  --border-primary-dim: rgba(255,255,255,0.06);
-  --border-glow: rgba(0,255,160,0.22);
-  --border-glow-active: rgba(0,255,160,0.32);
-  --glow-primary: rgba(0,255,160,0.10);
-  --font-display: 'Space Grotesk', -apple-system, sans-serif;
-  --font-ui: 'Space Grotesk', -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', 'Monaco', monospace;
+/* Local token: yellow as *text*. Yellow ink is unreadable on the white Day
+   poster, so Day prints warnings in the darker amber of the same family. */
+:root { --warn-ink: var(--orange); --plate-navy: #00212a; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="day"]) { --warn-ink: var(--yellow); }
 }
+:root[data-theme="night"] { --warn-ink: var(--yellow); }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
-  font-family: var(--font-ui);
-  background: var(--surface-base);
-  color: var(--text);
+  background: var(--ground);
+  color: var(--ink);
   height: 100vh;
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  background-image:
-    linear-gradient(rgba(0,255,160,0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0,255,160,0.025) 1px, transparent 1px);
-  background-size: 40px 40px;
 }
 
-/* ─── Header ─── */
+.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined' !important;
+  font-weight: normal; font-style: normal;
+  letter-spacing: normal; text-transform: none;
+  display: inline-block; white-space: nowrap; word-wrap: normal; direction: ltr;
+  font-feature-settings: 'liga'; -webkit-font-feature-settings: 'liga';
+  line-height: 1; vertical-align: middle;
+}
+
+/* ─── Header: the board's top bar ─── */
 .hdr {
   display: flex;
-  align-items: center;
-  gap: 16px;
+  align-items: stretch;
+  gap: var(--s-6, 24px);
   padding: 0 20px;
-  height: 48px;
-  background: rgba(10,14,23,0.95);
-  border-bottom: 1px solid var(--border-primary);
+  height: 52px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--rule-strong);
   flex-shrink: 0;
-  backdrop-filter: blur(8px);
 }
 .hdr-brand {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--primary);
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  font-family: var(--font-display);
-  white-space: nowrap;
   display: flex;
   align-items: center;
-  gap: 8px;
-  text-shadow: 0 0 20px rgba(0,255,160,0.4);
-}
-.hdr-brand::before {
-  content: '';
-  width: 8px; height: 8px;
-  border-radius: 50%;
-  background: var(--primary);
-  box-shadow: 0 0 8px var(--primary);
-  animation: pulse-green 2s ease-in-out infinite;
+  font-family: var(--font-sign);
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--ink);
+  white-space: nowrap;
+  letter-spacing: 0.01em;
 }
 .tabs {
   display: flex;
+  align-items: stretch;
   gap: 2px;
   flex: 1;
-  justify-content: center;
+  overflow-x: auto;
 }
 .tab-btn {
-  padding: 6px 16px;
+  position: relative;
+  padding: 0 14px;
   background: transparent;
-  border: 1px solid var(--border-primary-dim);
-  border-radius: 0;
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 1px;
-  text-transform: uppercase;
+  border: 0;
+  color: var(--ink-2);
+  font-family: var(--font-sign);
+  font-size: 16px;
+  font-weight: 600;
   cursor: pointer;
-  font-family: var(--font-mono);
-  transition: all 0.15s;
+  white-space: nowrap;
+  transition: background-color var(--t-step) var(--step), color var(--t-step) var(--step);
 }
-.tab-btn:hover { border-color: var(--border-glow-active); color: var(--primary); }
-.tab-btn.active {
-  background: var(--glow-primary);
-  border-color: var(--primary);
-  color: var(--primary);
-  box-shadow: 0 0 10px rgba(0,255,160,0.15);
+.tab-btn::after {
+  content: '';
+  position: absolute; left: 8px; right: 8px; bottom: 0;
+  height: 3px;
+  background: transparent;
 }
+.tab-btn:hover { color: var(--ink); background: var(--surface-2); }
+.tab-btn.active { color: var(--ink); }
+.tab-btn.active::after { background: var(--action); }
 .hdr-right {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 16px;
   white-space: nowrap;
 }
 .hdr-clock {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: rgba(0,255,160,0.5);
+  font-family: var(--font-sign);
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  min-width: 88px;
+  text-align: right;
 }
 .db-status {
   display: flex;
   align-items: center;
-  gap: 5px;
-  font-size: 11px;
+  gap: 6px;
   font-family: var(--font-mono);
-  color: rgba(0,255,160,0.5);
+  font-size: var(--t-small);
+  color: var(--ink-2);
+  padding: 3px 8px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r);
 }
 .db-dot {
-  width: 6px; height: 6px;
+  width: 7px; height: 7px;
   border-radius: 50%;
-  background: rgba(58,90,106,0.6);
+  background: var(--ink-4);
 }
-.db-dot.ok { background: var(--primary); box-shadow: 0 0 6px var(--primary); }
-.db-dot.none { background: var(--error); box-shadow: 0 0 6px var(--error); }
+.db-dot.ok { background: var(--green); }
+.db-dot.none { background: var(--red); }
 
 /* ─── Tab panels ─── */
 .tab-panels { flex: 1; overflow: hidden; position: relative; }
@@ -193,281 +135,309 @@ body {
   position: absolute;
   inset: 0;
   overflow-y: auto;
-  padding: 16px 20px;
+  padding: 20px;
   display: none;
 }
 .tab-panel.active { display: block; }
-.tab-panel::-webkit-scrollbar { width: 4px; }
-.tab-panel::-webkit-scrollbar-track { background: var(--surface-base); }
-.tab-panel::-webkit-scrollbar-thumb { background: rgba(0,255,160,0.2); border-radius: 2px; }
 
-/* ─── Shared panel styles ─── */
-.section-title {
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: var(--primary);
-  margin-bottom: 12px;
+/* ─── Section headings (board titles) ─── */
+.section-bar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.section-bar .section-title { margin-bottom: 0; flex: 1; }
+.section-title {
+  font-family: var(--font-sign);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 20px 0 10px;
+  display: flex;
+  align-items: baseline;
   gap: 10px;
-  font-family: var(--font-display);
 }
-.section-title::before {
-  content: '';
-  width: 3px; height: 10px;
-  background: var(--primary);
-  box-shadow: 0 0 6px var(--primary);
-  flex-shrink: 0;
-}
+.section-bar .section-title, .tab-panel > .section-title:first-child { margin-top: 0; }
 .section-title::after {
   content: '';
   flex: 1;
   height: 1px;
-  background: linear-gradient(90deg, rgba(0,255,160,0.25), transparent);
+  align-self: center;
+  background: var(--rule);
+}
+.section-note {
+  font-family: var(--font-ui);
+  font-size: var(--t-small);
+  font-weight: 400;
+  color: var(--ink-3);
+}
+.meta-note {
+  font-size: var(--t-small);
+  color: var(--ink-3);
+  font-family: var(--font-ui);
 }
 
 .panel {
-  background: rgba(13,17,23,0.75);
-  border: 1px solid var(--border-primary-dim);
-  border-radius: 0;
+  background: var(--surface-1);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
   padding: 16px;
   position: relative;
   overflow: hidden;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
 }
-.panel::before {
-  content: '';
-  position: absolute;
-  top: 0; left: 0; right: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(0,255,160,0.45), transparent);
-}
+.panel.flush { padding: 0; }
 
-/* ─── Stats bar ─── */
+/* ─── Stats bar: big readouts ─── */
 .stats-bar {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-  gap: 10px;
-  margin-bottom: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 1px;
+  margin-bottom: 20px;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  overflow: hidden;
 }
+.stats-bar:empty { display: none; }
 .stat-card {
-  background: rgba(13,17,23,0.75);
-  border: 1px solid var(--border-primary-dim);
-  border-radius: 0;
-  padding: 14px 16px;
+  background: var(--surface-1);
+  padding: 14px 16px 12px;
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  transition: border-color 0.15s, box-shadow 0.15s;
-}
-.stat-card:hover {
-  border-color: var(--border-glow);
-  box-shadow: 0 0 16px rgba(0,255,160,0.07);
+  gap: 4px;
 }
 .stat-label {
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 2px;
+  font-size: var(--t-label);
+  font-weight: 600;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: rgba(0,255,160,0.5);
-  font-family: var(--font-mono);
+  color: var(--ink-3);
 }
 .stat-value {
-  font-size: 34px;
+  font-family: var(--font-sign);
+  font-size: var(--t-board);
   font-weight: 700;
-  font-family: var(--font-mono);
-  color: var(--secondary);
+  color: var(--ink);
   line-height: 1;
-  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
 }
 .stat-sub {
-  font-size: 10px;
-  color: var(--text-faded);
-  font-family: var(--font-mono);
+  font-size: var(--t-small);
+  color: var(--ink-2);
 }
 
 /* ─── Service grid ─── */
 .service-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 10px;
-  margin-bottom: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
 }
 .svc-card {
-  background: rgba(13,17,23,0.8);
-  border: 1px solid var(--border-primary-faint);
-  border-radius: 0;
-  padding: 14px;
-  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  background: var(--surface-1);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  transition: background-color var(--t-step) var(--step);
 }
-.svc-card:hover {
-  border-color: var(--border-glow);
-  background: rgba(15,19,28,0.9);
-  box-shadow: 0 0 20px rgba(0,255,160,0.05);
-}
-.svc-card.state-running { border-left: 3px solid var(--primary); box-shadow: inset 3px 0 12px rgba(0,255,160,0.06); }
-.svc-card.state-available { border-left: 3px solid var(--primary); box-shadow: inset 3px 0 12px rgba(0,255,160,0.06); }
-.svc-card.state-active { border-left: 3px solid var(--primary); box-shadow: inset 3px 0 12px rgba(0,255,160,0.06); }
-.svc-card.state-stopped { border-left: 3px solid var(--error); box-shadow: inset 3px 0 12px rgba(255,51,102,0.06); }
-.svc-card.state-error { border-left: 3px solid var(--error); box-shadow: inset 3px 0 12px rgba(255,51,102,0.06); }
-.svc-card.state-unknown { border-left: 3px solid rgba(58,90,106,0.6); }
-.svc-card.state-deployed { border-left: 3px solid var(--secondary); box-shadow: inset 3px 0 12px rgba(0,212,255,0.06); }
-.svc-card.state-s3 { border-left: 3px solid var(--warning); box-shadow: inset 3px 0 12px rgba(255,170,0,0.06); }
+.svc-card:hover { background: var(--surface-2); }
+/* Disruption: whole card gets a red hairline frame. Healthy cards stay quiet. */
+.svc-card.state-stopped,
+.svc-card.state-error { border-color: var(--red); }
 
 .svc-name {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
   margin-bottom: 4px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .svc-meta {
-  font-size: 10px;
-  color: rgba(200,216,232,0.4);
+  font-size: var(--t-small);
+  color: var(--ink-2);
   font-family: var(--font-mono);
   line-height: 1.6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: break-all;
 }
+.svc-meta .fine { color: var(--ink-3); font-size: var(--t-label); }
 .svc-status {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 10px;
-  font-family: var(--font-mono);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-top: 6px;
+  gap: 6px;
+  font-family: var(--font-sign);
+  font-size: 14px;
+  font-weight: 600;
+  margin-top: auto;
+  padding-top: 8px;
 }
 .dot-status {
-  width: 6px; height: 6px;
+  width: 7px; height: 7px;
   border-radius: 50%;
   flex-shrink: 0;
 }
-.dot-green { background: var(--primary); box-shadow: 0 0 6px var(--primary); animation: pulse-green 2.5s ease-in-out infinite; }
-.dot-red { background: var(--error); box-shadow: 0 0 6px var(--error); }
-.dot-blue { background: var(--secondary); box-shadow: 0 0 6px var(--secondary); }
-.dot-amber { background: var(--warning); }
-.dot-grey { background: rgba(58,90,106,0.6); }
+.dot-green { background: var(--green); }
+.dot-red { background: var(--red); }
+.dot-blue { background: var(--blue); }
+.dot-amber { background: var(--yellow); }
+.dot-grey { background: var(--ink-4); }
 
-@keyframes pulse-green {
-  0%, 100% { opacity: 1; box-shadow: 0 0 4px var(--primary); }
-  50% { opacity: 0.7; box-shadow: 0 0 12px var(--primary), 0 0 20px rgba(0,255,160,0.3); }
-}
-
-/* ─── Refresh btn ─── */
-.refresh-btn {
-  background: transparent;
-  border: 1px solid rgba(0,255,160,0.2);
-  border-radius: 0;
-  color: rgba(0,255,160,0.6);
-  font-size: 10px;
-  font-family: var(--font-mono);
+/* Environment plate on endpoint cards */
+.env-plate {
+  display: inline-block;
+  font-family: var(--font-sign);
+  font-size: var(--t-label);
   font-weight: 700;
-  letter-spacing: 1px;
-  padding: 4px 10px;
-  cursor: pointer;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  transition: all 0.15s;
+  padding: 0 5px;
+  border: 1px solid currentColor;
+  border-radius: var(--r);
+  line-height: 16px;
 }
-.refresh-btn:hover { border-color: var(--primary); color: var(--primary); background: var(--glow-primary); }
-.refresh-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+/* Filled line plates, matching the shell's env numerals: prod red, staging yellow, test blue. */
+.env-plate.env-production { background: var(--band); color: #fff; border-color: var(--band); }
+.env-plate.env-staging { background: var(--yellow); color: #00212a; border-color: var(--yellow); }
+.env-plate.env-test { background: var(--blue); color: #fff; border-color: var(--blue); }
+:root[data-theme="night"] .env-plate.env-test { color: #00212a; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="day"]) .env-plate.env-test { color: #00212a; } }
+.env-other { color: var(--ink-2); }
+
+/* LED blink: live things flip in steps, never pulse */
+@keyframes led-blink { 0%, 49.9% { opacity: 1; } 50%, 100% { opacity: 0.25; } }
+@keyframes led-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* ─── Buttons ─── */
+.refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--surface-2);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0 10px;
+  height: 30px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color var(--t-step) var(--step);
+}
+.refresh-btn .material-symbols-outlined { font-size: 16px; }
+.refresh-btn:hover { background: var(--surface-3); }
+.refresh-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.refresh-btn.primary {
+  background: var(--action);
+  color: var(--action-ink);
+  border-color: var(--action);
+}
+.refresh-btn.primary:hover { background: var(--action); filter: brightness(1.08); }
 
 /* ─── Loading / Error states ─── */
 .loading-state, .error-state, .empty-state {
   padding: 40px;
   text-align: center;
-  font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 13px;
 }
-.loading-state { color: rgba(0,255,160,0.5); }
-.error-state { color: var(--error); }
-.empty-state { color: var(--text-dim); }
+.loading-state { color: var(--ink-2); }
+.error-state { color: var(--red); }
+.error-state .hint { display: block; margin-top: 4px; color: var(--ink-2); font-size: var(--t-small); }
+.empty-state { color: var(--ink-2); }
 .spinner {
   display: inline-block;
-  width: 16px; height: 16px;
-  border: 2px solid rgba(0,255,160,0.15);
-  border-top-color: var(--primary);
+  width: 10px; height: 10px;
+  background: var(--action);
   border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+  animation: led-blink 0.8s ease-in-out infinite;
   vertical-align: middle;
-  margin-right: 8px;
+  margin-right: 10px;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ─── Metrics tab ─── */
 .metrics-controls {
   display: flex;
-  gap: 10px;
+  gap: 12px;
   align-items: flex-end;
   flex-wrap: wrap;
   margin-bottom: 16px;
 }
 .ctrl-group { display: flex; flex-direction: column; gap: 4px; }
 .ctrl-label {
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 1.5px;
+  font-size: var(--t-label);
+  font-weight: 600;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: rgba(0,255,160,0.4);
-  font-family: var(--font-mono);
+  color: var(--ink-3);
 }
-.ctrl-select {
-  background: rgba(13,17,23,0.9);
-  border: 1px solid rgba(0,255,160,0.2);
-  border-radius: 0;
-  color: var(--text);
-  font-size: 12px;
-  font-family: var(--font-mono);
-  padding: 6px 10px;
-  height: 32px;
+.ctrl-select, .ctrl-input {
+  background: var(--surface-2);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  padding: 0 10px;
+  height: 30px;
   outline: none;
   cursor: pointer;
-  min-width: 160px;
 }
-.ctrl-select:focus { border-color: var(--primary); }
-.time-btns { display: flex; gap: 4px; }
+.ctrl-select { min-width: 170px; }
+.ctrl-select:focus, .ctrl-input:focus { border-color: var(--focus); }
+.time-btns {
+  display: flex;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r);
+  overflow: hidden;
+}
 .time-btn {
-  background: transparent;
-  border: 1px solid rgba(0,255,160,0.15);
-  border-radius: 0;
-  color: rgba(200,216,232,0.45);
-  font-size: 10px;
-  font-family: var(--font-mono);
-  padding: 5px 10px;
+  background: var(--surface-2);
+  border: 0;
+  border-left: 1px solid var(--rule-strong);
+  color: var(--ink-2);
+  font-family: var(--font-sign);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 0 12px;
   cursor: pointer;
-  transition: all 0.15s;
-  height: 32px;
+  height: 28px;
+  transition: background-color var(--t-step) var(--step), color var(--t-step) var(--step);
 }
-.time-btn:hover { border-color: var(--border-glow-active); color: var(--primary); }
-.time-btn.active { background: var(--glow-primary); border-color: var(--primary); color: var(--primary); }
+.time-btn:first-child { border-left: 0; }
+.time-btn:hover { background: var(--surface-3); color: var(--ink); }
+.time-btn.active { background: var(--action); color: var(--action-ink); }
 .charts-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
-  gap: 12px;
+  gap: 8px;
 }
 .chart-card {
-  background: rgba(13,17,23,0.9);
-  border: 1px solid var(--border-primary-faint);
-  border-radius: 0;
+  background: var(--surface-1);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
   padding: 14px;
 }
 .chart-title {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  color: var(--secondary-muted);
-  font-family: var(--font-mono);
+  font-family: var(--font-sign);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
   margin-bottom: 10px;
+}
+.chart-nodata {
+  font-size: var(--t-small);
+  color: var(--ink-2);
+  text-align: center;
+  margin-top: -34px;
+  height: 34px;
 }
 canvas.metric-chart {
   width: 100%;
@@ -475,7 +445,7 @@ canvas.metric-chart {
   display: block;
 }
 
-/* ─── Live logs tab ─── */
+/* ─── Live logs tab: the departures board ─── */
 .log-controls {
   display: flex;
   align-items: center;
@@ -486,88 +456,148 @@ canvas.metric-chart {
 .sse-status {
   display: flex;
   align-items: center;
-  gap: 5px;
-  font-size: 10px;
-  font-family: var(--font-mono);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  padding: 4px 10px;
-  border-radius: 0;
-  border: 1px solid rgba(0,255,160,0.2);
+  gap: 6px;
+  font-family: var(--font-sign);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 0 10px;
+  height: 30px;
+  border-radius: var(--r);
+  border: 1px solid var(--rule-strong);
+  background: var(--surface-1);
 }
-.sse-status.connected { color: var(--primary); border-color: rgba(0,255,160,0.3); }
-.sse-status.disconnected { color: var(--error); border-color: rgba(255,51,102,0.3); }
-.sse-status.connecting { color: var(--warning); border-color: rgba(255,170,0,0.3); }
+.sse-status.connected { color: var(--green); }
+.sse-status.disconnected { color: var(--red); border-color: var(--red); }
+.sse-status.connecting { color: var(--warn-ink); }
+.sse-status.connected .dot-status { animation: led-blink 2s ease-in-out infinite; }
+.sse-status.connecting .dot-status,
+.sse-status.disconnected .dot-status { animation: led-blink 0.8s ease-in-out infinite; }
 .log-filter-input {
-  background: rgba(13,17,23,0.9);
-  border: 1px solid rgba(0,255,160,0.15);
-  border-radius: 0;
-  color: var(--text);
-  font-size: 11px;
+  background: var(--surface-2);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r);
+  color: var(--ink);
   font-family: var(--font-mono);
-  padding: 5px 10px;
+  font-size: var(--t-data);
+  padding: 0 10px;
   height: 30px;
   outline: none;
-  width: 180px;
+  width: 220px;
 }
-.log-filter-input:focus { border-color: rgba(0,255,160,0.4); }
+.log-filter-input::placeholder { color: var(--ink-3); }
+.log-filter-input:focus { border-color: var(--focus); }
 .log-filter-select {
-  background: rgba(13,17,23,0.9);
-  border: 1px solid rgba(0,255,160,0.15);
-  border-radius: 0;
-  color: var(--text);
-  font-size: 11px;
-  font-family: var(--font-mono);
+  background: var(--surface-2);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 13px;
   padding: 0 8px;
   height: 30px;
   outline: none;
   cursor: pointer;
 }
+.log-count {
+  font-size: var(--t-small);
+  color: var(--ink-2);
+  margin-left: auto;
+}
+
+/* Board column grid — shared by the header row and every entry */
+.log-board-head,
+.log-entry {
+  display: grid;
+  grid-template-columns: 92px 58px minmax(0, 1fr) 210px;
+  column-gap: 14px;
+  align-items: start;
+  padding: 7px 14px;
+}
+.log-board-head {
+  background: var(--surface-2);
+  border: 1px solid var(--rule);
+  border-bottom-color: var(--rule-strong);
+  border-radius: var(--r-2) var(--r-2) 0 0;
+  font-size: var(--t-label);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding-top: 6px; padding-bottom: 6px;
+}
 .log-stream {
-  background: rgba(5,8,14,0.95);
-  border: 1px solid var(--border-primary-faint);
-  border-radius: 0;
-  height: calc(100vh - 200px);
+  background: var(--surface-1);
+  border: 1px solid var(--rule);
+  border-top: 0;
+  border-radius: 0 0 var(--r-2) var(--r-2);
+  height: calc(100vh - 230px);
   overflow-y: auto;
-  font-family: var(--font-mono);
-  font-size: 11px;
   position: relative;
 }
-.log-stream::-webkit-scrollbar { width: 4px; }
-.log-stream::-webkit-scrollbar-track { background: var(--surface-base); }
-.log-stream::-webkit-scrollbar-thumb { background: rgba(0,255,160,0.15); }
 .log-entry {
-  display: flex;
-  gap: 8px;
-  padding: 5px 12px;
-  border-bottom: 1px solid rgba(0,255,160,0.04);
+  border-bottom: 1px solid var(--rule);
   cursor: pointer;
-  animation: slideIn 0.25s ease-out;
-  transition: background 0.1s;
-  align-items: flex-start;
+  animation: led-in var(--t-step) var(--step);
+  transition: background-color var(--t-step) var(--step);
 }
-.log-entry:hover { background: rgba(0,255,160,0.03); }
-.log-entry.expanded { background: rgba(0,255,160,0.05); }
-@keyframes slideIn {
-  from { opacity: 0; transform: translateX(-6px); }
-  to { opacity: 1; transform: translateX(0); }
+.log-entry:hover { background: var(--surface-2); }
+.log-entry.expanded { background: var(--yellow-soft); }
+.log-ts { display: flex; flex-direction: column; line-height: 1.15; }
+.log-time {
+  font-family: var(--font-sign);
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
 }
-.log-ts { color: var(--text-ts); flex-shrink: 0; width: 84px; }
-.log-level { flex-shrink: 0; width: 42px; font-weight: 700; text-align: center; }
-.level-error { color: var(--error); }
-.level-fatal { color: #ff0044; } /* extreme fatal — intentionally brighter than --error */
-.level-warning { color: var(--warning); }
-.level-info { color: var(--secondary); }
-.level-debug { color: var(--text-dim); }
-.log-source { color: var(--secondary-dim); flex-shrink: 0; width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.log-msg { color: rgba(200,216,232,0.75); flex: 1; word-break: break-all; }
+.log-date { font-size: var(--t-label); color: var(--ink-3); margin-top: 1px; }
+.log-level {
+  justify-self: start;
+  margin-top: 1px;
+  font-family: var(--font-sign);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 18px;
+  padding: 0 6px;
+  min-width: 46px;
+  text-align: center;
+  border-radius: var(--r);
+  border: 1px solid transparent;
+}
+.level-error { background: var(--band); color: #fff; }
+.level-fatal { background: var(--band); color: #fff; outline: 1px solid var(--band); outline-offset: 1px; }
+.level-warning { background: var(--yellow); color: var(--plate-navy); }
+.level-info { color: var(--blue); border-color: var(--blue-soft); }
+.level-debug { color: var(--ink-3); border-color: var(--rule); }
+.log-msg {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: var(--t-data);
+  line-height: 1.5;
+  padding-top: 1px;
+  word-break: break-word;
+}
+.log-source {
+  font-family: var(--font-mono);
+  font-size: var(--t-small);
+  color: var(--ink);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r);
+  padding: 0 6px;
+  line-height: 18px;
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .log-detail {
-  padding: 8px 12px 12px 36px;
-  font-size: 10px;
-  color: var(--text-muted);
-  background: rgba(0,0,0,0.2);
-  border-bottom: 1px solid rgba(0,255,160,0.06);
+  padding: 8px 14px 12px calc(14px + 92px + 14px + 58px + 14px);
+  font-family: var(--font-mono);
+  font-size: var(--t-small);
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--rule);
   white-space: pre-wrap;
   word-break: break-all;
 }
@@ -577,70 +607,114 @@ canvas.metric-chart {
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: rgba(200,216,232,0.2);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  gap: 8px;
+  color: var(--ink-2);
+  font-size: 13px;
+  gap: 6px;
 }
+.log-stream-empty .hint { color: var(--ink-3); font-size: var(--t-small); }
 
 /* ─── Errors tab ─── */
 .errors-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  margin-bottom: 12px;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 @media (max-width: 800px) { .errors-grid { grid-template-columns: 1fr; } }
 .err-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 11px;
+  font-size: var(--t-data);
   font-family: var(--font-mono);
 }
 .err-table th {
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 1px;
+  font-family: var(--font-ui);
+  font-size: var(--t-label);
+  font-weight: 600;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: rgba(0,255,160,0.4);
-  padding: 6px 8px;
+  color: var(--ink-3);
+  padding: 7px 10px;
   text-align: left;
-  border-bottom: 1px solid var(--border-primary-faint);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--rule-strong);
 }
+.panel:not(.flush) .err-table th { background: transparent; }
 .err-table td {
-  padding: 6px 8px;
-  border-bottom: 1px solid rgba(0,255,160,0.05);
-  color: rgba(200,216,232,0.7);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink-2);
   max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.err-table tr:hover td { background: rgba(0,255,160,0.03); }
-.err-count { color: var(--error); font-weight: 700; }
-.err-endpoint { color: var(--secondary); }
+.err-table tr:last-child td { border-bottom: 0; }
+.err-table tr:hover td { background: var(--surface-2); }
+.err-table td.td-ts { font-family: var(--font-sign); font-size: 14px; font-weight: 700; color: var(--ink); }
+.err-table td.td-muted { color: var(--ink-2); }
+.err-table td.td-warn { color: var(--warn-ink); }
+.err-table td.td-info { color: var(--ink); }
+.err-table td.td-empty { color: var(--ink-2); text-align: center; font-family: var(--font-ui); }
+.err-count { color: var(--red); font-weight: 700; }
+.err-endpoint { color: var(--ink); }
+.err-table td.err-count { color: var(--red); }
+.err-table td.err-endpoint { color: var(--ink); }
 
 .recent-errors { margin-top: 12px; }
 .err-row {
-  padding: 8px 12px;
-  border-bottom: 1px solid rgba(0,255,160,0.05);
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--rule);
   cursor: pointer;
-  font-size: 11px;
-  font-family: var(--font-mono);
-  transition: background 0.1s;
+  font-size: var(--t-data);
+  transition: background-color var(--t-step) var(--step);
 }
-.err-row:hover { background: rgba(255,51,102,0.04); }
-.err-row-header { display: flex; gap: 10px; align-items: center; }
-.err-time { color: rgba(58,90,106,0.8); width: 145px; flex-shrink: 0; }
-.err-ep { color: var(--secondary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.err-dur { color: rgba(255,170,0,0.6); width: 60px; text-align: right; flex-shrink: 0; }
-.err-msg { color: rgba(255,102,128,0.9); font-size: 10px; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.err-row:last-child { border-bottom: 0; }
+.err-row:hover { background: var(--surface-2); }
+.err-row-header { display: flex; gap: 14px; align-items: baseline; }
+.err-time {
+  font-family: var(--font-sign);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+  width: 150px;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.err-ep {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.err-dur {
+  color: var(--warn-ink);
+  font-family: var(--font-mono);
+  width: 70px;
+  text-align: right;
+  flex-shrink: 0;
+}
+.err-q { color: var(--ink-2); font-family: var(--font-mono); font-size: var(--t-small); }
+.err-msg {
+  color: var(--red);
+  font-family: var(--font-mono);
+  font-size: var(--t-small);
+  margin: 3px 0 0 164px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .err-detail {
+  margin-top: 8px;
   padding: 8px 12px;
-  font-size: 10px;
-  color: var(--text-muted);
-  background: rgba(255,51,102,0.03);
-  border-bottom: 1px solid rgba(255,51,102,0.08);
+  font-family: var(--font-mono);
+  font-size: var(--t-small);
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
   white-space: pre-wrap;
   word-break: break-all;
   max-height: 200px;
@@ -648,139 +722,183 @@ canvas.metric-chart {
   display: none;
 }
 
+.report-bar {
+  margin-top: 20px;
+  padding: 12px 16px;
+  background: var(--surface-1);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.report-bar .section-title { margin: 0; font-size: 16px; }
+.report-bar .section-title::after { display: none; }
+.report-status { font-size: var(--t-small); color: var(--ink-2); }
+
 /* ─── Alarms tab ─── */
 .alarms-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 10px;
+  gap: 8px;
 }
 .alarm-card {
-  background: rgba(13,17,23,0.9);
-  border: 1px solid var(--border-primary-faint);
-  border-radius: 0;
-  padding: 14px;
-  transition: all 0.2s;
+  background: var(--surface-1);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  padding: 12px 14px;
+  color: var(--ink);
 }
-.alarm-card.alarm-ok { border-color: rgba(0,255,160,0.2); }
+.alarm-card.alarm-ok { border-color: var(--rule); }
+/* Disruption band: solid red, white text */
 .alarm-card.alarm-alarm {
-  border-color: rgba(255,51,102,0.5);
-  animation: alarm-blink 2s ease-in-out infinite;
+  background: var(--band);
+  border-color: var(--band);
+  color: #fff;
 }
-.alarm-card.alarm-insufficient { border-color: rgba(58,90,106,0.3); }
-@keyframes alarm-blink {
-  0%, 100% { border-color: rgba(255,51,102,0.4); box-shadow: none; }
-  50% { border-color: rgba(255,51,102,0.8); box-shadow: 0 0 12px rgba(255,51,102,0.2); }
-}
+.alarm-card.alarm-insufficient { border-color: var(--rule-strong); }
+.alarm-card.alarm-auto { opacity: 0.55; }
+.alarm-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
 .alarm-name {
-  font-size: 11px;
-  font-weight: 700;
+  flex: 1;
+  font-size: var(--t-data);
+  font-weight: 600;
   font-family: var(--font-mono);
-  color: var(--text);
+  color: inherit;
   margin-bottom: 6px;
   word-break: break-word;
 }
 .alarm-state-badge {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 10px;
+  gap: 6px;
+  font-family: var(--font-sign);
+  font-size: 13px;
   font-weight: 700;
-  font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  padding: 2px 8px;
-  border-radius: 0;
+  letter-spacing: 0.04em;
   margin-bottom: 8px;
 }
-.badge-alarm { background: rgba(255,51,102,0.15); color: var(--error); }
-.badge-ok { background: var(--glow-primary); color: var(--primary); }
-.badge-insufficient { background: rgba(58,90,106,0.2); color: rgba(58,138,154,0.9); }
+.badge-alarm { color: #fff; }
+.badge-alarm .dot-status { background: #fff; animation: led-blink 1s ease-in-out infinite; }
+.badge-ok { color: var(--green); }
+.badge-insufficient { color: var(--ink-2); }
 .alarm-meta {
-  font-size: 10px;
-  color: var(--text-faded);
+  font-size: var(--t-small);
+  color: var(--ink-2);
   font-family: var(--font-mono);
   line-height: 1.7;
+  word-break: break-word;
 }
+.alarm-meta .v { color: var(--ink); }
+.alarm-card.alarm-alarm .alarm-meta,
+.alarm-card.alarm-alarm .alarm-meta .v { color: #fff; }
+.alarm-reason-toggle { margin-top: 6px; }
+.alarm-reason-toggle summary {
+  cursor: pointer;
+  font-size: var(--t-small);
+  color: var(--ink-2);
+  user-select: none;
+}
+.alarm-card.alarm-alarm .alarm-reason-toggle summary { color: #fff; }
 .alarm-reason {
-  font-size: 10px;
-  color: rgba(255,102,128,0.6);
+  font-size: var(--t-small);
+  color: var(--ink-2);
   font-family: var(--font-mono);
-  margin-top: 6px;
+  margin-top: 4px;
   padding-top: 6px;
-  border-top: 1px solid rgba(255,51,102,0.1);
+  border-top: 1px solid var(--rule);
   word-break: break-word;
   line-height: 1.5;
 }
+.alarm-card.alarm-alarm .alarm-reason { color: #fff; border-top-color: rgba(255,255,255,0.35); }
+.btn-reset {
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid currentColor;
+  color: inherit;
+  padding: 2px 8px;
+  border-radius: var(--r);
+  font-family: var(--font-ui);
+  font-size: var(--t-small);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color var(--t-step) var(--step);
+}
+.btn-reset:hover { background: rgba(255,255,255,0.14); }
+.alarm-card:not(.alarm-alarm) .btn-reset:hover { background: var(--surface-3); }
 
 /* ─── PMS Downtime ─── */
 .downtime-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
 }
 .downtime-item {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 8px 12px;
-  background: rgba(5,8,14,0.5);
-  border-radius: 0;
-  border: 1px solid rgba(255,170,0,0.1);
-  font-family: var(--font-mono);
-  font-size: 11px;
+  gap: 14px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--rule);
+  font-size: var(--t-data);
 }
-.dt-time { color: rgba(58,90,106,0.8); width: 180px; flex-shrink: 0; }
-.dt-dur {
-  color: var(--warning);
+.downtime-item:last-child { border-bottom: 0; }
+.dt-time {
+  font-family: var(--font-sign);
+  font-size: 15px;
   font-weight: 700;
-  width: 100px;
+  color: var(--ink);
+  width: 160px;
+  flex-shrink: 0;
+}
+.dt-dur {
+  font-family: var(--font-mono);
+  color: var(--warn-ink);
+  font-weight: 700;
+  width: 80px;
 }
 .dt-bar {
   flex: 1;
-  height: 4px;
-  background: rgba(255,170,0,0.08);
-  border-radius: 0;
+  height: 6px;
+  background: var(--surface-3);
+  border-radius: 50%;
   overflow: hidden;
 }
 .dt-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--warning), var(--warning-dark));
-  border-radius: 0;
-  transition: width 0.5s ease;
+  background: var(--yellow);
 }
 
-/* ── Bridge softening overrides ── */
-.panel, .stat-card, .svc-card,
-.cyber-panel,
-.endpoint-card, .alarm-card, .error-card, .endpoint-tile, .metric-panel {
-  border-radius: 6px;
+@media (max-width: 720px) {
+  .hdr { gap: 12px; padding: 0 12px; }
+  .db-status { display: none; }
+  .tab-panel { padding: 16px; }
+  .log-board-head, .log-entry { grid-template-columns: 72px 52px minmax(0, 1fr); }
+  .log-board-head > :nth-child(4), .log-entry .log-source { display: none; }
+  .log-detail { padding-left: 16px; }
+  .err-msg { margin-left: 0; }
 }
-.refresh-btn, .tab-btn {
-  border-radius: 4px;
-}
-/* Accent gradient underline on the header (matches topbar in parent) */
-.hdr { position: relative; }
-.hdr::after {
-  content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px;
-  background: linear-gradient(90deg, transparent 0%, var(--border-primary-faint) 30%, var(--border-glow) 50%, var(--border-primary-faint) 70%, transparent 100%);
-  opacity: .75; pointer-events: none;
-}
-/* Clean grid background to match index.html's subtle bridge grid */
-body {
-  background-image:
-    linear-gradient(rgba(0,255,160,0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0,255,160,0.035) 1px, transparent 1px);
-}
-/* Slightly less glowy brand to match the calmer bridge feel */
-.hdr-brand { text-shadow: 0 0 12px rgba(0,255,160,0.35); }
-.hdr-brand::before { box-shadow: 0 0 6px var(--primary); }
+/* Endpoint health as a departures board */
+.ep-board { border: 1px solid var(--rule); border-radius: var(--r); background: var(--surface-1); }
+.ep-row { display: grid; grid-template-columns: 80px 150px minmax(0, 1fr) 120px 90px; align-items: center; gap: 12px;
+  min-height: 40px; padding: 6px 14px; border-top: 1px solid var(--rule); }
+.ep-row.ep-head { border-top: 0; min-height: 32px; font: 600 12.5px/1 var(--font-sign); letter-spacing: .02em; color: var(--ink-2); border-bottom: 1px solid var(--rule-strong); }
+.ep-row.ep-head + .ep-row { border-top: 0; }
+.ep-time { font: 600 16px/1 var(--font-sign); color: var(--ink); }
+.ep-status { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; font-size: 12.5px; }
+.ep-status.ok { color: var(--green); } .ep-status.bad { color: var(--red); }
+.ep-name { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.ep-name b { color: var(--ink); font-weight: 600; white-space: nowrap; }
+.ep-name .fine { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ep-lat { text-align: right; font-family: var(--font-mono); color: var(--ink); }
+.ep-row.state-error { background: var(--red-soft); }
+.err-icon { font-family: 'Material Symbols Outlined'; font-size: 17px; vertical-align: -3px; margin-right: 6px; font-feature-settings: 'liga'; }
 </style>
 </head>
 <body>
 
 <!-- Header -->
 <header class="hdr">
-  <div class="hdr-brand"><span class="hdr-brand-box"><span class="material-symbols-outlined ms-icon">database</span></span>LC MONITOR</div>
+  <div class="hdr-brand">LC Monitor</div>
   <nav class="tabs">
     <button class="tab-btn active" id="tab-overview" onclick="showTab('overview')">Overview</button>
     <button class="tab-btn" id="tab-metrics" onclick="showTab('metrics')">Metrics</button>
@@ -789,9 +907,9 @@ body {
     <button class="tab-btn" id="tab-alarms" onclick="showTab('alarms')">Alarms</button>
   </nav>
   <div class="hdr-right">
-    <div class="db-status"><div class="db-dot" id="dbDot"></div><span id="dbLabel">no db</span></div>
+    <div class="db-status" title="Database from the top config panel"><div class="db-dot" id="dbDot"></div><span id="dbLabel">no db</span></div>
     <div class="hdr-clock" id="clock">--:--:--</div>
-    <button class="refresh-btn" id="fsBtn" onclick="toggleFullscreen()" style="margin-left:10px;padding:4px 10px;font-size:11px;display:inline-flex;align-items:center;gap:4px"><span class="material-symbols-outlined" style="font-size:14px">fullscreen</span>Fullscreen</button>
+    <button class="refresh-btn" id="fsBtn" onclick="toggleFullscreen()"><span class="material-symbols-outlined" style="font-size:14px">fullscreen</span>Fullscreen</button>
   </div>
 </header>
 
@@ -800,14 +918,14 @@ body {
 
   <!-- OVERVIEW -->
   <div class="tab-panel active" id="panel-overview">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-      <div class="section-title" style="margin-bottom:0;flex:1">Infrastructure Status</div>
-      <button class="refresh-btn" id="overviewRefreshBtn" onclick="loadOverview(true)" style="display:inline-flex;align-items:center;gap:4px"><span class="material-symbols-outlined" style="font-size:14px">refresh</span>Refresh</button>
+    <div class="section-bar">
+      <div class="section-title">Infrastructure Status</div>
+      <button class="refresh-btn" id="overviewRefreshBtn" onclick="loadOverview(true)"><span class="material-symbols-outlined" style="font-size:14px">refresh</span>Refresh</button>
     </div>
     <div class="stats-bar" id="statsBar"></div>
-    <div style="display:flex;align-items:center;justify-content:space-between;margin:16px 0 8px">
-      <div class="section-title" style="margin-bottom:0">Endpoint Health</div>
-      <span id="endpointCheckedAt" style="font-size:10px;color:var(--text-faded)"></span>
+    <div class="section-bar" style="margin-top:4px">
+      <div class="section-title">Endpoint Health</div>
+      <span id="endpointCheckedAt" class="meta-note"></span>
     </div>
     <div id="endpointContent"><div class="loading-state"><span class="spinner"></span>Checking endpoints...</div></div>
     <div id="overviewContent"><div class="loading-state"><span class="spinner"></span>Loading infrastructure...</div></div>
@@ -840,7 +958,7 @@ body {
       </div>
       <div class="ctrl-group" style="justify-content:flex-end">
         <div class="ctrl-label">&nbsp;</div>
-        <button class="refresh-btn" onclick="loadMetrics()">Load Metrics</button>
+        <button class="refresh-btn primary" onclick="loadMetrics()">Load Metrics</button>
       </div>
     </div>
     <div id="metricsContent"><div class="empty-state">Select a service and click Load Metrics</div></div>
@@ -861,46 +979,44 @@ body {
         <option value="warning">Warnings+</option>
         <option value="info">Info+</option>
       </select>
-      <button class="refresh-btn" id="pauseBtn" onclick="togglePause()" style="display:inline-flex;align-items:center;gap:4px"><span class="material-symbols-outlined" style="font-size:14px">pause</span>Pause</button>
-      <button class="refresh-btn" onclick="clearLogs()" style="display:inline-flex;align-items:center;gap:4px"><span class="material-symbols-outlined" style="font-size:14px">close</span>Clear</button>
-      <span style="font-size:10px;font-family:monospace;color:rgba(200,216,232,0.3)" id="logCount">0 entries</span>
+      <button class="refresh-btn" id="pauseBtn" onclick="togglePause()"><span class="material-symbols-outlined" style="font-size:14px">pause</span>Pause</button>
+      <button class="refresh-btn" onclick="clearLogs()"><span class="material-symbols-outlined" style="font-size:14px">close</span>Clear</button>
+      <span class="log-count" id="logCount">0 entries</span>
     </div>
+    <div class="log-board-head" aria-hidden="true"><span>Time</span><span>Level</span><span>Message</span><span>Source</span></div>
     <div class="log-stream" id="logStream">
       <div class="log-stream-empty" id="logStreamEmpty">
-        <div><span class="material-symbols-outlined" style="font-size:32px;color:var(--primary);opacity:0.6">satellite_alt</span></div>
         <div>Waiting for logs...</div>
-        <div style="color:rgba(200,216,232,0.1);font-size:10px">Connect to a DB in the top panel, then switch to this tab</div>
+        <div class="hint">Connect to a DB in the top panel, then switch to this tab</div>
       </div>
     </div>
   </div>
 
   <!-- ERRORS -->
   <div class="tab-panel" id="panel-errors">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-      <div class="section-title" style="margin-bottom:0;flex:1">Error Tracker — Last 24h</div>
-      <button class="refresh-btn" onclick="loadErrors()" style="display:inline-flex;align-items:center;gap:4px"><span class="material-symbols-outlined" style="font-size:14px">refresh</span>Refresh</button>
+    <div class="section-bar">
+      <div class="section-title">Error Tracker — Last 24h</div>
+      <button class="refresh-btn" onclick="loadErrors()"><span class="material-symbols-outlined" style="font-size:14px">refresh</span>Refresh</button>
     </div>
     <div id="errorsContent"><div class="loading-state"><span class="spinner"></span>Loading...</div></div>
-    <div style="margin-top:20px;padding:14px 16px;background:var(--glow-primary);border:1px solid var(--border-primary);border-radius:0">
-      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-        <div class="section-title" style="margin:0;font-size:11px">Generate Report</div>
-        <input type="date" id="reportDate" style="background:var(--surface-base);border:1px solid var(--border-primary);color:var(--text);padding:4px 8px;border-radius:0;font-size:12px;font-family:var(--font-mono)">
-        <select id="reportRange" style="background:var(--surface-base);border:1px solid var(--border-primary);color:var(--text);padding:4px 8px;border-radius:0;font-size:12px;font-family:var(--font-mono)">
-          <option value="day">Single Day</option>
-          <option value="week">Last 7 Days</option>
-          <option value="2weeks">Last 14 Days</option>
-        </select>
-        <button class="refresh-btn" id="reportBtn" onclick="generateReport()" style="display:inline-flex;align-items:center;gap:4px"><span class="material-symbols-outlined" style="font-size:14px">description</span>Generate Report</button>
-        <span id="reportStatus" style="font-size:11px;color:var(--secondary)"></span>
-      </div>
+    <div class="report-bar">
+      <div class="section-title">Generate Report</div>
+      <input type="date" id="reportDate" class="ctrl-input">
+      <select id="reportRange" class="ctrl-select" style="min-width:0">
+        <option value="day">Single Day</option>
+        <option value="week">Last 7 Days</option>
+        <option value="2weeks">Last 14 Days</option>
+      </select>
+      <button class="refresh-btn primary" id="reportBtn" onclick="generateReport()"><span class="material-symbols-outlined" style="font-size:14px">description</span>Generate Report</button>
+      <span id="reportStatus" class="report-status"></span>
     </div>
   </div>
 
   <!-- ALARMS -->
   <div class="tab-panel" id="panel-alarms">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-      <div class="section-title" style="margin-bottom:0;flex:1">CloudWatch Alarms</div>
-      <button class="refresh-btn" onclick="loadAlarms()" style="display:inline-flex;align-items:center;gap:4px"><span class="material-symbols-outlined" style="font-size:14px">refresh</span>Refresh</button>
+    <div class="section-bar">
+      <div class="section-title">CloudWatch Alarms</div>
+      <button class="refresh-btn" onclick="loadAlarms()"><span class="material-symbols-outlined" style="font-size:14px">refresh</span>Refresh</button>
     </div>
     <div id="alarmsContent"><div class="loading-state"><span class="spinner"></span>Loading...</div></div>
   </div>
@@ -909,21 +1025,28 @@ body {
 
 <script>
 // ─── Design Token Colors (for canvas/dynamic JS usage) ───────────────────────
+// HTML templates use CSS var() references so they follow Day/Night live.
 const C = {
-  primary:        '#00ffa0',
-  secondary:      '#7aa5ff',
-  secondaryFill:  'rgba(0,212,255,0.2)',
-  secondaryFaint: 'rgba(0,212,255,0)',
-  error:          '#ff3366',
-  warning:        '#ffaa00',
-  text:           '#c8d8e8',
-  textMuted:      'rgba(200,216,232,0.5)',
-  textFaded:      'rgba(200,216,232,0.35)',
-  secondaryMuted: 'rgba(0,212,255,0.6)',
-  secondaryDim:   'rgba(0,212,255,0.35)',
-  unknown:        '#3a8a9a',
-  aaa:            'rgba(200,216,232,0.4)',
+  primary:        'var(--green)',     // healthy / on time
+  secondary:      'var(--blue)',      // information
+  error:          'var(--red)',       // disruption
+  warning:        'var(--warn-ink)',  // change (yellow, printed amber in Day)
+  secondaryMuted: 'var(--ink-2)',
+  secondaryDim:   'var(--ink-2)',
+  unknown:        'var(--ink-2)',
+  aaa:            'var(--ink-2)',
 };
+
+// Canvas can't resolve var(); read the live token values at draw time.
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+function redrawCharts() {
+  document.querySelectorAll('canvas').forEach(c => { if (typeof c._redraw === 'function') c._redraw(); });
+}
+new MutationObserver(redrawCharts).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+window.addEventListener('storage', e => { if (e.key === 'lc-helper-tweaks') setTimeout(redrawCharts, 0); });
+try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', redrawCharts); } catch (_) {}
 
 // ─── State ───────────────────────────────────────────────────────────────────
 let activeTab = 'overview';
@@ -1024,7 +1147,7 @@ async function loadOverview(force) {
     renderOverview(infraData);
   } catch(e) {
     document.getElementById('overviewContent').innerHTML =
-      `<div class="error-state">⚠ Failed to load infrastructure: ${e.message}</div>`;
+      `<div class="error-state"><span class="err-icon">error</span>Failed to load infrastructure: ${e.message}</div>`;
   } finally {
     btn.disabled = false;
     btn.innerHTML = '<span class="material-symbols-outlined" style="font-size:14px">refresh</span>Refresh';
@@ -1055,17 +1178,17 @@ function renderOverview(d) {
     </div>
     <div class="stat-card">
       <div class="stat-label">Load Balancers</div>
-      <div class="stat-value" style="color:var(--secondary)">${albActive}</div>
+      <div class="stat-value" style="color:${albActive===d.alb.length?'var(--ink)':C.warning}">${albActive}</div>
       <div class="stat-sub">of ${d.alb.length} active</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">CloudFront</div>
-      <div class="stat-value" style="color:var(--secondary)">${d.cloudfront.length}</div>
+      <div class="stat-value">${d.cloudfront.length}</div>
       <div class="stat-sub">distributions</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">S3 Buckets</div>
-      <div class="stat-value" style="color:var(--warning)">${d.s3.length}</div>
+      <div class="stat-value">${d.s3.length}</div>
       <div class="stat-sub">buckets</div>
     </div>
   `;
@@ -1144,7 +1267,7 @@ function renderOverview(d) {
         <div class="svc-name">${esc(lb.name)}</div>
         <div class="svc-meta">
           ${esc(lb.type)} · ${esc(lb.scheme)}<br>
-          <span style="color:${C.secondaryDim};font-size:9px">${esc(lb.dns)}</span>
+          <span class="fine">${esc(lb.dns)}</span>
         </div>
         <div class="svc-status" style="color:${ok ? C.primary : C.error}">
           <div class="dot-status ${ok ? 'dot-green' : 'dot-red'}"></div>${lb.state}
@@ -1164,7 +1287,7 @@ function renderOverview(d) {
         <div class="svc-name" title="${esc(cf.domain)}">${esc(alias)}</div>
         <div class="svc-meta">
           ${esc(cf.id)}<br>
-          <span style="font-size:9px;color:rgba(200,216,232,0.3)">${esc(cf.origin || '')}</span>
+          <span class="fine">${esc(cf.origin || '')}</span>
         </div>
         <div class="svc-status" style="color:${ok ? C.secondary : C.unknown}">
           <div class="dot-status ${ok ? 'dot-blue' : 'dot-grey'}"></div>${cf.status}
@@ -1183,8 +1306,8 @@ function renderOverview(d) {
         <div class="svc-meta">
           Created ${fmtDate(b.created)}
         </div>
-        <div class="svc-status" style="color:var(--warning)">
-          <div class="dot-status dot-amber"></div>active
+        <div class="svc-status" style="color:var(--ink-2)">
+          <div class="dot-status dot-grey"></div>active
         </div>
       </div>`;
   }
@@ -1202,7 +1325,7 @@ async function loadEndpoints() {
     renderEndpoints(data);
   } catch(e) {
     document.getElementById('endpointContent').innerHTML =
-      `<div class="error-state">⚠ Failed to check endpoints: ${esc(e.message)}</div>`;
+      `<div class="error-state"><span class="err-icon">error</span>Failed to check endpoints: ${esc(e.message)}</div>`;
   }
 }
 
@@ -1211,27 +1334,20 @@ function renderEndpoints(data) {
   document.getElementById('endpointCheckedAt').textContent = ts ? `checked ${ts}` : '';
 
   const envOrder = ['production', 'staging', 'test'];
-  const envColors = { production: C.primary, staging: C.secondary, test: C.warning };
 
-  let html = `<div class="service-grid">`;
+  // Departures-board rows: checked time · status · endpoint · env plate · latency.
+  let html = `<div class="ep-board"><div class="ep-row ep-head"><span>Checked</span><span>Status</span><span>Endpoint</span><span>Env</span><span>Latency</span></div>`;
   for (const ep of data.endpoints) {
-    const color = ep.ok ? C.primary : C.error;
-    const dotClass = ep.ok ? 'dot-green' : 'dot-red';
-    const stateClass = ep.ok ? 'state-running' : 'state-error';
-    const latency = ep.latencyMs != null ? `${ep.latencyMs}ms` : '';
-    const statusText = ep.ok ? `online` : (ep.error || `${ep.status ?? 'down'}`);
-    const envColor = envColors[ep.env] || C.aaa;
+    const latency = ep.latencyMs != null ? `${ep.latencyMs} ms` : '—';
+    const statusText = ep.ok ? 'online' : (ep.error || `${ep.status ?? 'down'}`);
+    const envCls = ['production', 'staging', 'test'].includes(ep.env) ? `env-${ep.env}` : 'env-other';
     html += `
-      <div class="svc-card ${stateClass}">
-        <div class="svc-name">${esc(ep.name)}</div>
-        <div class="svc-meta">
-          <span style="color:${envColor};font-size:9px;text-transform:uppercase;letter-spacing:1px">${esc(ep.env)}</span><br>
-          <span style="color:rgba(200,216,232,0.35);font-size:9px">${esc(ep.url)}</span><br>
-          ${latency ? `<span style="color:${C.secondaryMuted};font-size:10px">${latency}</span>` : ''}
-        </div>
-        <div class="svc-status" style="color:${color}">
-          <div class="dot-status ${dotClass}"></div>${statusText}
-        </div>
+      <div class="ep-row ${ep.ok ? 'state-running' : 'state-error'}">
+        <span class="ep-time">${esc(ts.slice(0, 5))}</span>
+        <span class="ep-status ${ep.ok ? 'ok' : 'bad'}"><span class="dot-status ${ep.ok ? 'dot-green' : 'dot-red'}"></span>${esc(statusText)}</span>
+        <span class="ep-name"><b>${esc(ep.name)}</b><span class="fine">${esc(ep.url)}</span></span>
+        <span><span class="env-plate ${envCls}">${esc(ep.env)}</span></span>
+        <span class="ep-lat">${latency}</span>
       </div>`;
   }
   html += `</div>`;
@@ -1333,7 +1449,7 @@ async function loadMetrics() {
     if (!Array.isArray(results)) throw new Error(results.error || 'Unknown error');
     renderMetrics(queries, results);
   } catch(e) {
-    document.getElementById('metricsContent').innerHTML = `<div class="error-state">⚠ ${e.message}</div>`;
+    document.getElementById('metricsContent').innerHTML = `<div class="error-state"><span class="err-icon">error</span>${e.message}</div>`;
   }
 }
 
@@ -1348,7 +1464,7 @@ function renderMetrics(queries, results) {
     html += `<div class="chart-card">
       <div class="chart-title">${esc(q.label)}</div>
       <canvas class="metric-chart" id="chart_m${i}" width="400" height="120"></canvas>
-      ${!hasData ? '<div style="font-size:10px;font-family:monospace;color:rgba(200,216,232,0.2);text-align:center;margin-top:-30px">No data available</div>' : ''}
+      ${!hasData ? '<div class="chart-nodata">No data available</div>' : ''}
     </div>`;
   });
   html += '</div>';
@@ -1367,15 +1483,19 @@ function renderMetrics(queries, results) {
 
 // ─── Canvas Chart ─────────────────────────────────────────────────────────────
 function drawChart(canvas, timestamps, values, unit) {
+  canvas._redraw = () => drawChart(canvas, timestamps, values, unit);
   const ctx = canvas.getContext('2d');
+  const K = {
+    rule: cssVar('--rule'), ruleStrong: cssVar('--rule-strong'), label: cssVar('--ink-3'),
+    line: cssVar('--blue'), fill: cssVar('--blue-soft'), surface: cssVar('--surface-1'),
+    font: '10px ' + cssVar('--font-mono'),
+  };
   const W = canvas.width, H = canvas.height;
   const pad = { top: 16, right: 12, bottom: 28, left: 52 };
   const cW = W - pad.left - pad.right;
   const cH = H - pad.top - pad.bottom;
 
   ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = 'rgba(5,8,14,0)';
-  ctx.fillRect(0, 0, W, H);
 
   if (!values.length) return;
 
@@ -1388,14 +1508,14 @@ function drawChart(canvas, timestamps, values, unit) {
 
   // Grid
   const gridCount = 4;
-  ctx.strokeStyle = 'rgba(0,255,160,0.07)';
+  ctx.strokeStyle = K.rule;
   ctx.lineWidth = 1;
   for (let i = 0; i <= gridCount; i++) {
     const y = pad.top + (cH / gridCount) * i;
     ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + cW, y); ctx.stroke();
     const v = maxV - (range / gridCount) * i;
-    ctx.fillStyle = 'rgba(58,90,106,0.8)';
-    ctx.font = '9px monospace';
+    ctx.fillStyle = K.label;
+    ctx.font = K.font;
     ctx.textAlign = 'right';
     ctx.fillText(fmtVal(v, unit), pad.left - 4, y + 3);
   }
@@ -1405,11 +1525,11 @@ function drawChart(canvas, timestamps, values, unit) {
   for (let i = 0; i <= labelCount; i++) {
     const idx = Math.round((values.length - 1) * (i / labelCount));
     const x = pad.left + (idx / (values.length - 1)) * cW;
-    ctx.strokeStyle = 'rgba(0,255,160,0.04)';
+    ctx.strokeStyle = K.rule;
     ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, pad.top + cH); ctx.stroke();
     if (timestamps[idx]) {
-      ctx.fillStyle = 'rgba(58,90,106,0.7)';
-      ctx.font = '9px monospace';
+      ctx.fillStyle = K.label;
+      ctx.font = K.font;
       ctx.textAlign = 'center';
       ctx.fillText(fmtTime(timestamps[idx]), x, H - 6);
     }
@@ -1426,10 +1546,7 @@ function drawChart(canvas, timestamps, values, unit) {
 
   if (!pts.length) return;
 
-  // Fill
-  const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + cH);
-  grad.addColorStop(0, C.secondaryFill);
-  grad.addColorStop(1, C.secondaryFaint);
+  // Fill (flat — no gradients on a matrix display)
 
   ctx.beginPath();
   ctx.moveTo(pts[0].x, pts[0].y);
@@ -1437,28 +1554,29 @@ function drawChart(canvas, timestamps, values, unit) {
   ctx.lineTo(pts[pts.length - 1].x, pad.top + cH);
   ctx.lineTo(pts[0].x, pad.top + cH);
   ctx.closePath();
-  ctx.fillStyle = grad;
+  ctx.fillStyle = K.fill;
   ctx.fill();
 
   // Line
   ctx.beginPath();
   ctx.moveTo(pts[0].x, pts[0].y);
   for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-  ctx.strokeStyle = C.secondary;
+  ctx.strokeStyle = K.line;
   ctx.lineWidth = 1.5;
+  ctx.lineJoin = 'round';
   ctx.stroke();
 
   // Axes
-  ctx.strokeStyle = 'rgba(0,255,160,0.15)';
+  ctx.strokeStyle = K.ruleStrong;
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(pad.left, pad.top); ctx.lineTo(pad.left, pad.top + cH); ctx.lineTo(pad.left + cW, pad.top + cH);
   ctx.stroke();
 
-  // Dots
-  ctx.fillStyle = C.secondary;
+  // Dots — square LED pixels
+  ctx.fillStyle = K.line;
   for (const p of pts) {
-    ctx.beginPath(); ctx.arc(p.x, p.y, 2.5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillRect(Math.round(p.x) - 2, Math.round(p.y) - 2, 4, 4);
   }
 }
 
@@ -1597,7 +1715,7 @@ function renderLogStream() {
   document.getElementById('logCount').textContent = `${filtered.length} entries`;
 
   if (!filtered.length) {
-    stream.innerHTML = `<div class="log-stream-empty"><div><span class="material-symbols-outlined" style="font-size:32px;color:var(--primary);opacity:0.6">satellite_alt</span></div><div>${logEntries.length ? 'No entries match filter' : 'Waiting for logs...'}</div></div>`;
+    stream.innerHTML = `<div class="log-stream-empty"><div>${logEntries.length ? 'No entries match filter' : 'Waiting for logs...'}</div></div>`;
     return;
   }
 
@@ -1612,13 +1730,14 @@ function renderLogStream() {
     const div = document.createElement('div');
     div.dataset.id = e.id;
     const ts = fmtTs(e.time);
+    const [tsDate, tsTime] = ts.includes(' ') ? ts.split(' ') : ['', ts];
     const levelLabel = e.level.substring(0,4).toUpperCase();
     div.innerHTML = `
       <div class="log-entry" onclick="toggleLogDetail(this)">
-        <span class="log-ts">${ts}</span>
+        <span class="log-ts" title="${esc(ts)}"><span class="log-time">${esc(tsTime)}</span><span class="log-date">${esc(tsDate)}</span></span>
         <span class="log-level ${e.levelClass}">${levelLabel}</span>
-        <span class="log-source" title="${esc(e.source)}">${esc(e.source)}</span>
         <span class="log-msg">${esc(e.msg)}</span>
+        <span class="log-source" title="${esc(e.source)}">${esc(e.source)}</span>
       </div>
       ${e.detail ? `<div class="log-detail" style="display:none">${esc(e.detail)}</div>` : ''}`;
     stream.appendChild(div);
@@ -1700,15 +1819,15 @@ async function loadErrors() {
     html += `<div class="stats-bar" style="margin-bottom:14px">
       <div class="stat-card">
         <div class="stat-label">Total Errors (24h)</div>
-        <div class="stat-value" style="color:var(--error)">${errData.total || 0}</div>
+        <div class="stat-value" style="color:${errData.total ? C.error : C.primary}">${errData.total || 0}</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Unique Endpoints</div>
-        <div class="stat-value" style="color:var(--warning)">${errData.topEndpoints ? errData.topEndpoints.length : 0}</div>
+        <div class="stat-value">${errData.topEndpoints ? errData.topEndpoints.length : 0}</div>
       </div>
       ${slowData && !slowData.error ? `<div class="stat-card">
         <div class="stat-label">Slow Sessions (24h)</div>
-        <div class="stat-value" style="color:var(--warning)">${slowData.total || 0}</div>
+        <div class="stat-value" style="color:${slowData.total ? C.warning : 'var(--ink)'}">${slowData.total || 0}</div>
       </div>` : ''}
     </div>`;
 
@@ -1725,7 +1844,7 @@ async function loadErrors() {
           <tbody>
             ${errData.topEndpoints && errData.topEndpoints.length
               ? errData.topEndpoints.map(e => `<tr><td class="err-endpoint" title="${esc(e.endpoint)}">${esc(e.endpoint)}</td><td class="err-count">${e.count}</td></tr>`).join('')
-              : '<tr><td colspan="2" style="color:rgba(200,216,232,0.2);text-align:center">No errors in last 24h</td></tr>'}
+              : '<tr><td colspan="2" class="td-empty">No errors in last 24h</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -1734,7 +1853,7 @@ async function loadErrors() {
     // PMS Downtime
     if (dtData.length) {
       const maxDt = Math.max(...dtData.map(d => d.totalDownTimeInSeconds));
-      html += `<div class="section-title" style="margin-top:16px">PMS Downtime History</div>
+      html += `<div class="section-title">PMS Downtime History</div>
         <div class="panel"><div class="downtime-list">`;
       for (const d of dtData.slice(0, 20)) {
         const secs = d.totalDownTimeInSeconds;
@@ -1751,30 +1870,30 @@ async function loadErrors() {
 
     // Slow endpoints
     if (slowData && !slowData.error && slowData.topSlow && slowData.topSlow.length) {
-      html += `<div class="section-title" style="margin-top:16px">Slow Sessions (24h)</div>
-        <div class="panel" style="padding:0">
+      html += `<div class="section-title">Slow Sessions (24h)</div>
+        <div class="panel flush">
         <table class="err-table" style="width:100%">
           <thead><tr><th>Endpoint</th><th>Count</th><th>Avg</th><th>Max</th></tr></thead>
           <tbody>
             ${slowData.topSlow.map(s => `<tr>
               <td class="err-endpoint" title="${esc(s.endpoint)}">${esc(s.endpoint)}</td>
               <td class="err-count">${s.count}</td>
-              <td style="color:var(--warning);padding:6px 8px;font-size:11px">${s.avgMs}ms</td>
-              <td style="color:var(--warning);padding:6px 8px;font-size:11px">${s.maxMs}ms</td>
+              <td class="td-warn">${s.avgMs}ms</td>
+              <td class="td-warn">${s.maxMs}ms</td>
             </tr>`).join('')}
           </tbody>
         </table>
         </div>`;
       if (slowData.slowest && slowData.slowest.length) {
-        html += `<div class="section-title" style="margin-top:12px;font-size:10px;opacity:0.7">Slowest Individual Requests</div>
-          <div class="panel" style="padding:0">`;
+        html += `<div class="section-title" style="font-size:15px">Slowest Individual Requests</div>
+          <div class="panel flush">`;
         for (const r of slowData.slowest) {
           html += `<div class="err-row">
             <div class="err-row-header">
               <span class="err-time">${fmtTs(r.time)}</span>
               <span class="err-ep">${esc(r.endpoint || 'unknown')}${r.method ? '#' + esc(r.method) : ''}</span>
-              <span class="err-dur" style="color:var(--warning)">${r.duration ? Math.round(r.duration * 1000) + 'ms' : ''}</span>
-              ${r.numQueries ? `<span style="color:rgba(200,216,232,0.4);font-size:10px">${r.numQueries}q</span>` : ''}
+              <span class="err-dur">${r.duration ? Math.round(r.duration * 1000) + 'ms' : ''}</span>
+              ${r.numQueries ? `<span class="err-q">${r.numQueries}q</span>` : ''}
             </div>
           </div>`;
         }
@@ -1785,17 +1904,17 @@ async function loadErrors() {
     // Long-lived sessions
     if (llData && !llData.error && llData.topEndpoints && llData.topEndpoints.length) {
       const fmtDurMs = ms => { if (!ms) return '—'; if (ms >= 3600000) return `${(ms/3600000).toFixed(1)}h`; if (ms >= 60000) return `${(ms/60000).toFixed(1)}m`; if (ms >= 1000) return `${(ms/1000).toFixed(1)}s`; return Math.round(ms) + 'ms'; };
-      html += `<div class="section-title" style="margin-top:16px">Long-lived Sessions (24h) <span style="font-size:10px;opacity:0.5;font-weight:normal">— top by avg duration, WebSocket endpoints expected here</span></div>
-        <div class="panel" style="padding:0">
+      html += `<div class="section-title">Long-lived Sessions (24h) <span class="section-note">top by avg duration, WebSocket endpoints expected here</span></div>
+        <div class="panel flush">
         <table class="err-table" style="width:100%">
           <thead><tr><th>Endpoint</th><th>Method</th><th>Count</th><th>Avg</th><th>Max</th></tr></thead>
           <tbody>
             ${llData.topEndpoints.map(e => `<tr>
               <td class="err-endpoint" title="${esc(e.endpoint)}">${esc(e.endpoint)}</td>
-              <td style="color:rgba(200,216,232,0.4);padding:6px 8px;font-size:11px">${esc(e.method)}</td>
+              <td class="td-muted">${esc(e.method)}</td>
               <td class="err-count">${e.count}</td>
-              <td style="color:var(--secondary);padding:6px 8px;font-size:11px">${fmtDurMs(e.avgMs)}</td>
-              <td style="color:${C.warning};padding:6px 8px;font-size:11px">${fmtDurMs(e.maxMs)}</td>
+              <td class="td-info">${fmtDurMs(e.avgMs)}</td>
+              <td class="td-warn">${fmtDurMs(e.maxMs)}</td>
             </tr>`).join('')}
           </tbody>
         </table>
@@ -1804,8 +1923,8 @@ async function loadErrors() {
 
     // Recent errors
     if (errData.recent && errData.recent.length) {
-      html += `<div class="section-title" style="margin-top:16px">Recent Errors</div>
-        <div class="panel" style="padding:0">`;
+      html += `<div class="section-title">Recent Errors</div>
+        <div class="panel flush">`;
       for (const r of errData.recent) {
         const msg = r.error ? r.error.split('\n')[0] : 'Error';
         html += `<div class="err-row" onclick="toggleErrDetail(this)">
@@ -1831,7 +1950,7 @@ async function loadErrors() {
     }
 
   } catch(e) {
-    content.innerHTML = `<div class="error-state">⚠ ${e.message}<br><span style="color:rgba(200,216,232,0.3);font-size:10px">Connect to a database to see error data</span></div>`;
+    content.innerHTML = `<div class="error-state"><span class="err-icon">error</span>${e.message}<span class="hint">Connect to a database to see error data</span></div>`;
   }
 }
 
@@ -1841,7 +1960,12 @@ function toggleErrDetail(row) {
 }
 
 function drawBarChart(canvas, hourlyData) {
+  canvas._redraw = () => drawBarChart(canvas, hourlyData);
   const ctx = canvas.getContext('2d');
+  const K = {
+    rule: cssVar('--rule'), ruleStrong: cssVar('--rule-strong'), label: cssVar('--ink-3'),
+    empty: cssVar('--ink-2'), bar: cssVar('--red'), font: '10px ' + cssVar('--font-mono'),
+  };
   const W = canvas.width, H = canvas.height;
   const pad = { top: 12, right: 12, bottom: 24, left: 40 };
   const cW = W - pad.left - pad.right, cH = H - pad.top - pad.bottom;
@@ -1849,8 +1973,8 @@ function drawBarChart(canvas, hourlyData) {
   ctx.clearRect(0, 0, W, H);
 
   if (!hourlyData.length) {
-    ctx.fillStyle = 'rgba(200,216,232,0.15)';
-    ctx.font = '11px monospace';
+    ctx.fillStyle = K.empty;
+    ctx.font = '12px ' + cssVar('--font-ui');
     ctx.textAlign = 'center';
     ctx.fillText('No errors in last 24h', W / 2, H / 2);
     return;
@@ -1877,14 +2001,14 @@ function drawBarChart(canvas, hourlyData) {
   }
 
   // Grid
-  ctx.strokeStyle = 'rgba(0,255,160,0.07)';
+  ctx.strokeStyle = K.rule;
   ctx.lineWidth = 1;
   for (let i = 0; i <= 4; i++) {
     const y = pad.top + (cH / 4) * i;
     ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + cW, y); ctx.stroke();
     const v = maxCount - (maxCount / 4) * i;
-    ctx.fillStyle = 'rgba(58,90,106,0.7)';
-    ctx.font = '9px monospace';
+    ctx.fillStyle = K.label;
+    ctx.font = K.font;
     ctx.textAlign = 'right';
     ctx.fillText(Math.round(v), pad.left - 4, y + 3);
   }
@@ -1897,23 +2021,20 @@ function drawBarChart(canvas, hourlyData) {
     const y = pad.top + cH - barH;
 
     if (barH > 0) {
-      const grad = ctx.createLinearGradient(0, y, 0, y + barH);
-      grad.addColorStop(0, 'rgba(255,51,102,0.8)');
-      grad.addColorStop(1, 'rgba(255,51,102,0.2)');
-      ctx.fillStyle = grad;
+      ctx.fillStyle = K.bar;
       ctx.fillRect(x + 1, y, barW - 2, barH);
     }
 
     // Hour label every 6 hours
     if (i % 6 === 0) {
-      ctx.fillStyle = 'rgba(58,90,106,0.7)';
-      ctx.font = '9px monospace';
+      ctx.fillStyle = K.label;
+      ctx.font = K.font;
       ctx.textAlign = 'center';
       ctx.fillText(h.getHours().toString().padStart(2, '0') + ':00', x + barW / 2, H - 4);
     }
   });
 
-  ctx.strokeStyle = 'rgba(0,255,160,0.15)';
+  ctx.strokeStyle = K.ruleStrong;
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(pad.left, pad.top); ctx.lineTo(pad.left, pad.top + cH); ctx.lineTo(pad.left + cW, pad.top + cH);
@@ -1952,11 +2073,11 @@ async function loadAlarms() {
     const autoAlarmCount = autoAlarms.filter(a => a.state === 'ALARM').length;
 
     let html = `<div class="stats-bar" style="margin-bottom:14px">
-      <div class="stat-card"><div class="stat-label">In Alarm</div><div class="stat-value" style="color:var(--error)">${alarmCount}</div></div>
-      <div class="stat-card"><div class="stat-label">OK</div><div class="stat-value" style="color:var(--primary)">${okCount}</div></div>
-      <div class="stat-card"><div class="stat-label">Insufficient Data</div><div class="stat-value" style="color:var(--text-muted)">${insufCount}</div></div>
-      <div class="stat-card"><div class="stat-label">Total</div><div class="stat-value" style="color:var(--text)">${alarms.length}</div></div>
-      ${autoAlarmCount ? `<div class="stat-card" title="TargetTracking AlarmLow alarms fire constantly when CPU is low — expected autoscaling behaviour"><div class="stat-label">Autoscaling Noise</div><div class="stat-value" style="color:rgba(200,216,232,0.3)">${autoAlarmCount}</div></div>` : ''}
+      <div class="stat-card"><div class="stat-label">In Alarm</div><div class="stat-value" style="color:${alarmCount ? C.error : 'var(--ink)'}">${alarmCount}</div></div>
+      <div class="stat-card"><div class="stat-label">OK</div><div class="stat-value" style="color:var(--green)">${okCount}</div></div>
+      <div class="stat-card"><div class="stat-label">Insufficient Data</div><div class="stat-value">${insufCount}</div></div>
+      <div class="stat-card"><div class="stat-label">Total</div><div class="stat-value">${alarms.length}</div></div>
+      ${autoAlarmCount ? `<div class="stat-card" title="TargetTracking AlarmLow alarms fire constantly when CPU is low — expected autoscaling behaviour"><div class="stat-label">Autoscaling Noise</div><div class="stat-value" style="color:var(--ink-2)">${autoAlarmCount}</div></div>` : ''}
     </div>`;
 
     html += '<div class="alarms-grid">';
@@ -1969,28 +2090,28 @@ async function loadAlarms() {
 
       const auto = isAutoScaling(a);
       const canReset = !auto && (a.state === 'ALARM' || a.state === 'INSUFFICIENT_DATA');
-      html += `<div class="alarm-card ${auto ? '' : stateClass}" style="${auto ? 'opacity:0.35;border-color:rgba(200,216,232,0.05)' : ''}">
-        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
-          <div class="alarm-name" style="flex:1">${esc(a.name)}</div>
-          ${canReset ? `<button data-alarm="${esc(a.name)}" onclick="resetAlarm(this.dataset.alarm, this)" style="flex-shrink:0;background:var(--error-wash);border:1px solid var(--error-ghost);color:var(--error-light);padding:3px 8px;border-radius:0;font-size:10px;cursor:pointer;font-family:inherit" title="Set alarm state to OK">Reset to OK</button>` : ''}
+      html += `<div class="alarm-card ${auto ? 'alarm-auto' : stateClass}">
+        <div class="alarm-head">
+          <div class="alarm-name">${esc(a.name)}</div>
+          ${canReset ? `<button class="btn-reset" data-alarm="${esc(a.name)}" onclick="resetAlarm(this.dataset.alarm, this)" title="Set alarm state to OK">Reset to OK</button>` : ''}
         </div>
         <div class="alarm-state-badge ${badgeClass}">
           <div class="dot-status ${dotClass}"></div>${a.state}
         </div>
         <div class="alarm-meta">
-          ${a.metric ? `Metric: <span style="color:var(--secondary)">${esc(a.metric)}</span><br>` : ''}
-          ${a.namespace ? `NS: <span style="color:rgba(200,216,232,0.5)">${esc(a.namespace)}</span><br>` : ''}
-          ${dims ? `Dim: <span style="color:rgba(200,216,232,0.4)">${esc(dims)}</span><br>` : ''}
+          ${a.metric ? `Metric: <span class="v">${esc(a.metric)}</span><br>` : ''}
+          ${a.namespace ? `NS: <span class="v">${esc(a.namespace)}</span><br>` : ''}
+          ${dims ? `Dim: <span class="v">${esc(dims)}</span><br>` : ''}
           ${updAt ? `Updated: ${updAt}` : ''}
         </div>
-        ${a.reason ? `<details style="margin-top:6px"><summary style="cursor:pointer;font-size:10px;color:rgba(200,216,232,0.4);user-select:none">Reason</summary><div class="alarm-reason" style="margin-top:4px">${esc(a.reason)}</div></details>` : ''}
+        ${a.reason ? `<details class="alarm-reason-toggle"><summary>Reason</summary><div class="alarm-reason">${esc(a.reason)}</div></details>` : ''}
       </div>`;
     }
     html += '</div>';
     content.innerHTML = html;
 
   } catch(e) {
-    content.innerHTML = `<div class="error-state">⚠ ${e.message}</div>`;
+    content.innerHTML = `<div class="error-state"><span class="err-icon">error</span>${e.message}</div>`;
   }
 }
 
@@ -2018,17 +2139,17 @@ async function loadOpenConnections() {
 
     const fmtSecs = s => { if (s >= 3600) return `${(s/3600).toFixed(1)}h`; if (s >= 60) return `${Math.floor(s/60)}m ${s%60}s`; return `${s}s`; };
 
-    let html = `<div class="section-title" style="margin-bottom:6px">Open Connections <span style="font-size:10px;opacity:0.5;font-weight:normal">(${conns.length} active)</span></div>
-      <div class="panel" style="padding:0">
+    let html = `<div class="section-title" style="margin-top:0">Open Connections <span class="section-note">${conns.length} active</span></div>
+      <div class="panel flush">
       <table class="err-table" style="width:100%">
         <thead><tr><th>Since</th><th>Endpoint</th><th>Method</th><th>Open for</th><th>User ID</th></tr></thead>
         <tbody>
           ${conns.map(c => `<tr>
-            <td style="color:rgba(200,216,232,0.4);font-size:10px;padding:5px 8px;font-family:monospace">${fmtTs(c.time)}</td>
+            <td class="td-ts">${fmtTs(c.time)}</td>
             <td class="err-endpoint">${esc(c.endpoint || '—')}</td>
-            <td style="color:rgba(200,216,232,0.4);padding:5px 8px;font-size:11px">${esc(c.method || '')}</td>
-            <td style="color:var(--secondary);padding:5px 8px;font-size:11px">${fmtSecs(c.openSeconds)}</td>
-            <td style="color:rgba(200,216,232,0.3);padding:5px 8px;font-size:10px">${esc(c.authenticatedUserId || '—')}</td>
+            <td class="td-muted">${esc(c.method || '')}</td>
+            <td class="td-info">${fmtSecs(c.openSeconds)}</td>
+            <td class="td-muted">${esc(c.authenticatedUserId || '—')}</td>
           </tr>`).join('')}
         </tbody>
       </table>
@@ -2046,10 +2167,10 @@ async function resetAlarm(name, btn) {
     const res = await fetch(`/api/monitor/alarms/${encodeURIComponent(name)}/reset`, { method: 'POST' });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Reset failed');
-    if (btn) { btn.textContent = '✓ Done'; btn.style.background = 'var(--glow-primary)'; btn.style.borderColor = 'var(--border-glow)'; btn.style.color = 'var(--primary)'; }
+    if (btn) { btn.textContent = 'Done'; btn.style.background = 'var(--green-soft)'; btn.style.borderColor = 'var(--green)'; btn.style.color = 'var(--green)'; }
     setTimeout(() => loadAlarms(), 1500);
   } catch(e) {
-    if (btn) { btn.textContent = '✗ Failed'; btn.disabled = false; }
+    if (btn) { btn.textContent = 'Failed'; btn.disabled = false; }
   }
 }
 

@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RDS Restore Wizard</title>
+  <script src="/theme.js"></script>
+  <script src="/datepicker.js" defer></script>
+  <link rel="stylesheet" href="/theme.css">
+  <script src="/vendor/tailwindcss.js"></script>
+  <script>tailwind.config = window.LC_TAILWIND_CONFIG;</script>
+  <style>
+    html, body { background: var(--ground); color: var(--ink); font-family: var(--font-ui); font-size: var(--t-body); }
+    .mono { font-family: var(--font-mono); }
+    .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400; vertical-align: middle; }
+    .tx-ink { color: var(--ink); } .tx-ink-2 { color: var(--ink-2); } .tx-ink-3 { color: var(--ink-3); }
+    .tx-green { color: var(--green); } .tx-red { color: var(--red); }
+
+    /* ── Board primitives ─────────────────────────────── */
+    .board-title { font-family: var(--font-sign); font-size: var(--t-board); font-weight: 600; line-height: 1.1; color: var(--ink); margin: 0; }
+    .panel { background: var(--surface-1); border: 1px solid var(--rule); border-radius: var(--r-2); }
+    .panel-title { font-size: var(--t-h2); font-weight: 600; color: var(--ink); }
+    .label { display: block; font-size: var(--t-label); font-weight: 500; color: var(--ink-3); margin-bottom: 4px; }
+    .section-label { font-size: var(--t-label); font-weight: 500; color: var(--ink-3); letter-spacing: 0.04em; text-transform: uppercase; }
+    .rule-top { border-top: 1px solid var(--rule); }
+
+    body input[type="text"], body input[type="password"], body input[type="datetime-local"], body select, body textarea {
+      background-color: var(--surface-2); border: 1px solid var(--rule-strong); color: var(--ink);
+      border-radius: var(--r); padding: 7px 10px;
+      font-family: var(--font-mono); font-size: var(--t-data); width: 100%;
+      transition-property: border-color; transition-timing-function: var(--step); transition-duration: var(--t-step);
+    }
+    body select { padding-right: 2rem; }
+    input::placeholder { color: var(--ink-3); }
+    body input:focus, body select:focus, body textarea:focus { outline: none; border-color: var(--focus); box-shadow: inset 0 0 0 1px var(--focus); }
+
+    /* Radio chips — selected = yellow */
+    .chip { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border: 1px solid var(--rule-strong); border-radius: var(--r); background: var(--surface-2); color: var(--ink-2); cursor: pointer;
+      transition-property: background-color, border-color, color; transition-timing-function: var(--step); transition-duration: var(--t-step); }
+    .chip:hover { background: var(--surface-3); color: var(--ink); }
+    .chip:has(input:checked) { background: var(--yellow-soft); border-color: var(--yellow); color: var(--ink); font-weight: 600; }
+    .chip input { -webkit-appearance: auto; appearance: auto; accent-color: var(--action); width: 14px; height: 14px; margin: 0; padding: 0; background: none; border: 0; box-shadow: none; }
+
+    .btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: var(--r); font-size: var(--t-body); font-weight: 500; border: 1px solid var(--rule-strong); background: var(--surface-2); color: var(--ink); cursor: pointer;
+      transition-property: background-color, border-color, color; transition-timing-function: var(--step); transition-duration: var(--t-step); }
+    .btn .material-symbols-outlined { font-size: 18px; }
+    .btn:hover { background: var(--surface-3); border-color: var(--ink-3); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn:disabled:hover { background: var(--surface-2); border-color: var(--rule-strong); }
+    .btn-primary { background: var(--action); color: var(--action-ink); border-color: var(--action); font-weight: 600; }
+    .btn-primary:hover { background: var(--action); border-color: var(--action); filter: brightness(0.94); }
+    .btn-danger { background: var(--band); color: #fff; border-color: var(--band); font-weight: 600; }
+    .btn-danger:hover { background: var(--band); border-color: var(--band); filter: brightness(0.9); }
+    .btn-danger:disabled:hover { background: var(--band); border-color: var(--band); filter: none; }
+
+    /* Status chips */
+    .badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: var(--r); font-size: var(--t-label); font-weight: 600; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+    .badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+    .badge-idle  { background: var(--surface-3); color: var(--ink-2); }
+    .badge-idle::before { background: var(--ink-4); }
+    .badge-run   { background: var(--yellow); color: #00212a; }
+    .badge-ok    { background: var(--green-soft); color: var(--green); }
+    .badge-err   { background: var(--red-soft); color: var(--red); }
+    .badge-prod  { background: var(--band); color: #fff; letter-spacing: 0.06em; }
+    .badge-prod::before { display: none; }
+    .pulse { animation: blink 1.2s ease-out infinite; }
+    @keyframes blink { 0% { opacity: 1; } 100% { opacity: 0.55; } }
+
+    /* Output log */
+    .code-block { background: var(--surface-2); border: 1px solid var(--rule); border-radius: var(--r); padding: 10px 12px; max-height: 360px; overflow: auto; }
+    .code-block pre { white-space: pre-wrap; word-break: break-word; font-size: var(--t-data); line-height: 1.55; color: var(--ink-2); margin: 0; }
+    .code-block pre:empty::before { content: 'no output'; color: var(--ink-3); font-family: var(--font-ui); font-size: var(--t-small); }
+
+    /* Step cards — timetable rows */
+    .step { background: var(--surface-1); border: 1px solid var(--rule); border-radius: var(--r-2); overflow: hidden; }
+    .step-body { padding: var(--s-4) var(--s-5); }
+    .step-no { width: 36px; height: 36px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: var(--r); background: var(--surface-3); color: var(--ink); font-family: var(--font-sign); font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .step-title { font-family: var(--font-sign); font-size: 19px; font-weight: 600; line-height: 1.2; color: var(--ink); }
+    .step-desc { font-size: var(--t-small); color: var(--ink-2); margin-top: 2px; }
+
+    /* Disruption band — destructive / irreversible steps */
+    .step-danger { border-color: var(--band); }
+    .band { background: var(--band); color: #fff; display: flex; align-items: center; gap: 8px; padding: 5px var(--s-5); font-size: var(--t-label); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+    .band .material-symbols-outlined { font-size: 16px; }
+    .step-danger .step-no { background: var(--red-soft); color: var(--red); }
+
+    /* Prod connection panel */
+    .prod-panel { border: 1px solid var(--band); }
+
+    /* Column mapping rows */
+    .map-row { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 8px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--rule); }
+    .map-row:hover { background: var(--surface-3); }
+    .map-row.sev-warn { background: var(--yellow-soft); }
+    .map-row.sev-err { background: var(--red-soft); }
+    .map-note { padding: 10px 12px; border-radius: var(--r); font-size: var(--t-small); border: 1px solid var(--yellow); background: var(--yellow-soft); color: var(--ink); }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div class="max-w-6xl mx-auto px-6 py-8">
+
+    <header class="mb-6 pb-4 flex items-end justify-between gap-4" style="border-bottom:1px solid var(--rule-strong)">
+      <div>
+        <h1 class="board-title">AWS RDS / Aurora Restore Wizard</h1>
+        <p class="tx-ink-2 mt-1" style="max-width:72ch">Schema-aware single-table restore from snapshot or PITR. Prod is only touched at Step 8, and only if the target table is empty.</p>
+      </div>
+      <button onclick="resetState()" class="btn shrink-0">
+        <span class="material-symbols-outlined">restart_alt</span> Reset
+      </button>
+    </header>
+
+    <!-- Config form -->
+    <section class="mb-6 panel">
+      <h2 class="panel-title flex items-center gap-2 px-5 py-3" style="border-bottom:1px solid var(--rule)">
+        <span class="material-symbols-outlined tx-ink-3" style="font-size:18px">tune</span>
+        Configuration <span class="tx-ink-3 font-normal" style="font-size:var(--t-small)">— auto-saves to localStorage</span>
+      </h2>
+
+      <div class="p-5">
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+        <div><label class="label" for="region">AWS Region</label><input type="text" id="region" placeholder="eu-central-1"></div>
+        <div><label class="label" for="srcCluster">Source cluster id</label><input type="text" id="srcCluster" placeholder="lc-core"></div>
+        <div><label class="label" for="tempCluster">Temp cluster id</label><input type="text" id="tempCluster" placeholder="lc-core-restore-temp"></div>
+        <div><label class="label" for="tempInstance">Temp instance id</label><input type="text" id="tempInstance" placeholder="lc-core-restore-temp-instance"></div>
+      </div>
+
+      <div class="mb-5">
+        <span class="label">Restore source</span>
+        <div class="flex gap-2">
+          <label class="chip"><input type="radio" name="mode" value="snapshot"><span>Snapshot</span></label>
+          <label class="chip"><input type="radio" name="mode" value="pitr"><span>Point-in-time</span></label>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-5">
+        <div class="mode-snapshot"><label class="label" for="snapshotId">Snapshot id <span class="tx-ink">(include "rds:" prefix)</span></label><input type="text" id="snapshotId" placeholder="rds:lc-core-2026-05-14-21-54"></div>
+        <div class="mode-pitr"><label class="label" for="pitrTime">PITR target (UTC ISO 8601)</label><input type="text" id="pitrTime" placeholder="2026-05-15T15:00:00Z"></div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
+        <div><label class="label" for="engine">Engine</label><input type="text" id="engine" placeholder="aurora-postgresql"></div>
+        <div><label class="label" for="engineVersion">Engine version (from Step 1)</label><input type="text" id="engineVersion" placeholder="14.17"></div>
+        <div><label class="label" for="instanceClass">Instance class</label><input type="text" id="instanceClass" placeholder="db.t3.medium"></div>
+        <div><label class="label" for="subnetGroup">DB subnet group (from Step 1)</label><input type="text" id="subnetGroup" placeholder="lc-core-subnet-group"></div>
+        <div><label class="label" for="securityGroups">VPC security group(s) (comma-sep)</label><input type="text" id="securityGroups" placeholder="sg-xxxxxxxx"></div>
+        <div><label class="label" for="publiclyAccessible">Publicly accessible</label><select id="publiclyAccessible"><option value="false">No (private VPC)</option><option value="true">Yes</option></select></div>
+      </div>
+
+      <div class="mb-5">
+        <label class="label" for="tableName">Table to recover</label>
+        <input type="text" id="tableName" placeholder="admin_files">
+      </div>
+
+      <h3 class="section-label mb-3 mt-6 pt-5 rule-top">Database connections</h3>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <div class="p-4 rounded-lg" style="background:var(--surface-2);border:1px solid var(--rule)">
+          <div class="flex items-center justify-between gap-3 mb-3"><span class="panel-title">Temp cluster</span><span id="tempConnStatus" class="badge badge-idle">not connected</span></div>
+          <div class="space-y-2">
+            <div><label class="label" for="tempHost">Host</label><input type="text" id="tempHost" placeholder="lc-core-restore-temp.cluster-xxx.eu-central-1.rds.amazonaws.com"></div>
+            <div class="grid grid-cols-2 gap-2">
+              <div><label class="label" for="tempPort">Port</label><input type="text" id="tempPort" placeholder="5432"></div>
+              <div><label class="label" for="tempDb">DB name</label><input type="text" id="tempDb" placeholder="serverpod"></div>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <div><label class="label" for="tempUser">User</label><input type="text" id="tempUser" placeholder="postgres"></div>
+              <div><label class="label" for="tempPass">Password</label><input type="password" id="tempPass" placeholder=""></div>
+            </div>
+            <button class="btn mt-2" onclick="testConnection('temp')"><span class="material-symbols-outlined">cable</span> Test connection</button>
+          </div>
+        </div>
+        <div class="p-4 rounded-lg prod-panel" style="background:var(--surface-2)">
+          <div class="flex items-center justify-between gap-3 mb-3"><span class="panel-title flex items-center gap-2">Prod cluster <span class="badge badge-prod">PROD</span></span><span id="prodConnStatus" class="badge badge-idle">not connected</span></div>
+          <div class="space-y-2">
+            <div><label class="label" for="prodPreset">Preset</label><select id="prodPreset"><option value="">— Custom —</option><option value="dev">dev</option><option value="staging">staging</option><option value="production">production</option></select></div>
+            <div><label class="label" for="prodHost">Host</label><input type="text" id="prodHost"></div>
+            <div class="grid grid-cols-2 gap-2">
+              <div><label class="label" for="prodPort">Port</label><input type="text" id="prodPort"></div>
+              <div><label class="label" for="prodDb">DB name</label><input type="text" id="prodDb"></div>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <div><label class="label" for="prodUser">User</label><input type="text" id="prodUser"></div>
+              <div><label class="label" for="prodPass">Password</label><input type="password" id="prodPass"></div>
+            </div>
+            <button class="btn mt-2" onclick="testConnection('prod')"><span class="material-symbols-outlined">cable</span> Test connection</button>
+          </div>
+        </div>
+      </div>
+      </div>
+    </section>
+
+    <!-- Step cards -->
+    <section id="steps" class="space-y-3"></section>
+
+    <footer class="mt-10 pt-4 rule-top tx-ink-3" style="font-size:var(--t-small)">
+      Local-only · state in <span class="mono">localStorage</span> · destructive steps gated by inline confirms
+    </footer>
+  </div>
+
+<script>
+const PRESETS = {
+  dev:        { host: 'localhost',                    port: '8090', db: 'lillian_care_core', user: 'postgres' },
+  staging:    { host: 'database-staging.lillian.care', port: '5432', db: 'serverpod',         user: 'postgres' },
+  production: { host: 'database.lillian.care',         port: '5432', db: 'serverpod',         user: 'postgres' },
+};
+const STORAGE_KEY = 'aws-rds-restore-wizard.v2';
+const FIELDS = [
+  'region','srcCluster','tempCluster','tempInstance','mode',
+  'snapshotId','pitrTime','engine','engineVersion','instanceClass',
+  'subnetGroup','securityGroups','publiclyAccessible','tableName',
+  'tempHost','tempPort','tempDb','tempUser','tempPass',
+  'prodPreset','prodHost','prodPort','prodDb','prodUser','prodPass',
+];
+const DEFAULTS = {
+  region: 'eu-central-1', srcCluster: 'lc-core', mode: 'snapshot',
+  tempCluster: 'lc-core-restore-temp', tempInstance: 'lc-core-restore-temp-instance',
+  instanceClass: 'db.t3.medium', engine: 'aurora-postgresql', publiclyAccessible: 'false',
+  tableName: 'admin_files',
+  tempPort: '5432', tempDb: 'serverpod', tempUser: 'postgres',
+  prodPreset: 'production',
+  kind: 'cluster',
+};
+let envConfig = null;
+const state = { ...DEFAULTS, ...(safeParse(localStorage.getItem(STORAGE_KEY)) || {}) };
+state.outputs = state.outputs || {};
+state.statuses = state.statuses || {};
+
+function safeParse(s) { try { return JSON.parse(s); } catch { return null; } }
+function save() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+function resetState() {
+  if (!confirm('Clear all saved inputs, outputs, and status?')) return;
+  localStorage.removeItem(STORAGE_KEY);
+  location.reload();
+}
+function setStatus(id, status) { state.statuses[id] = status; save(); renderStep(id); }
+function appendOutput(id, text) {
+  state.outputs[id] = (state.outputs[id] || '') + text;
+  save();
+  const el = document.getElementById(`out-${id}`);
+  if (el) { el.textContent = state.outputs[id]; el.scrollTop = el.scrollHeight; }
+}
+function clearOutput(id) { state.outputs[id] = ''; save(); const el = document.getElementById(`out-${id}`); if (el) el.textContent = ''; }
+function writeForm() {
+  for (const id of FIELDS) {
+    if (id === 'mode') {
+      const el = document.querySelector(`input[name="mode"][value="${state.mode}"]`);
+      if (el) el.checked = true;
+    } else {
+      const el = document.getElementById(id);
+      if (el) el.value = state[id] || '';
+    }
+  }
+  updateModeVisibility();
+}
+function readForm() {
+  for (const id of FIELDS) {
+    if (id === 'mode') {
+      const checked = document.querySelector('input[name="mode"]:checked');
+      state.mode = checked ? checked.value : 'snapshot';
+    } else {
+      const el = document.getElementById(id);
+      if (el) state[id] = el.value;
+    }
+  }
+  save();
+  updateModeVisibility();
+}
+function updateModeVisibility() {
+  document.querySelectorAll('.mode-snapshot').forEach(e => e.style.display = state.mode === 'snapshot' ? '' : 'none');
+  document.querySelectorAll('.mode-pitr').forEach(e => e.style.display = state.mode === 'pitr' ? '' : 'none');
+}
+function applyPreset() {
+  const p = PRESETS[state.prodPreset];
+  if (!p) return;
+  state.prodHost = p.host; state.prodPort = p.port; state.prodDb = p.db; state.prodUser = p.user;
+  if (envConfig?.passwords?.[state.prodPreset]) state.prodPass = envConfig.passwords[state.prodPreset];
+  save(); writeForm();
+}
+
+async function api(path, body = {}, extraHeaders = {}) {
+  const headers = { 'Content-Type': 'application/json', ...extraHeaders };
+  const r = await fetch(path, { method: 'POST', headers, body: JSON.stringify(body) });
+  const text = await r.text();
+  let data; try { data = JSON.parse(text); } catch { data = { error: text }; }
+  if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+  return data;
+}
+function dbHeaders(side) {
+  const h = state[`${side}Host`], p = state[`${side}Port`], d = state[`${side}Db`], u = state[`${side}User`], pw = state[`${side}Pass`];
+  if (!h || !d || !u) throw new Error(`Fill in the ${side} connection fields first`);
+  return {
+    [`x-rdsr-${side}-db-host`]: h,
+    [`x-rdsr-${side}-db-port`]: p || '5432',
+    [`x-rdsr-${side}-db-name`]: d,
+    [`x-rdsr-${side}-db-user`]: u,
+    [`x-rdsr-${side}-db-password`]: pw || '',
+  };
+}
+
+async function testConnection(side) {
+  const el = document.getElementById(`${side}ConnStatus`);
+  el.textContent = 'testing…'; el.className = 'badge badge-run pulse';
+  try {
+    const out = await api('/api/rds-restore/pg/connect-test', { side }, dbHeaders(side));
+    el.textContent = `${out.user}@${out.host}/${out.database}`;
+    el.className = 'badge badge-ok';
+  } catch (e) {
+    el.textContent = `error: ${e.message}`;
+    el.className = 'badge badge-err';
+  }
+}
+
+// ── Step runners ─────────────────────────────────────────────────────────────
+
+async function runDescribeCluster() {
+  const id = 'describe';
+  clearOutput(id); setStatus(id, 'run');
+  try {
+    appendOutput(id, `> DescribeDBClusters / DescribeDBInstances on ${state.srcCluster} in ${state.region}\n`);
+    const out = await api('/api/rds-restore/aws/describe-cluster', { region: state.region, clusterId: state.srcCluster });
+    appendOutput(id, JSON.stringify(out, null, 2) + '\n');
+    state.kind = out.kind || 'cluster';
+    state.engine = out.cluster.engine || state.engine;
+    state.engineVersion = out.cluster.engineVersion || state.engineVersion;
+    state.subnetGroup = out.cluster.subnetGroup || state.subnetGroup;
+    state.securityGroups = (out.cluster.securityGroups || []).join(',') || state.securityGroups;
+    if (out.instance) {
+      state.instanceClass = out.instance.instanceClass || state.instanceClass;
+      state.publiclyAccessible = String(!!out.instance.publiclyAccessible);
+    }
+    save(); writeForm();
+    renderSteps();
+    appendOutput(id, `\n✓ Detected source kind = ${state.kind}. Form auto-filled from prod.\n`);
+    if (state.kind === 'instance') appendOutput(id, `  → Steps 3 and 10 will be skipped (regular RDS — no separate cluster).\n`);
+    setStatus(id, 'ok');
+  } catch (e) {
+    appendOutput(id, `\n✗ ${e.message}\n`);
+    setStatus(id, 'err');
+  }
+}
+
+async function runRestoreCluster() {
+  const id = 'restore-cluster';
+  const target = state.kind === 'instance' ? `instance "${state.tempInstance}"` : `cluster "${state.tempCluster}"`;
+  if (!confirm(`This will create a new ${target} — it bills by the hour until you delete it. Continue?`)) return;
+  clearOutput(id); setStatus(id, 'run');
+  try {
+    const sgs = (state.securityGroups || '').split(',').map(s => s.trim()).filter(Boolean);
+    const body = {
+      region: state.region, mode: state.mode, kind: state.kind,
+      tempClusterId: state.tempCluster, tempInstanceId: state.tempInstance,
+      engine: state.engine, engineVersion: state.engineVersion,
+      instanceClass: state.instanceClass,
+      publiclyAccessible: state.publiclyAccessible === 'true',
+      subnetGroup: state.subnetGroup, securityGroups: sgs,
+      snapshotId: state.snapshotId, srcClusterId: state.srcCluster, pitrTime: state.pitrTime,
+      confirm: 'YES',
+    };
+    const opName = state.kind === 'instance'
+      ? (state.mode === 'pitr' ? 'RestoreDBInstanceToPointInTime' : 'RestoreDBInstanceFromDBSnapshot')
+      : (state.mode === 'pitr' ? 'RestoreDBClusterToPointInTime' : 'RestoreDBClusterFromSnapshot');
+    appendOutput(id, `> ${opName}\n`);
+    appendOutput(id, JSON.stringify({ ...body, confirm: undefined }, null, 2) + '\n');
+    const out = await api('/api/rds-restore/aws/restore-cluster', body);
+    appendOutput(id, '\n' + JSON.stringify(out, null, 2) + '\n');
+    if (state.kind === 'instance') {
+      appendOutput(id, '\n✓ Restore initiated. The instance is being provisioned — skip Step 3, jump to Step 4.\n');
+    } else {
+      appendOutput(id, '\n✓ Restore initiated. The cluster is being provisioned — proceed to Step 3.\n');
+    }
+    setStatus(id, 'ok');
+  } catch (e) {
+    appendOutput(id, `\n✗ ${e.message}\n`);
+    setStatus(id, 'err');
+  }
+}
+
+async function runCreateInstance() {
+  const id = 'create-instance';
+  if (!confirm(`Create writer instance "${state.tempInstance}" on cluster "${state.tempCluster}"? Billable.`)) return;
+  clearOutput(id); setStatus(id, 'run');
+  try {
+    const body = {
+      region: state.region,
+      tempClusterId: state.tempCluster,
+      tempInstanceId: state.tempInstance,
+      instanceClass: state.instanceClass,
+      engine: state.engine,
+      publiclyAccessible: state.publiclyAccessible === 'true',
+      confirm: 'YES',
+    };
+    appendOutput(id, '> CreateDBInstance\n' + JSON.stringify({ ...body, confirm: undefined }, null, 2) + '\n');
+    const out = await api('/api/rds-restore/aws/create-instance', body);
+    appendOutput(id, '\n' + JSON.stringify(out, null, 2) + '\n');
+    appendOutput(id, '\n✓ Instance creation started. Run Step 4 to watch the status.\n');
+    setStatus(id, 'ok');
+  } catch (e) {
+    appendOutput(id, `\n✗ ${e.message}\n`);
+    setStatus(id, 'err');
+  }
+}
+
+let pollHandle = null;
+async function runPollStatus() {
+  const id = 'poll';
+  if (pollHandle) { clearInterval(pollHandle); pollHandle = null; setStatus(id, 'idle'); appendOutput(id, '\nstopped.\n'); return; }
+  clearOutput(id); setStatus(id, 'run');
+  appendOutput(id, '> polling DescribeDBInstances every 20s — click button again to stop\n');
+  const tick = async () => {
+    try {
+      const out = await api('/api/rds-restore/aws/instance-status', { region: state.region, tempInstanceId: state.tempInstance, tempClusterId: state.tempCluster });
+      const stamp = new Date().toLocaleTimeString();
+      appendOutput(id, `[${stamp}] status=${out.status}${out.endpoint ? `  endpoint=${out.endpoint}` : ''}\n`);
+      if (out.endpoint && (!state.tempHost || state.tempHost !== out.endpoint)) {
+        state.tempHost = out.endpoint; save(); writeForm();
+        appendOutput(id, '  → auto-filled temp host\n');
+      }
+      if (out.status === 'available') {
+        clearInterval(pollHandle); pollHandle = null;
+        appendOutput(id, '\n✓ Instance is Available.\n');
+        setStatus(id, 'ok');
+      }
+    } catch (e) {
+      appendOutput(id, `error: ${e.message}\n`);
+    }
+  };
+  tick();
+  pollHandle = setInterval(tick, 20000);
+}
+
+async function runPreview() {
+  const id = 'preview';
+  clearOutput(id); setStatus(id, 'run');
+  try {
+    appendOutput(id, `> SELECT COUNT(*), schema, sample rows from "${state.tableName}" on TEMP\n`);
+    const out = await api('/api/rds-restore/pg/preview', { table: state.tableName }, dbHeaders('temp'));
+    appendOutput(id, `\nrow count: ${out.count}\n`);
+    appendOutput(id, `\ncolumns:\n`);
+    for (const c of out.columns) appendOutput(id, `  ${c.column_name}  ${c.data_type}${c.udt_name && c.udt_name !== c.data_type ? ` (${c.udt_name})` : ''}\n`);
+    appendOutput(id, `\nsample (last 5):\n`);
+    for (const r of out.sample) appendOutput(id, JSON.stringify(r) + '\n');
+    if (out.count === 0) appendOutput(id, `\n⚠ Temp table is empty — pick a different snapshot or PITR time.\n`);
+    setStatus(id, 'ok');
+  } catch (e) {
+    appendOutput(id, `\n✗ ${e.message}\n`);
+    setStatus(id, 'err');
+  }
+}
+
+let diffData = null;
+async function runSchemaDiff() {
+  const id = 'schema-diff';
+  clearOutput(id); setStatus(id, 'run');
+  try {
+    appendOutput(id, `> compare information_schema.columns for "${state.tableName}" on temp vs prod\n`);
+    const out = await api('/api/rds-restore/pg/schema-diff', { table: state.tableName }, { ...dbHeaders('temp'), ...dbHeaders('prod') });
+    diffData = out;
+    appendOutput(id, `matched     : ${out.matched.length}\n`);
+    appendOutput(id, `type mismatch: ${out.typeMismatch.length}\n`);
+    appendOutput(id, `temp-only    : ${out.tempOnly.length}\n`);
+    appendOutput(id, `prod-only    : ${out.prodOnly.length}\n\n`);
+    setStatus(id, out.typeMismatch.length || out.tempOnly.length || out.prodOnly.length ? 'warn' : 'ok');
+    renderMappingUI();
+  } catch (e) {
+    appendOutput(id, `\n✗ ${e.message}\n`);
+    setStatus(id, 'err');
+  }
+}
+
+function renderMappingUI() {
+  const wrap = document.getElementById('mapping-wrap');
+  if (!diffData) { wrap.innerHTML = ''; return; }
+  const { matched, typeMismatch, tempOnly, prodOnly, tempCols } = diffData;
+  const tempOptions = ['<option value="">— skip —</option>', ...tempCols.map(c => `<option value="${escAttr(c.column_name)}">${escHtml(c.column_name)} :: ${escHtml(c.data_type)}</option>`)].join('');
+  const row = (label, prodCol, tempColName, severity) => {
+    const sevClass = severity === 'err' ? 'sev-err' : severity === 'warn' ? 'sev-warn' : 'sev-ok';
+    return `<div class="map-row ${sevClass}">
+      <div class="col-span-4 mono text-xs"><div class="tx-ink font-bold">${escHtml(prodCol.column_name)}</div><div class="tx-ink-3">${escHtml(prodCol.data_type)}</div></div>
+      <div class="col-span-1 text-center tx-ink-3"><span class="material-symbols-outlined text-base">arrow_back</span></div>
+      <div class="col-span-5"><select data-prodcol="${escAttr(prodCol.column_name)}" onchange="onMappingChange()">
+        ${tempCols.map(c => `<option value="${escAttr(c.column_name)}" ${c.column_name === tempColName ? 'selected' : ''}>${escHtml(c.column_name)} :: ${escHtml(c.data_type)}</option>`).join('')}
+        <option value="" ${!tempColName ? 'selected' : ''}>— skip —</option>
+      </select></div>
+      <div class="col-span-2 text-xs">${label}</div>
+    </div>`;
+  };
+  let html = `<div class="rounded" style="border:1px solid var(--rule);border-bottom:0">`;
+  for (const m of matched) html += row('<span class="tx-green font-semibold">match</span>', m.prod, m.name, 'ok');
+  for (const m of typeMismatch) html += row(`<span class="tx-ink font-semibold" title="temp: ${escAttr(m.temp.data_type)}, prod: ${escAttr(m.prod.data_type)}">type ≠</span>`, m.prod, m.name, 'warn');
+  for (const c of prodOnly) html += row('<span class="tx-ink font-semibold">prod only</span>', c, '', 'warn');
+  html += `</div>`;
+  if (tempOnly.length) {
+    html += `<div class="mt-4 map-note">
+      <div class="font-semibold mb-1">${tempOnly.length} temp-only column(s) will be dropped:</div>
+      <div class="mono">${tempOnly.map(c => escHtml(c.column_name) + ' :: ' + escHtml(c.data_type)).join(', ')}</div>
+    </div>`;
+  }
+  wrap.innerHTML = html;
+  onMappingChange();
+}
+
+function getMapping() {
+  if (!diffData) return null;
+  const m = {};
+  for (const sel of document.querySelectorAll('select[data-prodcol]')) {
+    if (sel.value) m[sel.dataset.prodcol] = sel.value;
+  }
+  return m;
+}
+function onMappingChange() {
+  const m = getMapping() || {};
+  const requiredCount = (diffData?.prodCols || []).filter(c => c.is_nullable === 'NO' && !c.column_default).length;
+  const restoreBtn = document.getElementById('restore-btn');
+  const summary = document.getElementById('mapping-summary');
+  if (summary) summary.textContent = `${Object.keys(m).length} of ${(diffData?.prodCols || []).length} prod columns will be filled.`;
+  if (restoreBtn) restoreBtn.disabled = !Object.keys(m).length;
+}
+
+async function runRestoreTable() {
+  const id = 'restore-table';
+  const m = getMapping();
+  if (!m || !Object.keys(m).length) return alert('No column mapping — run Step 7 first.');
+  const typed = prompt(`Type the table name "${state.tableName}" to confirm writing to PROD:`);
+  if (typed !== state.tableName) return;
+  clearOutput(id); setStatus(id, 'run');
+  try {
+    appendOutput(id, `> copying ${Object.keys(m).length} cols from TEMP."${state.tableName}" → PROD."${state.tableName}"\n`);
+    appendOutput(id, `mapping (prodCol ← tempCol):\n`);
+    for (const [pc, tc] of Object.entries(m)) appendOutput(id, `  ${pc} ← ${tc}\n`);
+    appendOutput(id, `\nRefusing if prod table has any rows...\n`);
+    const out = await api('/api/rds-restore/pg/restore-table', {
+      table: state.tableName,
+      mapping: m,
+      confirmTable: state.tableName,
+    }, { ...dbHeaders('temp'), ...dbHeaders('prod') });
+    appendOutput(id, `\n✓ inserted ${out.copied} rows in ${out.durationMs} ms.\n`);
+    setStatus(id, 'ok');
+  } catch (e) {
+    appendOutput(id, `\n✗ ${e.message}\n`);
+    setStatus(id, 'err');
+  }
+}
+
+async function runSetval() {
+  const id = 'setval';
+  if (!confirm(`Run setval on PROD ${state.tableName}.id sequence?`)) return;
+  clearOutput(id); setStatus(id, 'run');
+  try {
+    const out = await api('/api/rds-restore/pg/setval', { table: state.tableName }, dbHeaders('prod'));
+    appendOutput(id, `> setval new value: ${out.newval}\n`);
+    setStatus(id, 'ok');
+  } catch (e) {
+    appendOutput(id, `\n✗ ${e.message}\n`);
+    setStatus(id, 'err');
+  }
+}
+
+async function runDeleteInstance() {
+  const id = 'delete-instance';
+  if (!confirm(`Delete temp instance "${state.tempInstance}"? This is permanent.`)) return;
+  clearOutput(id); setStatus(id, 'run');
+  try {
+    const out = await api('/api/rds-restore/aws/delete-instance', { region: state.region, tempInstanceId: state.tempInstance, confirm: 'YES' });
+    appendOutput(id, `> DeleteDBInstance: ${JSON.stringify(out)}\n`);
+    setStatus(id, 'ok');
+  } catch (e) {
+    appendOutput(id, `\n✗ ${e.message}\n`);
+    setStatus(id, 'err');
+  }
+}
+async function runDeleteCluster() {
+  const id = 'delete-cluster';
+  if (!confirm(`Delete temp cluster "${state.tempCluster}"? Make sure the instance is gone first.`)) return;
+  clearOutput(id); setStatus(id, 'run');
+  try {
+    const out = await api('/api/rds-restore/aws/delete-cluster', { region: state.region, tempClusterId: state.tempCluster, confirm: 'YES' });
+    appendOutput(id, `> DeleteDBCluster: ${JSON.stringify(out)}\n`);
+    setStatus(id, 'ok');
+  } catch (e) {
+    appendOutput(id, `\n✗ ${e.message}\n`);
+    setStatus(id, 'err');
+  }
+}
+
+// ── Step rendering ───────────────────────────────────────────────────────────
+
+const STEPS = [
+  { id: 'describe',        n: 1,  title: 'Read prod cluster config',                desc: 'Auto-fills engine, version, subnet, security group, instance class.',                            run: runDescribeCluster,   btn: 'Read prod config',          danger: false },
+  { id: 'restore-cluster', n: 2,  title: 'Restore TEMP cluster from snapshot / PITR', desc: 'Creates a fresh Aurora cluster — no instance yet. Billable until deleted.',                       run: runRestoreCluster,    btn: 'Restore cluster',           danger: true },
+  { id: 'create-instance', n: 3,  title: 'Attach a writer instance to TEMP cluster',  desc: 'Without an instance, you cannot connect to the cluster.',                                          run: runCreateInstance,    btn: 'Create instance',           danger: true },
+  { id: 'poll',            n: 4,  title: 'Poll until Available + auto-fill endpoint', desc: '20s polling. When status is "available" the temp host is filled below.',                          run: runPollStatus,        btn: 'Start/stop polling',        danger: false },
+  { id: 'preview',         n: 5,  title: 'Preview table on TEMP',                     desc: 'COUNT + sample rows + column schema. Connect temp first.',                                         run: runPreview,           btn: 'Preview temp table',        danger: false, prereq: 'temp' },
+  { id: 'schema-diff',     n: 6,  title: 'Compare schemas (temp vs prod) + map cols', desc: 'Auto-matches by name; flags type mismatches and prod-only / temp-only columns. Edit before Step 7.', run: runSchemaDiff,        btn: 'Compare schemas',           danger: false, prereq: 'both', mapping: true },
+  { id: 'restore-table',   n: 7,  title: 'Restore table into PROD',                   desc: 'Refuses if prod table is non-empty. One transaction. Requires typing the table name.',           run: runRestoreTable,      btn: 'Restore to PROD',           danger: true, prereq: 'both', writeProd: true },
+  { id: 'setval',          n: 8,  title: 'Resync prod id sequence',                   desc: 'Bump the sequence to MAX(id) so future inserts do not collide.',                                  run: runSetval,            btn: 'Run setval',                danger: true, prereq: 'prod', writeProd: true },
+  { id: 'delete-instance', n: 9,  title: 'Delete temp instance',                      desc: 'Stops the billable compute. Must run before deleting the cluster.',                              run: runDeleteInstance,    btn: 'Delete instance',           danger: true },
+  { id: 'delete-cluster',  n: 10, title: 'Delete temp cluster',                       desc: 'Removes the storage. After this, no more billing for the temp resources.',                       run: runDeleteCluster,     btn: 'Delete cluster',            danger: true },
+];
+
+function escHtml(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;','<': '&lt;','>': '&gt;','"': '&quot;' }[c])); }
+function escAttr(s) { return escHtml(s); }
+
+function statusBadge(s) {
+  if (s === 'run')  return '<span class="badge badge-run pulse">running</span>';
+  if (s === 'ok')   return '<span class="badge badge-ok">done</span>';
+  if (s === 'warn') return '<span class="badge badge-run">warn</span>';
+  if (s === 'err')  return '<span class="badge badge-err">error</span>';
+  return '<span class="badge badge-idle">idle</span>';
+}
+
+function renderStep(stepId) {
+  const node = document.getElementById(`step-${stepId}`);
+  if (!node) return;
+  const step = STEPS.find(s => s.id === stepId);
+  const status = state.statuses[stepId] || 'idle';
+  node.querySelector('.step-status').innerHTML = statusBadge(status);
+  const out = node.querySelector(`#out-${stepId}`);
+  if (out) out.textContent = state.outputs[stepId] || '';
+}
+
+function renderSteps() {
+  const container = document.getElementById('steps');
+  const visibleSteps = STEPS.filter(s => state.kind !== 'instance' || (s.id !== 'create-instance' && s.id !== 'delete-cluster'));
+  container.innerHTML = visibleSteps.map(s => `
+    <article id="step-${s.id}" class="step ${s.danger ? 'step-danger' : ''}">
+      ${s.danger ? `<div class="band"><span class="material-symbols-outlined">warning</span>${s.writeProd ? 'Writes to production database' : 'Changes AWS resources · confirm required'}</div>` : ''}
+      <div class="step-body">
+      <header class="flex items-start gap-3 mb-3">
+        <div class="step-no">${s.n}</div>
+        <div class="flex-1">
+          <h3 class="step-title flex items-center gap-2">${escHtml(s.title)} ${s.writeProd ? '<span class="badge badge-prod">PROD</span>' : ''}</h3>
+          <p class="step-desc">${escHtml(s.desc)}</p>
+        </div>
+        <div class="step-status">${statusBadge(state.statuses[s.id] || 'idle')}</div>
+      </header>
+      <div class="flex items-center gap-3 mb-3">
+        <button class="btn ${s.danger ? 'btn-danger' : 'btn-primary'}" onclick="STEP_RUNNERS['${s.id}']()">
+          <span class="material-symbols-outlined text-base">${s.danger ? 'play_arrow' : 'play_arrow'}</span>${escHtml(s.btn)}
+        </button>
+        <button class="btn" onclick="clearOutput('${s.id}'); document.getElementById('out-${s.id}').textContent=''"><span class="material-symbols-outlined text-base">cleaning_services</span>Clear</button>
+      </div>
+      ${s.mapping ? `<div id="mapping-wrap" class="mb-3"></div>
+        <div class="flex items-center justify-between mb-2 text-xs tx-ink-2">
+          <span id="mapping-summary">No mapping yet — run "Compare schemas" first.</span>
+        </div>` : ''}
+      ${s.id === 'restore-table' ? `<button id="restore-btn" class="btn btn-danger mb-3" onclick="runRestoreTable()" disabled><span class="material-symbols-outlined text-base">arrow_forward</span>Apply mapping → restore to PROD</button>` : ''}
+      <div class="code-block"><pre id="out-${s.id}" class="mono">${escHtml(state.outputs[s.id] || '')}</pre></div>
+      </div>
+    </article>
+  `).join('');
+}
+
+const STEP_RUNNERS = {};
+for (const s of STEPS) STEP_RUNNERS[s.id] = s.run;
+
+// ── boot ────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', async () => {
+  writeForm();
+  renderSteps();
+  for (const id of FIELDS) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', readForm);
+  }
+  document.querySelectorAll('input[name="mode"]').forEach(el => el.addEventListener('change', readForm));
+  document.getElementById('prodPreset').addEventListener('change', e => { state.prodPreset = e.target.value; save(); applyPreset(); });
+
+  try {
+    const r = await fetch('/api/env-config');
+    envConfig = await r.json();
+    if (state.prodPreset && !state.prodPass && envConfig?.passwords?.[state.prodPreset]) {
+      state.prodPass = envConfig.passwords[state.prodPreset];
+      save(); writeForm();
+    }
+  } catch {}
+});
+</script>
+</body>
+</html>

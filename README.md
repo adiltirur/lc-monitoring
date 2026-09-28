@@ -90,6 +90,7 @@ The status dot turns green when connected. All views (Session Logs, Users, Booki
 | **API Keys** | View usage stats, enable/disable keys |
 | **Query Runner** | Run raw SQL with preset queries and AI-assisted query generation |
 | **AI Assistant** | Chat with Claude (via AWS Bedrock) to generate SQL queries |
+| **Investigations** | AI-assisted prod investigations: notes in `../investigations/`, AI proposes read-only queries you approve, everything the AI sees is PII-scrubbed |
 | **CSV Decryptor** | Bulk-decrypt exported guest appointment CSVs |
 | **AWS Monitor** | Real-time dashboard for EC2, RDS, Redis, ALB, CloudFront, CloudWatch metrics/alarms and live log stream |
 
