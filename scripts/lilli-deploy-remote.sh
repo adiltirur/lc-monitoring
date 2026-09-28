@@ -1,22 +1,25 @@
 #!/usr/bin/env bash
 # Runs ON the Lilli box, piped over ssh by `scripts/lilli.js deploy|rollback`.
 #
-#   deploy <sha>   build <sha> as a new release beside the live one, switch /opt/lilli-current to it,
+#   deploy <sha>   build <sha> as a new release beside the live one, switch /opt/lilli-deploy/current to it,
 #                  restart PM2 and health-check; switch back automatically if the check fails
 #   rollback       switch to the previous successful release (no rebuild)
 #
 # Layout:
-#   /opt/lilli                   git checkout, used only to fetch and `git archive`
-#   /opt/lilli-releases/<sha7>/  one release each (app/ with its own node_modules and .next)
-#   /opt/lilli-current           symlink -> the live release's app/ (PM2 runs from here)
-#   /opt/lilli-shared/app.env    the app's .env, symlinked into every release
-#   /opt/lilli-shared/deploys.log
+#   /opt/lilli                          git checkout, used only to fetch and `git archive`
+#   /opt/lilli-deploy/releases/<sha7>/  one release each (app/ with its own node_modules and .next)
+#   /opt/lilli-deploy/current           symlink -> the live release's app/ (PM2 runs from here)
+#   /opt/lilli-deploy/shared/app.env    the app's .env, symlinked into every release
+#   /opt/lilli-deploy/shared/deploys.log
+# /opt/lilli-deploy is created once with passwordless sudo (the deploy user can't write to /opt)
+# and owned by the deploy user, so nothing after that needs sudo.
 set -euo pipefail
 
 REPO=/opt/lilli
-RELEASES=/opt/lilli-releases
-CURRENT=/opt/lilli-current
-SHARED=/opt/lilli-shared
+BASE=/opt/lilli-deploy
+RELEASES=$BASE/releases
+CURRENT=$BASE/current
+SHARED=$BASE/shared
 ENV_FILE=$SHARED/app.env
 LOG=$SHARED/deploys.log
 KEEP=3
@@ -25,6 +28,10 @@ WS=lilli-ws
 
 say() { echo "[lilli] $*"; }
 
+if [ ! -d "$BASE" ]; then
+  sudo -n install -d -o "$(id -un)" -g "$(id -gn)" "$BASE" || { say "cannot create $BASE (needs passwordless sudo once)"; exit 1; }
+  say "created $BASE"
+fi
 mkdir -p "$RELEASES" "$SHARED"
 exec 9>"$SHARED/deploy.lock"
 flock -n 9 || { say "another deploy is running"; exit 1; }

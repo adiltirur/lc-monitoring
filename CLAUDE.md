@@ -471,8 +471,8 @@ served at voice-staging.lillian.care and tools.lillian.care under `/lilli-stagin
   `LILLI_DB_STAGING_PASSWORD` from `.env`, in the same READ ONLY / extended-protocol / timeout / row-cap
   guard as `invReadOnlyQuery`.
 - **Deploys** pipe `scripts/lilli-deploy-remote.sh` over ssh: build `git archive <sha>` into
-  `/opt/lilli-releases/<sha7>/` (own `node_modules` and `.next`, `.env` symlinked from
-  `/opt/lilli-shared/app.env`), switch the `/opt/lilli-current` symlink, restart PM2 (with `--time`), health-check,
+  `/opt/lilli-deploy/releases/<sha7>/` (own `node_modules` and `.next`, `.env` symlinked from
+  `/opt/lilli-deploy/shared/app.env`), switch the `/opt/lilli-deploy/current` symlink, restart PM2 (with `--time`), health-check,
   and switch back on failure. The live release is never touched by a build. The deploy refuses when
   `prisma/schema.prisma` changed unless `--schema-ok` (the DB is shared by all releases, so apply schema
   changes first). The ref must be pushed to GitHub, because the box fetches from origin.

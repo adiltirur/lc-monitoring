@@ -239,13 +239,13 @@ function git(...args) {
 // fields on the box and only those come back.
 async function statusData() {
   const out = await sshRun(`
-    echo "release=$(readlink /opt/lilli-current 2>/dev/null)"
+    echo "release=$(readlink /opt/lilli-deploy/current 2>/dev/null)"
     echo "checkout=$(git -C /opt/lilli rev-parse --short HEAD 2>/dev/null)"
-    base=$(grep -hE "^LILLI_BASE_PATH=" /opt/lilli-current/.env /opt/lilli/app/.env 2>/dev/null | head -1 | cut -d= -f2-)
+    base=$(grep -hE "^LILLI_BASE_PATH=" /opt/lilli-deploy/current/.env /opt/lilli/app/.env 2>/dev/null | head -1 | cut -d= -f2-)
     echo "web=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:3001\${base}/login")"
     echo "ws=$(ss -ltn | grep -q ":3002 " && echo up || echo down)"
     echo "disk=$(df -h / | awk 'NR==2 {print $4 " free of " $2}')"
-    tail -n 10 /opt/lilli-shared/deploys.log 2>/dev/null | sed 's/^/deploy=/'
+    tail -n 10 /opt/lilli-deploy/shared/deploys.log 2>/dev/null | sed 's/^/deploy=/'
     pm2 jlist | node -e '
       const ps = JSON.parse(require("fs").readFileSync(0, "utf8"));
       for (const p of ps) {
@@ -358,8 +358,8 @@ async function sqlData(sql) {
 
 async function releasesData() {
   const out = await sshRun(`
-    cur=$(readlink /opt/lilli-current 2>/dev/null)
-    for d in $(ls -1dt /opt/lilli-releases/*/ 2>/dev/null); do
+    cur=$(readlink /opt/lilli-deploy/current 2>/dev/null)
+    for d in $(ls -1dt /opt/lilli-deploy/releases/*/ 2>/dev/null); do
       d=\${d%/}; live=0; [ "$d/app" = "$cur" ] && live=1
       echo "$(basename "$d")|$(date -r "$d" -Is)|$(cat "$d/REVISION" 2>/dev/null)|$live"
     done
@@ -373,7 +373,7 @@ async function releasesData() {
 }
 
 async function liveRevision() {
-  return (await sshRun(`cat "$(readlink /opt/lilli-current 2>/dev/null)/../REVISION" 2>/dev/null || git -C /opt/lilli rev-parse HEAD`)).trim();
+  return (await sshRun(`cat "$(readlink /opt/lilli-deploy/current 2>/dev/null)/../REVISION" 2>/dev/null || git -C /opt/lilli rev-parse HEAD`)).trim();
 }
 
 const oneline = (range) => {
