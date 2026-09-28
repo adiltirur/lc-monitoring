@@ -454,7 +454,7 @@ could not recognise can be caught. The scrubber also redacts names after titles
 and greetings (Frau/Herr/Dr./Hallo …) and logins after "user"/"Benutzer", but keeps
 technical actors such as SYSTEM, which are evidence.
 
-## Lilli ops CLI (`scripts/lilli.js`)
+## Lilli ops CLI (`scripts/lilli.js`) and view (`/api/lilli/*`, view `#lilli`)
 
 Command-line access to Lilli staging (Ubuntu box `ubuntu@3.70.67.24`, PM2 `lilli-staging` + `lilli-ws`,
 served at voice-staging.lillian.care and tools.lillian.care under `/lilli-staging`). Run
@@ -476,3 +476,12 @@ served at voice-staging.lillian.care and tools.lillian.care under `/lilli-stagin
   and switch back on failure. The live release is never touched by a build. The deploy refuses when
   `prisma/schema.prisma` changed unless `--schema-ok` (the DB is shared by all releases, so apply schema
   changes first). The ref must be pushed to GitHub, because the box fetches from origin.
+- **One module, two front ends.** `scripts/lilli.js` exports the data functions (`statusData`,
+  `callsData`, `callData`, `logsData`, `releasesData`, `deployPlan`, `runRemote`), and runs as a CLI when
+  executed directly. `server.js` wraps them in `/api/lilli/*`, and the `#lilli` view (Calls, Logs,
+  Deploy tabs) renders them. Add new Lilli features to the module first, so the CLI and the UI stay in step.
+  SSH calls are async and the tunnel/pool is reused across requests. PM2's process list is reduced to
+  safe fields on the box, because `pm2 jlist` includes each process's environment (secrets).
+- **Deploy/rollback from the UI** run one in-memory job at a time (lost on helper restart), polled via
+  `/api/lilli/job?since=`. `POST /api/lilli/deploy` takes the full sha from the plan the user reviewed and
+  re-checks it's on GitHub and whether the schema changed.

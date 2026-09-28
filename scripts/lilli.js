@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// Lilli ops CLI: logs, calls, read-only SQL, status and deploys for the Lilli staging box.
-// Built for local Claude Code sessions as much as for people: everything that can carry
-// patient data (survey answers, caller speech, phone numbers, booking payloads) is scrubbed
-// before it is printed. Run `node scripts/lilli.js help`.
+// Lilli ops: logs, calls, read-only SQL, status and deploys for the Lilli staging box.
+// Used two ways: as a CLI (`node scripts/lilli.js help`, built for local Claude Code sessions)
+// and as a module by server.js (/api/lilli/*, view #lilli). Everything that can carry patient
+// data (survey answers, caller speech, phone numbers, booking payloads) is scrubbed before it
+// leaves this file.
 //
 // Secrets come from helper/.env (LILLI_DB_STAGING_PASSWORD) and are never printed.
 
@@ -32,6 +33,7 @@ const cfg = {
 };
 const MAX_ROWS = 200;
 const SQL_TIMEOUT_MS = 20000;
+const PM2_NAMES = { web: 'lilli-staging', ws: 'lilli-ws' };
 
 // ─── Scrubbing ───────────────────────────────────────────────────────────────
 // Shared scrubber core (same source as the helper's Investigations view), with the
@@ -48,11 +50,13 @@ function getScrubber() {
   let state = { mapping: [] };
   try { state = JSON.parse(fs.readFileSync(cfg.stateFile, 'utf8')); } catch { /* first run */ }
   scrubber = createScrubber({ state });
-  process.on('exit', () => {
-    fs.mkdirSync(path.dirname(cfg.stateFile), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(cfg.stateFile, JSON.stringify(scrubber.exportState()), { mode: 0o600 });
-  });
   return scrubber;
+}
+
+function saveScrubState() {
+  if (!scrubber) return;
+  fs.mkdirSync(path.dirname(cfg.stateFile), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(cfg.stateFile, JSON.stringify(scrubber.exportState()), { mode: 0o600 });
 }
 
 // Bracketed like the scrubber's own placeholders, so the scrubber leaves it alone.
@@ -94,10 +98,10 @@ function scrubRow(row) {
   const out = {};
   for (const [k, v] of Object.entries(row)) {
     if (v == null) out[k] = v;
-    else if (v instanceof Date) out[k] = fmtTime(v);
+    else if (v instanceof Date) out[k] = v.toISOString();
     else if (FREE_TEXT_COLUMNS.has(k)) out[k] = `${REDACTED} (${String(v).length} chars)`;
     else if (k === 'answers') out[k] = answerKeys(v);
-    else if (k === 'events') out[k] = `(${parseJson(v, []).length} events — use \`call <id>\`)`;
+    else if (k === 'events') out[k] = `(${parseJson(v, []).length} events)`;
     else out[k] = v;
   }
   return scrubData(out);
@@ -115,32 +119,67 @@ function answerKeys(v) {
   return Object.keys(answers).map((k) => `${k}=${REDACTED}`).join(', ');
 }
 
+// Event payload keys that hold what the caller or the AI said.
+const SPEECH_KEYS = new Set(['text', 'utterance', 'transcript', 'value', 'values', 'answer', 'answers', 'displayValue', 'raw', 'input', 'content']);
+function dropSpeech(obj) {
+  if (Array.isArray(obj)) return obj.map(dropSpeech);
+  if (!obj || typeof obj !== 'object') return obj;
+  return Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, SPEECH_KEYS.has(k) ? REDACTED : dropSpeech(v)]));
+}
+
 // ─── Remote + DB helpers ─────────────────────────────────────────────────────
 
 function sshArgs(extra = []) {
   return ['-i', cfg.sshKey, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', ...extra, cfg.ssh];
 }
 
+// Async so the helper server's event loop keeps running while the box answers.
 function sshRun(command) {
-  const r = spawnSync('ssh', [...sshArgs(), command], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-  if (r.status !== 0) throw new Error(`ssh failed (${r.status}): ${(r.stderr || '').trim()}`);
-  return r.stdout;
+  return new Promise((resolve, reject) => {
+    const child = spawn('ssh', [...sshArgs(), command], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    let err = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { err += d; });
+    child.on('error', reject);
+    child.on('close', (code) => (code === 0 ? resolve(out) : reject(new Error(`ssh failed (${code}): ${err.trim()}`))));
+  });
 }
 
 // The Lilli RDS sits in private subnets, so queries go through an SSH tunnel via the Lilli box.
+// The tunnel and pool are reused across calls; if the tunnel dies, the next call opens a new one.
 let pool;
 let tunnel;
-async function db() {
-  if (!cfg.db.password) throw new Error('LILLI_DB_STAGING_PASSWORD is not set in helper/.env');
-  if (pool) return pool;
+let dbReady;
+function db() {
+  if (!cfg.db.password) return Promise.reject(new Error('LILLI_DB_STAGING_PASSWORD is not set in helper/.env'));
+  if (!dbReady) {
+    dbReady = openDb().catch((err) => { closeDb(); throw err; });
+  }
+  return dbReady;
+}
+
+async function openDb() {
   const port = await freePort();
-  tunnel = spawn('ssh', [...sshArgs(['-N', '-o', 'ExitOnForwardFailure=yes', '-L', `127.0.0.1:${port}:${cfg.db.host}:${cfg.db.port}`])], { stdio: 'ignore' });
-  process.on('exit', () => tunnel.kill());
-  await waitForPort(port, 15000);
+  const t = spawn('ssh', [...sshArgs(['-N', '-o', 'ExitOnForwardFailure=yes', '-o', 'ServerAliveInterval=30',
+    '-L', `127.0.0.1:${port}:${cfg.db.host}:${cfg.db.port}`])], { stdio: 'ignore' });
+  tunnel = t;
+  t.on('exit', () => { if (tunnel === t) closeDb(); });
+  await waitForPort(t, port, 15000);
   const { Pool } = require('pg');
-  pool = new Pool({ ...cfg.db, host: '127.0.0.1', port, max: 1 });
+  pool = new Pool({ ...cfg.db, host: '127.0.0.1', port, max: 2, idleTimeoutMillis: 60000 });
+  pool.on('error', () => {});
   return pool;
 }
+
+function closeDb() {
+  const p = pool;
+  const t = tunnel;
+  pool = null; tunnel = null; dbReady = null;
+  if (p) p.end().catch(() => {});
+  if (t && t.exitCode == null) t.kill();
+}
+process.on('exit', () => { if (tunnel) tunnel.kill(); });
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -151,11 +190,11 @@ function freePort() {
   });
 }
 
-async function waitForPort(port, timeoutMs) {
+async function waitForPort(t, port, timeoutMs) {
   const net = require('net');
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (tunnel.exitCode != null) throw new Error('SSH tunnel to the Lilli box failed');
+    if (t.exitCode != null) throw new Error('SSH tunnel to the Lilli box failed');
     const ok = await new Promise((r) => {
       const s = net.connect(port, '127.0.0.1', () => { s.destroy(); r(true); }).on('error', () => r(false));
     });
@@ -175,151 +214,17 @@ async function readOnly(sql, params = []) {
     await client.query(`SET LOCAL statement_timeout = ${SQL_TIMEOUT_MS}`);
     const text = `SELECT * FROM (${sql.trim().replace(/;+\s*$/, '')}) q LIMIT ${MAX_ROWS + 1}`;
     const r = await client.query({ text, values: params, queryMode: 'extended' });
-    if (r.rows.length > MAX_ROWS) console.error(`(showing first ${MAX_ROWS} rows)`);
-    return r.rows.slice(0, MAX_ROWS);
+    return { rows: r.rows.slice(0, MAX_ROWS), truncated: r.rows.length > MAX_ROWS };
   } finally {
     await client.query('ROLLBACK').catch(() => {});
     client.release();
   }
 }
 
-const berlin = new Intl.DateTimeFormat('de-DE', {
-  timeZone: 'Europe/Berlin', dateStyle: 'short', timeStyle: 'medium',
-});
-const fmtTime = (d) => (d ? berlin.format(new Date(d)) : '—');
-
 function parseSince(s) {
   const m = /^(\d+)([mhd])$/.exec(s || '');
-  if (!m) throw new Error(`--since expects e.g. 30m, 6h, 2d (got "${s}")`);
+  if (!m) throw new Error(`since expects e.g. 30m, 6h, 2d (got "${s}")`);
   return new Date(Date.now() - Number(m[1]) * { m: 60e3, h: 3600e3, d: 86400e3 }[m[2]]);
-}
-
-function printTable(rows) {
-  if (!rows.length) return console.log('(no rows)');
-  const cols = Object.keys(rows[0]);
-  const cell = (v) => (v == null ? '' : v instanceof Date ? fmtTime(v) : typeof v === 'object' ? JSON.stringify(v) : String(v));
-  const widths = cols.map((c) => Math.min(60, Math.max(c.length, ...rows.map((r) => cell(r[c]).length))));
-  const line = (vals) => vals.map((v, i) => v.slice(0, widths[i]).padEnd(widths[i])).join('  ');
-  console.log(line(cols));
-  console.log(widths.map((w) => '─'.repeat(w)).join('  '));
-  for (const r of rows) console.log(line(cols.map((c) => cell(r[c]))));
-}
-
-// ─── Commands ────────────────────────────────────────────────────────────────
-
-const PM2_NAMES = { web: 'lilli-staging', ws: 'lilli-ws' };
-
-async function cmdLogs(opts) {
-  const lines = Number(opts.lines || 200);
-  const names = opts.web ? [PM2_NAMES.web] : opts.ws ? [PM2_NAMES.ws] : [PM2_NAMES.web, PM2_NAMES.ws];
-  const grep = opts.grep ? new RegExp(opts.grep, 'i') : null;
-  for (const name of names) {
-    const flag = opts.errors ? '--err' : '';
-    const raw = sshRun(`pm2 logs ${name} --nostream --lines ${lines} ${flag} 2>/dev/null`);
-    for (const l of raw.split('\n')) {
-      if (!l.trim() || /^\[TAILING\]|last \d+ lines:$/.test(l.trim())) continue;
-      const line = l.replace(/^\d+\|[\w-]+\s*\|\s?/, `${name === PM2_NAMES.ws ? 'ws ' : 'web'} | `);
-      if (grep && !grep.test(line)) continue;
-      console.log(scrubLogLine(line));
-    }
-  }
-}
-
-async function cmdCalls(opts) {
-  const where = [];
-  const params = [];
-  if (opts.since) { params.push(parseSince(opts.since)); where.push(`c."startedAt" >= $${params.length}`); }
-  if (opts.status) { params.push(opts.status); where.push(`c.status = $${params.length}`); }
-  if (opts.outcome) { params.push(opts.outcome); where.push(`c.outcome = $${params.length}`); }
-  if (opts.errors) where.push(`c."errorMessage" IS NOT NULL`);
-  params.push(Math.min(Number(opts.limit || 30), MAX_ROWS));
-  const rows = await readOnly(`
-    SELECT c.id, c."startedAt", c.status, c.outcome, c.source, c."durationSeconds" AS secs,
-           c."questionsAnswered" || '/' || c."questionsTotal" AS answered,
-           round(c."totalCostUsd"::numeric, 3) AS usd, a.name AS assistant, c."workflowRunId" AS run,
-           left(c."errorMessage", 80) AS error
-    FROM "Call" c LEFT JOIN "Assistant" a ON a.id = c."assistantId"
-    ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-    ORDER BY c."startedAt" DESC LIMIT $${params.length}`, params);
-  printTable(rows.map(scrubRow));
-}
-
-async function cmdCall(id, opts) {
-  if (!id) throw new Error('usage: call <id | externalId | callSid>');
-  const [call] = await readOnly(`
-    SELECT c.*, a.name AS "assistantName"
-    FROM "Call" c LEFT JOIN "Assistant" a ON a.id = c."assistantId"
-    WHERE c.id = $1 OR c."externalId" = $1 OR c."callSid" = $1 LIMIT 1`, [id]);
-  if (!call) throw new Error(`No call with id/externalId/callSid ${id}`);
-
-  const secs = call.durationSeconds ?? (call.endedAt ? Math.round((new Date(call.endedAt) - new Date(call.startedAt)) / 1000) : null);
-  const facts = {
-    id: call.id, externalId: call.externalId, callSid: call.callSid,
-    assistant: `${call.assistantName} (${call.assistantId})`, owner: call.userId,
-    source: call.source, status: call.status, outcome: call.outcome,
-    started: fmtTime(call.startedAt), ended: fmtTime(call.endedAt), duration: secs == null ? '—' : `${secs}s`,
-    questions: `${call.questionsAnswered}/${call.questionsTotal} answered`,
-    cost: `$${Number(call.totalCostUsd).toFixed(4)} (${call.inputTokens} in / ${call.outputTokens} out tokens)`,
-    workflow: call.workflowId ? `${call.workflowId} node ${call.workflowNodeId} run ${call.workflowRunId}` : '—',
-    escalation: call.escalationAttempts ? `${call.escalationAttempts} attempts` : '—',
-    recording: call.recordingUrl ? 'yes' : 'no',
-    caller: call.callerNumber,
-    error: call.errorMessage,
-    answers: answerKeys(call.answers),
-    transcript: call.transcript ? `${REDACTED} (${call.transcript.length} chars)` : '—',
-    summary: call.structuredSummary ? `${REDACTED} (${call.structuredSummary.length} chars)` : '—',
-  };
-  const clean = scrubData(facts);
-  for (const [k, v] of Object.entries(clean)) console.log(`${k.padEnd(12)} ${v ?? '—'}`);
-
-  if (call.bookingMetadata) console.log(`${'booking'.padEnd(12)} ${JSON.stringify(scrubData(call.bookingMetadata))}`);
-
-  const events = parseJson(call.events, []);
-  console.log(`\nevents (${events.length})`);
-  const t0 = new Date(call.startedAt).getTime();
-  for (const e of events) {
-    const at = e.timestamp || e.time || e.ts;
-    const offset = at ? `+${((new Date(at).getTime() - t0) / 1000).toFixed(1)}s`.padStart(8) : '        ';
-    const { type, timestamp, time, ts, ...rest } = e;
-    const detail = Object.keys(rest).length ? JSON.stringify(scrubData(dropSpeech(rest))) : '';
-    console.log(`${offset}  ${String(type || '?').padEnd(28)} ${detail}`);
-  }
-
-  if (opts.logs) {
-    console.log(`\nlog lines mentioning this call (last ${opts.lines || 3000} lines per process)`);
-    const ids = [call.id, call.externalId, call.callSid].filter(Boolean).map((s) => s.replace(/[^\w-]/g, ''));
-    await cmdLogs({ lines: opts.lines || 3000, grep: ids.join('|') });
-  }
-}
-
-// Event payload keys that hold what the caller or the AI said.
-const SPEECH_KEYS = new Set(['text', 'utterance', 'transcript', 'value', 'values', 'answer', 'answers', 'displayValue', 'raw', 'input', 'content']);
-function dropSpeech(obj) {
-  if (Array.isArray(obj)) return obj.map(dropSpeech);
-  if (!obj || typeof obj !== 'object') return obj;
-  return Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, SPEECH_KEYS.has(k) ? REDACTED : dropSpeech(v)]));
-}
-
-async function cmdSql(sql) {
-  if (!sql) throw new Error('usage: sql "<SELECT …>"');
-  printTable((await readOnly(sql)).map(scrubRow));
-}
-
-async function cmdStatus() {
-  console.log(sshRun(`
-    echo "release: $(readlink /opt/lilli-current 2>/dev/null || echo "(not using releases yet) $(git -C /opt/lilli rev-parse --short HEAD)")"
-    [ -f /opt/lilli-shared/deploys.log ] && { echo "last deploys:"; tail -n 5 /opt/lilli-shared/deploys.log | sed 's/^/  /'; }
-    pm2 jlist | node -e '
-      const ps = JSON.parse(require("fs").readFileSync(0, "utf8"));
-      for (const p of ps) {
-        const e = p.pm2_env;
-        const up = e.pm_uptime ? Math.round((Date.now() - e.pm_uptime) / 60000) + "m" : "-";
-        console.log(\`\${p.name.padEnd(16)} \${e.status.padEnd(8)} up \${up.padEnd(8)} restarts \${String(e.restart_time).padEnd(5)} mem \${Math.round((p.monit?.memory || 0) / 1048576)}MB  cwd \${e.pm_cwd}\`);
-      }'
-    base=$(grep -E "^LILLI_BASE_PATH=" /opt/lilli-current/.env /opt/lilli/app/.env 2>/dev/null | head -1 | cut -d= -f2-)
-    echo "health: web $(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:3001\${base}/login")  ws $(ss -ltn | grep -q ":3002 " && echo listening || echo DOWN)"
-    df -h / | tail -1 | awk '{print "disk: " $4 " free of " $2}'
-  `).trimEnd());
 }
 
 function git(...args) {
@@ -328,62 +233,287 @@ function git(...args) {
   return r.stdout.trim();
 }
 
-function remoteScript(args) {
-  return new Promise((resolve, reject) => {
-    const child = spawn('ssh', [...sshArgs(), `bash -s -- ${args.map((a) => `'${a}'`).join(' ')}`], {
-      stdio: ['pipe', 'inherit', 'inherit'],
-    });
-    child.stdin.end(fs.readFileSync(cfg.deployScript));
-    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`remote step failed (exit ${code})`))));
+// ─── Data (shared by the CLI and server.js) ──────────────────────────────────
+
+// PM2's process list carries each process's environment (secrets), so it is reduced to safe
+// fields on the box and only those come back.
+async function statusData() {
+  const out = await sshRun(`
+    echo "release=$(readlink /opt/lilli-current 2>/dev/null)"
+    echo "checkout=$(git -C /opt/lilli rev-parse --short HEAD 2>/dev/null)"
+    base=$(grep -hE "^LILLI_BASE_PATH=" /opt/lilli-current/.env /opt/lilli/app/.env 2>/dev/null | head -1 | cut -d= -f2-)
+    echo "web=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:3001\${base}/login")"
+    echo "ws=$(ss -ltn | grep -q ":3002 " && echo up || echo down)"
+    echo "disk=$(df -h / | awk 'NR==2 {print $4 " free of " $2}')"
+    tail -n 10 /opt/lilli-shared/deploys.log 2>/dev/null | sed 's/^/deploy=/'
+    pm2 jlist | node -e '
+      const ps = JSON.parse(require("fs").readFileSync(0, "utf8"));
+      for (const p of ps) {
+        const e = p.pm2_env;
+        console.log("proc=" + JSON.stringify({ name: p.name, status: e.status, uptimeMs: e.pm_uptime ? Date.now() - e.pm_uptime : null,
+          restarts: e.restart_time, memoryMb: Math.round((p.monit?.memory || 0) / 1048576), cpu: p.monit?.cpu, cwd: e.pm_cwd }));
+      }'
+  `);
+  const s = { procs: [], deploys: [] };
+  for (const line of out.split('\n')) {
+    const i = line.indexOf('=');
+    if (i < 0) continue;
+    const [k, v] = [line.slice(0, i), line.slice(i + 1)];
+    if (k === 'proc') s.procs.push(JSON.parse(v));
+    else if (k === 'deploy') s.deploys.push(v);
+    else s[k] = v;
+  }
+  s.liveRelease = s.release ? path.basename(path.dirname(s.release)) : null;
+  return s;
+}
+
+async function logsData(opts = {}) {
+  const lines = Math.min(Number(opts.lines || 200), 5000);
+  const names = opts.proc === 'web' ? [PM2_NAMES.web] : opts.proc === 'ws' ? [PM2_NAMES.ws] : [PM2_NAMES.web, PM2_NAMES.ws];
+  const grep = opts.grep ? new RegExp(opts.grep, 'i') : null;
+  const out = [];
+  for (const name of names) {
+    const raw = await sshRun(`pm2 logs ${name} --nostream --lines ${lines} ${opts.errors ? '--err' : ''} 2>/dev/null`);
+    for (const l of raw.split('\n')) {
+      if (!l.trim() || /^\[TAILING\]|last \d+ lines:$/.test(l.trim())) continue;
+      const text = l.replace(/^\d+\|[\w-]+\s*\|\s?/, '');
+      if (grep && !grep.test(text)) continue;
+      out.push({ proc: name === PM2_NAMES.ws ? 'ws' : 'web', line: scrubLogLine(text) });
+    }
+  }
+  saveScrubState();
+  return out;
+}
+
+async function callsData(opts = {}) {
+  const where = [];
+  const params = [];
+  if (opts.since) { params.push(parseSince(opts.since)); where.push(`c."startedAt" >= $${params.length}`); }
+  if (opts.status) { params.push(opts.status); where.push(`c.status = $${params.length}`); }
+  if (opts.outcome) { params.push(opts.outcome); where.push(`c.outcome = $${params.length}`); }
+  if (opts.errors) where.push(`c."errorMessage" IS NOT NULL`);
+  params.push(Math.min(Number(opts.limit || 30), MAX_ROWS));
+  const { rows } = await readOnly(`
+    SELECT c.id, c."startedAt", c.status, c.outcome, c.source, c."durationSeconds" AS secs,
+           c."questionsAnswered" || '/' || c."questionsTotal" AS answered,
+           round(c."totalCostUsd"::numeric, 3) AS usd, a.name AS assistant, c."workflowRunId" AS run,
+           left(c."errorMessage", 120) AS error
+    FROM "Call" c LEFT JOIN "Assistant" a ON a.id = c."assistantId"
+    ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+    ORDER BY c."startedAt" DESC LIMIT $${params.length}`, params);
+  const out = rows.map(scrubRow);
+  saveScrubState();
+  return out;
+}
+
+async function callData(id) {
+  if (!id) throw new Error('call id required (id, externalId or callSid)');
+  const { rows: [call] } = await readOnly(`
+    SELECT c.*, a.name AS "assistantName"
+    FROM "Call" c LEFT JOIN "Assistant" a ON a.id = c."assistantId"
+    WHERE c.id = $1 OR c."externalId" = $1 OR c."callSid" = $1 LIMIT 1`, [id]);
+  if (!call) throw Object.assign(new Error(`No call with id/externalId/callSid ${id}`), { status: 404 });
+
+  const secs = call.durationSeconds ?? (call.endedAt ? Math.round((new Date(call.endedAt) - new Date(call.startedAt)) / 1000) : null);
+  const facts = scrubData({
+    id: call.id, externalId: call.externalId, callSid: call.callSid,
+    assistant: `${call.assistantName} (${call.assistantId})`, owner: call.userId,
+    source: call.source, status: call.status, outcome: call.outcome,
+    started: call.startedAt && new Date(call.startedAt).toISOString(),
+    ended: call.endedAt && new Date(call.endedAt).toISOString(),
+    duration: secs == null ? null : `${secs}s`,
+    questions: `${call.questionsAnswered}/${call.questionsTotal} answered`,
+    cost: `$${Number(call.totalCostUsd).toFixed(4)} (${call.inputTokens} in / ${call.outputTokens} out tokens)`,
+    workflow: call.workflowId ? `${call.workflowId} node ${call.workflowNodeId} run ${call.workflowRunId}` : null,
+    escalation: call.escalationAttempts ? `${call.escalationAttempts} attempts` : null,
+    recording: call.recordingUrl ? 'yes' : 'no',
+    caller: call.callerNumber,
+    error: call.errorMessage,
+    answers: answerKeys(call.answers),
+    transcript: call.transcript ? `${REDACTED} (${call.transcript.length} chars)` : null,
+    summary: call.structuredSummary ? `${REDACTED} (${call.structuredSummary.length} chars)` : null,
+  });
+  const booking = call.bookingMetadata ? scrubData(call.bookingMetadata) : null;
+  const t0 = new Date(call.startedAt).getTime();
+  const events = parseJson(call.events, []).map((e) => {
+    const at = e.timestamp || e.time || e.ts;
+    const { type, timestamp, time, ts, ...rest } = e;
+    return {
+      offsetS: at ? Number(((new Date(at).getTime() - t0) / 1000).toFixed(1)) : null,
+      type: String(type || '?'),
+      detail: Object.keys(rest).length ? scrubData(dropSpeech(rest)) : null,
+    };
+  });
+  saveScrubState();
+  return { facts, booking, events, logIds: [call.id, call.externalId, call.callSid].filter(Boolean) };
+}
+
+async function sqlData(sql) {
+  if (!sql) throw new Error('SQL required');
+  const { rows, truncated } = await readOnly(sql);
+  const out = rows.map(scrubRow);
+  saveScrubState();
+  return { rows: out, truncated };
+}
+
+async function releasesData() {
+  const out = await sshRun(`
+    cur=$(readlink /opt/lilli-current 2>/dev/null)
+    for d in $(ls -1dt /opt/lilli-releases/*/ 2>/dev/null); do
+      d=\${d%/}; live=0; [ "$d/app" = "$cur" ] && live=1
+      echo "$(basename "$d")|$(date -r "$d" -Is)|$(cat "$d/REVISION" 2>/dev/null)|$live"
+    done
+  `);
+  return out.split('\n').filter(Boolean).map((l) => {
+    const [name, builtAt, sha, live] = l.split('|');
+    let subject = null;
+    try { subject = git('log', '-1', '--format=%s', sha); } catch { /* commit not in local repo */ }
+    return { name, builtAt, sha, subject, live: live === '1' };
   });
 }
 
-async function cmdDeploy(ref, opts) {
+async function liveRevision() {
+  return (await sshRun(`cat "$(readlink /opt/lilli-current 2>/dev/null)/../REVISION" 2>/dev/null || git -C /opt/lilli rev-parse HEAD`)).trim();
+}
+
+const oneline = (range) => {
+  const out = git('log', '--format=%h%x09%s', range);
+  return out ? out.split('\n').map((l) => { const [sha, subject] = l.split('\t'); return { sha, subject }; }) : [];
+};
+
+// What a deploy of <ref> would do. Refuses refs that are not on GitHub (the box fetches from origin).
+async function deployPlan(ref) {
   git('fetch', '-q', 'origin');
   const target = git('rev-parse', '--verify', `${ref || 'origin/main'}^{commit}`);
-  if (!git('branch', '-r', '--contains', target)) {
-    throw new Error(`${target.slice(0, 7)} is not on any origin branch; push it first (the box fetches from GitHub)`);
+  const onOrigin = git('branch', '-r', '--contains', target) !== '';
+  const live = await liveRevision();
+  const same = live === target;
+  let liveKnown = true;
+  try { git('cat-file', '-e', `${live}^{commit}`); } catch { liveKnown = false; }
+  return {
+    ref: ref || 'origin/main',
+    target, targetSubject: git('log', '-1', '--format=%s', target),
+    live, liveSubject: liveKnown ? git('log', '-1', '--format=%s', live) : null,
+    onOrigin,
+    goingOut: same || !liveKnown ? [] : oneline(`${live}..${target}`),
+    removed: same || !liveKnown ? [] : oneline(`${target}..${live}`),
+    schemaChanged: !same && liveKnown && git('diff', '--name-only', live, target, '--', 'app/prisma/schema.prisma') !== '',
+  };
+}
+
+// Runs lilli-deploy-remote.sh on the box, streaming its output lines to onLine.
+// Returns { promise, cancel }.
+function runRemote(args, onLine) {
+  const child = spawn('ssh', [...sshArgs(), `bash -s -- ${args.map((a) => `'${String(a).replace(/'/g, '')}'`).join(' ')}`],
+    { stdio: ['pipe', 'pipe', 'pipe'] });
+  child.stdin.end(fs.readFileSync(cfg.deployScript));
+  const pump = (stream) => {
+    let buf = '';
+    stream.on('data', (d) => {
+      buf += d;
+      const parts = buf.split(/\r?\n/);
+      buf = parts.pop();
+      parts.forEach(onLine);
+    });
+    stream.on('end', () => { if (buf) onLine(buf); });
+  };
+  pump(child.stdout);
+  pump(child.stderr);
+  const promise = new Promise((resolve, reject) => {
+    child.on('error', reject);
+    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`remote step failed (exit ${code})`))));
+  });
+  return { promise, cancel: () => child.kill('SIGTERM') };
+}
+
+// ─── CLI ─────────────────────────────────────────────────────────────────────
+
+const berlin = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', dateStyle: 'short', timeStyle: 'medium' });
+const fmtTime = (d) => (d ? berlin.format(new Date(d)) : '—');
+const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+
+function printTable(rows) {
+  if (!rows.length) return console.log('(no rows)');
+  const cols = Object.keys(rows[0]);
+  const cell = (v) => (v == null ? '' : typeof v === 'string' && ISO_RE.test(v) ? fmtTime(v) : typeof v === 'object' ? JSON.stringify(v) : String(v));
+  const widths = cols.map((c) => Math.min(60, Math.max(c.length, ...rows.map((r) => cell(r[c]).length))));
+  const line = (vals) => vals.map((v, i) => v.slice(0, widths[i]).padEnd(widths[i])).join('  ');
+  console.log(line(cols));
+  console.log(widths.map((w) => '─'.repeat(w)).join('  '));
+  for (const r of rows) console.log(line(cols.map((c) => cell(r[c]))));
+}
+
+async function cliStatus() {
+  const s = await statusData();
+  console.log(`release: ${s.liveRelease || `(not using releases yet) ${s.checkout}`}`);
+  if (s.deploys.length) { console.log('last deploys:'); s.deploys.slice(-5).forEach((d) => console.log(`  ${d}`)); }
+  for (const p of s.procs) {
+    const up = p.uptimeMs == null ? '-' : `${Math.round(p.uptimeMs / 60000)}m`;
+    console.log(`${p.name.padEnd(16)} ${p.status.padEnd(8)} up ${up.padEnd(8)} restarts ${String(p.restarts).padEnd(5)} mem ${p.memoryMb}MB  cwd ${p.cwd}`);
   }
-  const live = sshRun(`cat "$(readlink /opt/lilli-current 2>/dev/null)/../REVISION" 2>/dev/null || git -C /opt/lilli rev-parse HEAD`).trim();
-  console.log(`live   ${live.slice(0, 7)}  ${git('log', '-1', '--format=%s', live)}`);
-  console.log(`deploy ${target.slice(0, 7)}  ${git('log', '-1', '--format=%s', target)}`);
-  if (live === target) console.log('(already live — will rebuild and restart)');
-  const log = live !== target ? git('log', '--oneline', `${live}..${target}`) : '';
-  if (log) console.log(`\ncommits going out:\n${log.replace(/^/gm, '  ')}`);
-  const back = live !== target ? git('log', '--oneline', `${target}..${live}`) : '';
-  if (back) console.log(`\n⚠ commits live now that this deploy REMOVES:\n${back.replace(/^/gm, '  ')}`);
-  const schemaChanged = live !== target && git('diff', '--name-only', live, target, '--', 'app/prisma/schema.prisma') !== '';
-  if (schemaChanged && !opts['schema-ok']) {
+  console.log(`health: web ${s.web}  ws ${s.ws === 'up' ? 'listening' : 'DOWN'}`);
+  console.log(`disk: ${s.disk}`);
+}
+
+async function cliLogs(opts) {
+  const proc = opts.web ? 'web' : opts.ws ? 'ws' : undefined;
+  for (const { proc: p, line } of await logsData({ ...opts, proc })) console.log(`${p.padEnd(3)} | ${line}`);
+}
+
+async function cliCall(id, opts) {
+  const { facts, booking, events, logIds } = await callData(id);
+  for (const [k, v] of Object.entries(facts)) {
+    const shown = v == null ? '—' : ISO_RE.test(v) ? fmtTime(v) : v;
+    console.log(`${k.padEnd(12)} ${shown}`);
+  }
+  if (booking) console.log(`${'booking'.padEnd(12)} ${JSON.stringify(booking)}`);
+  console.log(`\nevents (${events.length})`);
+  for (const e of events) {
+    const offset = e.offsetS == null ? '        ' : `+${e.offsetS.toFixed(1)}s`.padStart(8);
+    console.log(`${offset}  ${e.type.padEnd(28)} ${e.detail ? JSON.stringify(e.detail) : ''}`);
+  }
+  if (opts.logs) {
+    const lines = opts.lines || 3000;
+    console.log(`\nlog lines mentioning this call (last ${lines} lines per process)`);
+    await cliLogs({ lines, grep: logIds.map((s) => s.replace(/[^\w-]/g, '')).join('|') });
+  }
+}
+
+async function cliDeploy(ref, opts) {
+  const plan = await deployPlan(ref);
+  if (!plan.onOrigin) throw new Error(`${plan.target.slice(0, 7)} is not on any origin branch; push it first (the box fetches from GitHub)`);
+  console.log(`live   ${plan.live.slice(0, 7)}  ${plan.liveSubject || '(not in local repo)'}`);
+  console.log(`deploy ${plan.target.slice(0, 7)}  ${plan.targetSubject}`);
+  if (plan.live === plan.target) console.log('(already live — will restart)');
+  if (plan.goingOut.length) console.log(`\ncommits going out:\n${plan.goingOut.map((c) => `  ${c.sha} ${c.subject}`).join('\n')}`);
+  if (plan.removed.length) console.log(`\n⚠ commits live now that this deploy REMOVES:\n${plan.removed.map((c) => `  ${c.sha} ${c.subject}`).join('\n')}`);
+  if (plan.schemaChanged && !opts['schema-ok']) {
     throw new Error('app/prisma/schema.prisma changed. Apply the DB change first (it is shared by all releases), then re-run with --schema-ok');
   }
   if (opts['dry-run']) return console.log('\n(dry run — nothing deployed)');
   if (!opts.yes) {
     if (!process.stdin.isTTY) throw new Error('Re-run with --yes to confirm (non-interactive)');
     const answer = await new Promise((r) => {
-      process.stdout.write(`\nDeploy ${target.slice(0, 7)} to ${cfg.ssh}? [y/N] `);
+      process.stdout.write(`\nDeploy ${plan.target.slice(0, 7)} to ${cfg.ssh}? [y/N] `);
       process.stdin.once('data', (d) => r(String(d).trim().toLowerCase()));
     });
     process.stdin.pause();
     if (answer !== 'y') return console.log('aborted');
   }
-  await remoteScript(['deploy', target]);
+  await runRemote(['deploy', plan.target], (l) => console.log(l)).promise;
   console.log('\nlast log lines after restart:');
-  await cmdLogs({ lines: 15 });
+  await cliLogs({ lines: 15 });
 }
 
-async function cmdRollback(opts) {
+async function cliRollback(opts) {
   if (!opts.yes) throw new Error('Re-run with --yes to confirm the rollback');
-  await remoteScript(['rollback']);
+  await runRemote(['rollback'], (l) => console.log(l)).promise;
 }
 
-async function cmdReleases() {
-  console.log(sshRun(`
-    cur=$(readlink /opt/lilli-current 2>/dev/null)
-    for d in $(ls -1dt /opt/lilli-releases/*/ 2>/dev/null); do
-      d=\${d%/}; mark=" "; [ "$d/app" = "$cur" ] && mark="*"
-      echo "$mark $(basename "$d")  $(date -r "$d" '+%Y-%m-%d %H:%M')  $(cat "$d/REVISION" 2>/dev/null | cut -c1-12)"
-    done
-  `).trimEnd() || '(no releases yet — first `deploy` creates them)');
+async function cliReleases() {
+  const rs = await releasesData();
+  if (!rs.length) return console.log('(no releases yet — first `deploy` creates them)');
+  for (const r of rs) console.log(`${r.live ? '*' : ' '} ${r.name}  ${fmtTime(r.builtAt)}  ${r.subject || ''}`);
 }
 
 const HELP = `Lilli staging ops (box ${cfg.ssh}, DB ${cfg.db.host})
@@ -399,43 +529,55 @@ const HELP = `Lilli staging ops (box ${cfg.ssh}, DB ${cfg.db.host})
   deploy [ref] [--dry-run] [--yes] [--schema-ok]
                                  build ref (default origin/main) as a new release, switch, health-check,
                                  auto-rollback on failure
-  rollback [--yes]               switch back to the previous release
+  rollback --yes                 switch back to the previous release
   releases                       list releases on the box
 
 Scrubbed output: answers/speech become [REDACTED], phones/emails/names become stable
-placeholders like [PHONE_1] (mapping kept locally in helper/.lilli-state/).`;
+placeholders like [PHONE_1] (mapping kept locally in helper/.lilli-state/).
+The same functions back the helper's Lilli view (#lilli).`;
 
 function parseArgs(argv) {
   const opts = {};
   const pos = [];
+  const flags = ['web', 'ws', 'errors', 'logs', 'yes', 'dry-run', 'schema-ok'];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (!a.startsWith('--')) { pos.push(a); continue; }
     const key = a.slice(2);
     const next = argv[i + 1];
-    if (next != null && !next.startsWith('--') && !['web', 'ws', 'errors', 'logs', 'yes', 'dry-run', 'schema-ok'].includes(key)) {
-      opts[key] = next; i++;
-    } else opts[key] = true;
+    if (next != null && !next.startsWith('--') && !flags.includes(key)) { opts[key] = next; i++; } else opts[key] = true;
   }
   return { pos, opts };
 }
 
-async function main() {
+async function cli() {
   const { pos, opts } = parseArgs(process.argv.slice(2));
   const [cmd, ...rest] = pos;
   switch (cmd) {
-    case 'status': return cmdStatus();
-    case 'logs': return cmdLogs(opts);
-    case 'calls': return cmdCalls(opts);
-    case 'call': return cmdCall(rest[0], opts);
-    case 'sql': return cmdSql(rest.join(' '));
-    case 'deploy': return cmdDeploy(rest[0], opts);
-    case 'rollback': return cmdRollback(opts);
-    case 'releases': return cmdReleases();
-    default: console.log(HELP);
+    case 'status': return cliStatus();
+    case 'logs': return cliLogs(opts);
+    case 'calls': return printTable(await callsData(opts));
+    case 'call': return cliCall(rest[0], opts);
+    case 'sql': {
+      const { rows, truncated } = await sqlData(rest.join(' '));
+      printTable(rows);
+      if (truncated) console.error(`(showing first ${MAX_ROWS} rows)`);
+      return undefined;
+    }
+    case 'deploy': return cliDeploy(rest[0], opts);
+    case 'rollback': return cliRollback(opts);
+    case 'releases': return cliReleases();
+    default: return console.log(HELP);
   }
 }
 
-main()
-  .catch((err) => { console.error(`error: ${err.message}`); process.exitCode = 1; })
-  .finally(async () => { if (pool) await pool.end(); if (tunnel) tunnel.kill(); });
+if (require.main === module) {
+  cli()
+    .catch((err) => { console.error(`error: ${err.message}`); process.exitCode = 1; })
+    .finally(closeDb);
+}
+
+module.exports = {
+  cfg, statusData, logsData, callsData, callData, sqlData, releasesData, deployPlan, runRemote,
+  scrubLogLine, scrubRow,
+};
