@@ -11,6 +11,7 @@ mac/build/
 mac/.build/
 .release/
 .investigations-state/
+.lilli-state/
 .DS_Store
 .claude/settings.local.json
 .impeccable/questions/

@@ -453,3 +453,26 @@ saving the mapping. The composer shows it before sending (toggle, stored in
 could not recognise can be caught. The scrubber also redacts names after titles
 and greetings (Frau/Herr/Dr./Hallo …) and logins after "user"/"Benutzer", but keeps
 technical actors such as SYSTEM, which are evidence.
+
+## Lilli ops CLI (`scripts/lilli.js`)
+
+Command-line access to Lilli staging (Ubuntu box `ubuntu@3.70.67.24`, PM2 `lilli-staging` + `lilli-ws`,
+served at voice-staging.lillian.care and tools.lillian.care under `/lilli-staging`). Run
+`node scripts/lilli.js help`. Commands: `status`, `logs`, `calls`, `call <id>`, `sql`, `deploy`, `rollback`,
+`releases`. Built for Claude Code sessions: use it instead of raw ssh/psql.
+
+- **Everything printed is scrubbed.** Lilli-specific rules in `LINE_RULES` drop survey answers, caller
+  speech and booking payload values (Lilli logs them from `server/ws-server.ts`), then the shared
+  scrubber (`../investigations/tools/principa-log-scrubber.html`) tokenises phones/emails/names. When
+  Lilli adds a `console.*` line that prints answers or speech, add a rule. SQL output drops
+  `transcript`, `structuredSummary`, `userMessage`, `assistantSnapshot`, and shows only the keys of `answers`.
+  The placeholder mapping lives in `.lilli-state/` (gitignored, 0600).
+- **DB access** goes through an SSH tunnel via the box (the RDS is in private subnets) with
+  `LILLI_DB_STAGING_PASSWORD` from `.env`, in the same READ ONLY / extended-protocol / timeout / row-cap
+  guard as `invReadOnlyQuery`.
+- **Deploys** pipe `scripts/lilli-deploy-remote.sh` over ssh: build `git archive <sha>` into
+  `/opt/lilli-releases/<sha7>/` (own `node_modules` and `.next`, `.env` symlinked from
+  `/opt/lilli-shared/app.env`), switch the `/opt/lilli-current` symlink, restart PM2 (with `--time`), health-check,
+  and switch back on failure. The live release is never touched by a build. The deploy refuses when
+  `prisma/schema.prisma` changed unless `--schema-ok` (the DB is shared by all releases, so apply schema
+  changes first). The ref must be pushed to GitHub, because the box fetches from origin.
