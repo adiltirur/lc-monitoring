@@ -7159,7 +7159,7 @@ function rlBusy() { return !!(rlJobState && rlJobState.status === 'running'); }
 // LILLI STAGING (#lilli) — UI over /api/lilli/* (scripts/lilli.js). Everything the
 // server returns is already scrubbed; this view never sees answers, speech or contacts.
 // ═════════════════════════════════════════════════════════════════════════
-let liTab = 'calls', liTimer = null, liJobState = null, liLines = [], liLogEnd = 0, liNotifiedJob = null;
+let liTab = 'investigate', liTimer = null, liJobState = null, liLines = [], liLogEnd = 0, liNotifiedJob = null;
 let liCallFilter = { since: '30d', status: '', errors: false };
 let liLogOpts = { proc: '', errors: false, lines: '300', grep: '' };
 let liRef = 'origin/main';
@@ -7175,7 +7175,7 @@ function renderLilli(el) {
     })}
     <div id="liStatus" style="margin-bottom:var(--s-4)">${loadingState('Checking the box…')}</div>
     <div class="lc-tabs" style="margin-bottom:var(--s-4)">
-      ${[['calls', 'Calls'], ['logs', 'Logs'], ['deploy', 'Deploy']].map(([k, l]) =>
+      ${[['investigate', 'Investigate'], ['calls', 'Calls'], ['logs', 'Logs'], ['deploy', 'Deploy']].map(([k, l]) =>
         `<button class="lc-tab" data-li-tab="${k}" onclick="liSwitch('${k}')">${l}</button>`).join('')}
     </div>
     <div id="liBody"></div>`);
@@ -7214,9 +7214,160 @@ function liSwitch(tab) {
   liTab = tab;
   document.querySelectorAll('.lc-tab[data-li-tab]').forEach(t => t.classList.toggle('active', t.dataset.liTab === tab));
   clearInterval(liTimer);
-  if (tab === 'calls') liRenderCalls();
+  if (tab === 'investigate') liRenderInvestigate();
+  else if (tab === 'calls') liRenderCalls();
   else if (tab === 'logs') liRenderLogs();
   else liRenderDeploy();
+}
+
+// ── Investigate ── ask a question; a sandboxed Claude Code session reads logs/calls/code and
+// answers with a fix brief. Notes live in ../investigations/ (YYYY-MM-DD-lilli-*.md).
+let liInvFile = null, liInvTimer = null;
+
+function liRenderInvestigate() {
+  document.getElementById('liBody').innerHTML = `
+    <div style="display:grid;grid-template-columns:280px minmax(0,1fr);gap:var(--s-4);align-items:start">
+      <div>
+        <button class="btn btn-primary" style="width:100%;margin-bottom:var(--s-3)" onclick="liInvSelect(null)">
+          <span class="material-symbols-outlined">add</span>New investigation</button>
+        <div id="liInvList">${loadingState()}</div>
+      </div>
+      <div id="liInvMain"></div>
+    </div>`;
+  liInvLoadList();
+  liInvSelect(liInvFile);
+}
+
+async function liInvLoadList() {
+  const box = document.getElementById('liInvList');
+  if (!box) return;
+  try {
+    const { items } = await gbpApi('/api/lilli/inv');
+    box.innerHTML = items.length ? items.map(i => `
+      <div class="panel" onclick="liInvSelect('${escHtml(i.file)}')" style="padding:10px 12px;margin-bottom:6px;cursor:pointer;${i.file === liInvFile ? 'border-color:var(--action)' : ''}">
+        <div style="font-size:12.5px;font-weight:600;color:var(--ink);line-height:1.35">${escHtml(i.title.replace(/^Lilli:\s*/, ''))}</div>
+        <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+          ${i.running ? '<span class="pill warn"><span class="dot warn live"></span>Running</span>' : `<span class="pill ${/CLOSED/.test(i.status) ? '' : 'info'}">${escHtml(i.status || 'OPEN')}</span>`}
+          <span class="muted mono" style="font-size:10.5px">${escHtml(i.file.slice(0, 10))}</span>
+        </div>
+      </div>`).join('') : '<div class="muted" style="font-size:12px">No Lilli investigations yet.</div>';
+  } catch (e) { box.innerHTML = errorState(e.message); }
+}
+
+function liInvSelect(file) {
+  liInvFile = file;
+  clearInterval(liInvTimer);
+  document.querySelectorAll('#liInvList .panel').forEach(p => { p.style.borderColor = ''; });
+  if (!file) { liInvRenderNew(); return; }
+  liInvLoad(true);
+}
+
+function liInvRenderNew() {
+  const main = document.getElementById('liInvMain');
+  if (!main) return;
+  main.innerHTML = `<div class="panel"><div class="panel-body">
+    <div style="font-weight:600;margin-bottom:6px">What's going wrong on Lilli staging?</div>
+    <div class="muted" style="font-size:12px;line-height:1.6;margin-bottom:var(--s-3)">
+      Describe the symptom, with call ids or times if you have them. A Claude Code session reads the logs, calls and
+      database (read-only, scrubbed) and the Lilli code, then answers with the root cause and a <b>fix brief</b> you can hand to a
+      Claude Code session. It cannot change or deploy anything.</div>
+    <textarea class="lc-textarea" id="liInvQ" rows="5" style="width:100%" placeholder="e.g. Test calls with the booking agent end without offering slots since this morning. Call cmu2zqyt… is one of them."
+      onkeydown="if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') liInvAsk()"></textarea>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:var(--s-3)">
+      <span class="muted" style="font-size:11.5px">⌘↩ to start · usually 2–6 minutes · names and numbers in your question are scrubbed first</span>
+      <button class="btn btn-primary" onclick="liInvAsk()"><span class="material-symbols-outlined">troubleshoot</span>Investigate</button>
+    </div>
+  </div></div>`;
+}
+
+async function liInvAsk(followUp) {
+  const input = document.getElementById(followUp ? 'liInvFollow' : 'liInvQ');
+  const question = input.value.trim();
+  if (!question) { showToast('Ask a question first', 'err'); return; }
+  input.disabled = true;
+  try {
+    const { file } = await gbpApi('/api/lilli/inv', { method: 'POST', body: JSON.stringify({ question, file: followUp ? liInvFile : undefined }) });
+    liInvFile = file;
+    await liInvLoadList();
+    liInvLoad(true);
+  } catch (e) { showToast(e.message, 'err'); input.disabled = false; }
+}
+
+// Latest "#### Fix brief" section of the note, for handing to a Claude Code session.
+function liInvFixBrief(md, file) {
+  const parts = md.split(/^#### Fix brief\s*$/m);
+  if (parts.length < 2) return null;
+  const brief = parts[parts.length - 1].split(/^#{2,4} /m)[0].trim();
+  return `Fix for a Lilli staging issue. Investigation notes: investigations/${file} (read them for evidence and root cause).\n\n${brief}`;
+}
+
+async function liInvLoad(scrollTop) {
+  const main = document.getElementById('liInvMain');
+  if (!main || !liInvFile) return;
+  let d;
+  try { d = await gbpApi('/api/lilli/inv/' + encodeURIComponent(liInvFile)); }
+  catch (e) { main.innerHTML = errorState(e.message); return; }
+  const j = d.job;
+  const running = j && j.status === 'running';
+  const brief = liInvFixBrief(d.md, d.file);
+  const body = d.md.replace(/^# .*\n/, '').replace(/^\*\*(Status|System):\*\*.*\n/gm, '').trim();
+  const secs = j ? Math.round(((j.finishedAt ? Date.parse(j.finishedAt) : Date.now()) - Date.parse(j.startedAt)) / 1000) : 0;
+  main.innerHTML = `
+    <div class="panel" style="margin-bottom:var(--s-3)"><div class="panel-body" style="display:flex;gap:var(--s-3);align-items:center;flex-wrap:wrap">
+      <div style="flex:1;min-width:240px">
+        <div style="font-weight:700">${escHtml(d.title.replace(/^Lilli:\s*/, ''))}</div>
+        <div class="muted mono" style="font-size:11px;margin-top:2px">investigations/${escHtml(d.file)}</div>
+      </div>
+      <button class="btn btn-primary btn-sm" ${brief ? '' : 'disabled'} onclick="copyText(liInvFixBrief(window.__liInvMd, '${escHtml(d.file)}'), 'Fix brief copied — paste it into a Claude Code session')">
+        <span class="material-symbols-outlined">content_copy</span>Copy fix brief</button>
+      <button class="btn btn-sm" onclick="copyText('Continue the investigation in investigations/${escHtml(d.file)}', 'Copied')">
+        <span class="material-symbols-outlined">link</span>Copy note path</button>
+      <button class="btn btn-sm btn-ghost" onclick="liInvSetStatus('${/CLOSED/.test(d.status) ? 'OPEN' : 'CLOSED'}')">${/CLOSED/.test(d.status) ? 'Reopen' : 'Mark closed'}</button>
+    </div></div>
+    ${j && (running || j.status === 'failed' || j.status === 'cancelled') ? `<div class="panel" style="margin-bottom:var(--s-3);overflow:hidden">
+      <div class="panel-header">
+        <div style="display:flex;gap:var(--s-3);align-items:center">
+          ${running ? '<span class="pill warn"><span class="dot warn live"></span>Investigating</span>' : `<span class="pill err">${escHtml(j.status)}</span>`}
+          <span style="font-size:12.5px">${escHtml(j.question.slice(0, 140))}</span>
+          <span class="muted mono" style="font-size:11px">${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}</span>
+        </div>
+        <div class="panel-actions">${running ? `<button class="btn btn-sm" onclick="liInvCancel()"><span class="material-symbols-outlined">stop</span>Stop</button>` : ''}</div>
+      </div>
+      ${j.error ? `<div class="panel-body mono" style="color:var(--err);font-size:11.5px">${escHtml(j.error)}</div>` : ''}
+      <pre class="ls-log" style="height:auto;max-height:260px">${j.log.length ? j.log.map(l => escHtml('› ' + l)).join('\n') : '<span class="muted">Starting Claude Code…</span>'}</pre>
+    </div>` : ''}
+    <div class="panel" style="margin-bottom:var(--s-3)"><div class="panel-body" style="font-size:13px;line-height:1.6">${invMd(body)}</div></div>
+    ${!running && d.canFollowUp ? `<div class="panel"><div class="panel-body">
+      <textarea class="lc-textarea" id="liInvFollow" rows="3" style="width:100%" placeholder="Follow-up: dig deeper, check another call, challenge the root cause…"
+        onkeydown="if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') liInvAsk(true)"></textarea>
+      <div style="display:flex;justify-content:flex-end;margin-top:var(--s-2)">
+        <button class="btn btn-primary btn-sm" onclick="liInvAsk(true)"><span class="material-symbols-outlined">send</span>Ask follow-up</button></div>
+    </div></div>` : ''}`;
+  window.__liInvMd = d.md;
+  if (scrollTop) main.scrollIntoView({ block: 'nearest' });
+  clearInterval(liInvTimer);
+  if (running) {
+    liInvTimer = setInterval(() => {
+      if (window.__currentView !== 'lilli' || liTab !== 'investigate' || !document.getElementById('liInvMain')) { clearInterval(liInvTimer); return; }
+      liInvLoad(false);
+    }, 2500);
+  } else if (j && j.status === 'done' && window.__liInvNotified !== j.startedAt) {
+    window.__liInvNotified = j.startedAt;
+    liInvLoadList();
+    try { window.lcNative && window.lcNative.post('notify', { title: 'Lilli investigation finished', body: d.title }); } catch {}
+  }
+}
+
+async function liInvCancel() {
+  try { await gbpApi('/api/lilli/inv/' + encodeURIComponent(liInvFile) + '/job', { method: 'DELETE' }); liInvLoad(false); }
+  catch (e) { showToast(e.message, 'err'); }
+}
+
+async function liInvSetStatus(status) {
+  try {
+    await gbpApi('/api/lilli/inv/' + encodeURIComponent(liInvFile) + '/status', { method: 'POST', body: JSON.stringify({ status }) });
+    liInvLoadList(); liInvLoad(false);
+  } catch (e) { showToast(e.message, 'err'); }
 }
 
 // ── Calls ──

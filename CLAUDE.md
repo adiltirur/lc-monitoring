@@ -485,3 +485,11 @@ served at voice-staging.lillian.care and tools.lillian.care under `/lilli-stagin
 - **Deploy/rollback from the UI** run one in-memory job at a time (lost on helper restart), polled via
   `/api/lilli/job?since=`. `POST /api/lilli/deploy` takes the full sha from the plan the user reviewed and
   re-checks it's on GitHub and whether the schema changed.
+- **Investigate tab (`/api/lilli/inv/*`).** A question starts a headless Claude Code session in `../Lilli`
+  (`LILLI_REPO`) with `--restricted` (file tools confined to the Lilli repo, so `.env` and the scrub mappings
+  here are out of reach), `--tools Read,Grep,Glob,Bash`, `--permission-mode dontAsk`, and `LILLI_INV_SETTINGS`,
+  which allows Bash only for the read-only `lilli.js` commands and read-only git. Deploy/rollback are denied, and so
+  is every other command. Don't add `grep`/`cat`/`cut` to the allow list: they could read files outside the repo. The
+  question is scrubbed first. The answer (Summary / Evidence / Root cause / Fix brief / Open questions) is appended to
+  `## Findings` in `../investigations/YYYY-MM-DD-lilli-*.md`. Follow-ups `--resume` the saved session id
+  (`.investigations-state/<file>.json` → `lilliSessionId`). "Copy fix brief" hands the latest brief to a Claude Code session.
