@@ -567,6 +567,12 @@ helper server (`routes/api-console.js`), never the browser, so credentials stay 
   `LC_API_KEY_<ENV>`, optional `PMS_BASE_URL_TEST`). Every secret added is masked (‹label›) in
   the trace and the echoed request. **A service's credentials are only attached when the URL
   points at that service for the selected env** (`assertCredentialTarget`).
+- **Find missing** (`lib/api-console/sync.js`, button in the catalog): a headless Claude Code session
+  in LillianCare-Core (same read-only sandbox as Investigations: Read/Grep/Glob, secrets denied,
+  `--json-schema` structured output) lists outbound calls / webhook routes without a template.
+  The server validates each entry (group ↔ auth ↔ base-URL prefix, no credential headers, dedup by
+  method + path + query keys) and appends it to `lib/api-console/externals-generated.json`
+  (tracked — review with git diff; entries can be removed from their Docs tab). ~2–4 min, ~$1.
 - **Production guard**: on `production`, anything but GET/HEAD — and every Serverpod call —
   returns 428 unless `body.confirm === 'production'`; the UI asks for it each time.
 - **Variables**: `{{name}}` in URL/headers/body. Precedence: dynamic (`{{$isoTimestamp}}`,

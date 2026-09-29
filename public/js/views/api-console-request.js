@@ -258,6 +258,8 @@ function acDocsHtml() {
         <span class="pill">auth: ${escHtml(acAuthLabel(t.auth))}</span></div>
       ${t.doc ? `<p style="margin-top:10px">${escHtml(t.doc)}</p>` : ''}
       ${t.source ? `<h4>Call site</h4><div class="mono">${escHtml(t.source)}</div>` : ''}
+      ${t.generated ? `<h4>Added by a scan</h4><div class="ac-row"><span class="ac-hint">Claude Code added this on ${escHtml(deTime(t.addedAt))} (lib/api-console/externals-generated.json). Check method and body against the call site.</span>
+        <button class="btn btn-sm btn-danger" onclick="acRemoveGenerated('${escHtml(t.id)}')"><span class="material-symbols-outlined">delete</span>Remove template</button></div>` : ''}
       <h4>Variables</h4><div class="ac-hint">${acVarsIn(r).map(v => `<code>{{${escHtml(v)}}}</code>`).join(' ') || 'none'}</div>
     </div>`;
   }

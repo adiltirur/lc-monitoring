@@ -9,7 +9,8 @@
 const crypto = require('crypto');
 const router = require('express').Router();
 const { getCatalog } = require('../lib/api-console/catalog');
-const { EXTERNALS } = require('../lib/api-console/externals');
+const { getExternals } = require('../lib/api-console/externals');
+const sync = require('../lib/api-console/sync');
 const auth = require('../lib/api-console/auth');
 const store = require('../lib/api-console/store');
 const { send, networkHint, errorMessage } = require('../lib/api-console/http');
@@ -28,7 +29,7 @@ function checkEnv(env) {
 
 // ── catalog + meta ──
 router.get('/api/console/catalog', (req, res) => {
-  try { res.json({ serverpod: getCatalog({ force: req.query.reload === '1' }), externals: EXTERNALS }); } catch (e) { fail(res, e); }
+  try { res.json({ serverpod: getCatalog({ force: req.query.reload === '1' }), externals: getExternals() }); } catch (e) { fail(res, e); }
 });
 
 router.get('/api/console/meta', async (req, res) => {
@@ -36,6 +37,16 @@ router.get('/api/console/meta', async (req, res) => {
     const env = checkEnv(req.query.env || 'dev');
     res.json({ env, envs: store.ENVS, authTypes: auth.AUTH_TYPES, secrets: auth.secretStatus(env), baseVars: await auth.baseVars(env) });
   } catch (e) { fail(res, e); }
+});
+
+// ── "Find missing": Claude Code scans Core for calls without a template (lib/api-console/sync.js) ──
+router.post('/api/console/sync', (req, res) => {
+  try { res.json(sync.start(getExternals())); } catch (e) { fail(res, e); }
+});
+router.get('/api/console/sync', (req, res) => res.json(sync.status()));
+router.delete('/api/console/sync', (req, res) => res.json(sync.cancel()));
+router.delete('/api/console/externals/:id', (req, res) => {
+  try { sync.removeGenerated(req.params.id); res.json({ ok: true }); } catch (e) { fail(res, e); }
 });
 
 // ── accounts (passwords never leave the server) ──

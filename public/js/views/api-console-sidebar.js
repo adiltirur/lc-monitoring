@@ -11,6 +11,7 @@ function acRenderSide() {
       value="${escHtml(acState.search)}" oninput="acSearchInput(this.value)"></div>
     ${acState.sideTab === 'catalog' ? `<div class="ac-catalog-info">
       <span class="grow" title="Read from ${escHtml(c.serverpod.coreDir)}${c.serverpod.git ? ` — branch ${escHtml(c.serverpod.git.branch || 'detached')} @ ${escHtml(c.serverpod.git.commit || '?')}` : ''}">${c.serverpod.counts.methods} methods · built ${escHtml(deTime(c.serverpod.builtAt).slice(-8))}${c.serverpod.git ? ` · <span class="mono">${escHtml(c.serverpod.git.branch || 'detached')}${c.serverpod.git.commit ? '@' + escHtml(c.serverpod.git.commit) : ''}</span>` : ''}</span>
+      <button class="btn btn-sm" onclick="acStartSync()" title="Claude Code reads LillianCare-Core and adds templates for backend calls (Principa, Personio, webhooks, …) the console doesn't have yet"><span class="material-symbols-outlined">auto_awesome</span>Find missing</button>
       <button class="lc-icon-btn" onclick="acReloadCatalog()" title="Reload the catalog from LillianCare-Core"><span class="material-symbols-outlined" id="acReloadIcon">refresh</span></button>
     </div>` : ''}
     <div class="ac-side-list" id="acSideList"></div>`;
@@ -104,8 +105,9 @@ function acCatalogHtml() {
     for (const t of items) {
       const flag = t.effect === 'sends' ? '<span class="material-symbols-outlined flag sends" title="Sends to a real person">outgoing_mail</span>'
         : t.effect === 'write' ? '<span class="material-symbols-outlined flag write" title="Changes data">edit_note</span>' : '';
+      const gen = t.generated ? '<span class="material-symbols-outlined flag" title="Added by a Find missing scan">auto_awesome</span>' : '';
       html += `<button class="ac-node ${cur.extId === t.id ? 'active' : ''}" onclick="acOpenExternal('${t.id}')" title="${escHtml(t.url)}">
-        <span class="ac-m ${t.method}">${t.method}</span><span class="grow">${escHtml(t.name)}</span>${flag}</button>`;
+        <span class="ac-m ${t.method}">${t.method}</span><span class="grow">${escHtml(t.name)}</span>${gen}${flag}</button>`;
     }
   }
   return html;
