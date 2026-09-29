@@ -595,3 +595,25 @@ helper server (`routes/api-console.js`), never the browser, so credentials stay 
 - **Response search** (Body / Headers, ⌘F): highlights matches across text nodes (so across JSON
   syntax colours), ↵ / ⇧↵ step through them, Headers also filters rows. Capped at 2000 hits.
 - `/api/console` has a 30 MB JSON body limit (Serverpod's `maxRequestSize`); other routes keep 100 kB.
+
+## Principa SideCar (`/api/sidecar/*`, view `#sidecar`, `scripts/sidecar_smoke_test.js`)
+
+**Read-only** access to Planorg's **production** Principa reporting DB (`172.16.2.18:5432/scliliancareprod`,
+hosted by NT AG, for the Helu sync). NT AG allows exactly one source IP, **10.0.13.173**
+(`lc-core-serverpod-staging`), through the site-to-site VPN; Planorg refuses internet access.
+
+- **Never connect from anywhere else.** `lib/sidecar.js` opens an SSM port-forward
+  (`AWS-StartPortForwardingSessionToRemoteHost`) *through* that instance to `127.0.0.1:25432`, and
+  refuses if the tagged instance doesn't have the whitelisted IP (an instance replacement changes it).
+- Credentials only from `.env` (`SIDECAR_DB_USER`, `SIDECAR_DB_PASSWORD`); never logged or returned.
+- Read-only twice: `default_transaction_read_only=on` (verified with `SHOW` after connect) and every
+  query in `BEGIN READ ONLY … ROLLBACK`, single statement via the extended protocol, 30 s statement
+  timeout, 200-row cap. Connect timeout 10 s; `sslmode=prefer` = TLS with plain fallback.
+- Errors are classified: timeout → network path (tunnel/whitelist), 28P01/28000 → read-only user /
+  credentials, missing env → waiting on Planorg. Result rows are shown in the page only.
+- Smoke test: `node scripts/sidecar_smoke_test.js` (exit 0 ok, 2 no creds, 3 tunnel/source host,
+  4 timeout, 5 auth, 6 other).
+- **Known network issue (2026-09-29):** the private route table `rtb-0fb002ec658994585` (staging +
+  test subnets) sends `172.16.2.16/28` via NAT gateway `nat-04d27c791bf19e0ed`, so NT AG sees source
+  `10.0.4.131`, not 10.0.13.173 → port 5432 times out. Fix is either NT AG whitelisting 10.0.4.131 or a
+  `/32` route to the VGW (Terraform) — see the SideCar notes in the helper's history/PR.

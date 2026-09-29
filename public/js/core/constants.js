@@ -52,6 +52,7 @@ const TITLE_BY_VIEW = {
   'ai-query': 'AI Assistant',
   'investigations': 'Investigations',
   'api-console': 'API Console',
+  'sidecar': 'Principa SideCar',
   'csv-decrypt': 'CSV Decryptor',
   'monitoring': 'Monitor',
   'praxis-refresh': 'Praxis Refresh',
