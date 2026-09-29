@@ -579,10 +579,11 @@ helper server (`routes/api-console.js`), never the browser, so credentials stay 
   modals, Postman import/export + curl) and `public/css/api-console.css`. Postman v2.1 collections
   and environments import/export; the helper's own auth types are kept in an `lcHelper` field.
   "Copy as curl" puts credentials in as `$PLACEHOLDERS`.
-- **Find lcAccountId**: when a request mentions `lcAccountId`, the header shows a lookup that
-  searches `app_user_info` by email on the console's env (via `/api/users` + `envHeadersFor`) and
-  writes the id into the request in place of `{{lcAccountId}}` (remembered as `lcFilled`, so a
-  second pick replaces it).
+- **Find by email** (`AC_LOOKUPS` in `api-console-panels.js`): when a request uses `{{lcAccountId}}`
+  or `{{fcmToken}}`, the header shows a lookup that searches `app_user_info` on the console's env
+  (via `/api/users` + `envHeadersFor`); for FCM it then lists the user's devices
+  (`/api/users/:id/tokens`, as in Send Notification). The pick replaces the placeholder in the
+  request and is remembered in `req.filled`, so a second pick replaces it.
 - **Response search** (Body / Headers, ⌘F): highlights matches across text nodes (so across JSON
   syntax colours), ↵ / ⇧↵ step through them, Headers also filters rows. Capped at 2000 hits.
 - `/api/console` has a 30 MB JSON body limit (Serverpod's `maxRequestSize`); other routes keep 100 kB.

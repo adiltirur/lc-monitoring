@@ -221,7 +221,7 @@ function acConsoleHtml(r) {
     html += `<div class="ac-neterr"><div class="band"><span class="material-symbols-outlined">error</span>${r.networkError ? 'Request failed' : 'Not sent'}</div>
       <div class="panel-body"><div class="mono">${escHtml(r.error || '')}</div>${r.hint ? `<div style="margin-top:6px;color:var(--ink-2)">${escHtml(r.hint)}</div>` : ''}
       ${r.missing && r.missing.length ? `<div class="ac-row" style="margin-top:8px">
-        ${r.missing.includes('lcAccountId') ? `<button class="btn btn-sm btn-primary" onclick="acOpenLcLookup()"><span class="material-symbols-outlined">person_search</span>Find lcAccountId by email</button>` : ''}
+        ${r.missing.filter(n => AC_LOOKUPS[n]).map(n => `<button class="btn btn-sm btn-primary" onclick="acOpenLookup('${n}')"><span class="material-symbols-outlined">${AC_LOOKUPS[n].icon}</span>${escHtml(AC_LOOKUPS[n].title)} by email</button>`).join('')}
         <button class="btn btn-sm" onclick="acOpenVars()">Open Variables</button></div>` : ''}</div></div>`;
   }
   if (r.timings) {

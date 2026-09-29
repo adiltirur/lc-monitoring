@@ -153,6 +153,10 @@ mark.ac-hit.cur { background: var(--yellow); color: #00212a; }
 .ac-acc .grow { flex: 1; min-width: 0; }
 .ac-acc .who { font: 600 13px/1.3 var(--font-ui); color: var(--ink); }
 .ac-acc .sub { font-size: 11.5px; color: var(--ink-3); }
+.ac-devices:empty { display: none; }
+.ac-devices { padding: 4px 0 0 12px; }
+.ac-device { display: flex; align-items: center; gap: var(--s-2); padding: 5px 0; font-size: 12px; }
+.ac-device .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ac-form { display: grid; grid-template-columns: 120px 1fr 1fr; gap: var(--s-2); align-items: end; }
 .ac-form .full { grid-column: 1 / -1; }
 

@@ -38,14 +38,14 @@ function acBlankRequest() {
   return {
     name: 'Untitled request', kind: 'custom', ref: null,
     method: 'GET', url: '{{coreApi}}/', headers: [{ key: 'Accept', value: 'application/json', enabled: true }],
-    bodyMode: 'none', body: '', auth: { type: 'none' }, effect: null, example: null, lcFilled: null,
+    bodyMode: 'none', body: '', auth: { type: 'none' }, effect: null, example: null, filled: {},
   };
 }
 
 // Only the fields that describe a request (what history/collections store).
 function acRequestPayload(r = acState.req) {
   return { name: r.name, kind: r.kind, ref: r.ref, method: r.method, url: r.url, headers: r.headers,
-    bodyMode: r.bodyMode, body: r.body, auth: r.auth, effect: r.effect || null, lcFilled: r.lcFilled || null };
+    bodyMode: r.bodyMode, body: r.body, auth: r.auth, effect: r.effect || null, filled: r.filled || {} };
 }
 
 function acSaveDraft() {
@@ -72,6 +72,7 @@ async function renderApiConsole(el) {
   const draft = acLoadDraft();
   acState.env = AC_ENVS.includes(draft?.env) ? draft.env : AC_ENVS.includes(globalEnv) ? globalEnv : 'dev';
   if (!acState.req) acState.req = draft?.req ? { ...acBlankRequest(), ...draft.req } : acBlankRequest();
+  if (acState.req.lcFilled) { acState.req.filled = { ...acState.req.filled, lcAccountId: acState.req.lcFilled }; delete acState.req.lcFilled; }
 
   el.innerHTML = `<div class="lc-view ac-view">
     ${pageHero('API Console', {
