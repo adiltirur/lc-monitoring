@@ -1,0 +1,393 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-23T19:23:38.756223+00:00",
+  "title": "Design System: LC Helper",
+  "extensions": {
+    "colorMeta": {
+      "petrol": {
+        "role": "primary",
+        "displayName": "LillianCare Petrol",
+        "tonalRamp": [
+          "#00161d",
+          "#002b37",
+          "#003b4c",
+          "#004e64",
+          "#00667f",
+          "#4d8b9c",
+          "#99b8c1",
+          "#dbedf1"
+        ]
+      },
+      "turquoise": {
+        "role": "secondary",
+        "displayName": "Logo Turquoise",
+        "tonalRamp": [
+          "#0d3f3c",
+          "#146863",
+          "#1e958f",
+          "#2bd2c9",
+          "#56e0d8",
+          "#8ee8e3",
+          "#b0efec",
+          "#e6fffd"
+        ]
+      },
+      "highlight": {
+        "role": "secondary",
+        "displayName": "Petrol Highlight",
+        "tonalRamp": [
+          "#002b37",
+          "#0b4a5b",
+          "#2e6a7a",
+          "#5a8d9a",
+          "#8fb5bf",
+          "#b8d3da",
+          "#dbedf1",
+          "#eef6f8"
+        ]
+      },
+      "band": {
+        "role": "signal",
+        "displayName": "Disruption Red",
+        "tonalRamp": [
+          "#4a1414",
+          "#6e1f1f",
+          "#912a2a",
+          "#b53535",
+          "#cc5c5c",
+          "#de8a8a",
+          "#efbdbd",
+          "#fbeaea"
+        ]
+      },
+      "red": {
+        "role": "signal",
+        "displayName": "Error Red",
+        "tonalRamp": [
+          "#902a2a",
+          "#ae3333",
+          "#cc3c3c",
+          "#e84444",
+          "#ef7c7c",
+          "#f5abab",
+          "#fadada",
+          "#fef4f4"
+        ]
+      },
+      "amber": {
+        "role": "signal",
+        "displayName": "Warning Amber",
+        "tonalRamp": [
+          "#714000",
+          "#894e00",
+          "#a15c00",
+          "#b76800",
+          "#da8201",
+          "#f39b1f",
+          "#f1e1cc",
+          "#fff8e8"
+        ]
+      },
+      "green": {
+        "role": "signal",
+        "displayName": "Success Green",
+        "tonalRamp": [
+          "#005603",
+          "#006804",
+          "#007904",
+          "#008a05",
+          "#4dad50",
+          "#8cca8f",
+          "#cce8cd",
+          "#e6f3e6"
+        ]
+      },
+      "blue": {
+        "role": "signal",
+        "displayName": "Info Blue",
+        "tonalRamp": [
+          "#064589",
+          "#0753a6",
+          "#0862c2",
+          "#096fdd",
+          "#539ae7",
+          "#90bef0",
+          "#cee2f8",
+          "#e8f1fc"
+        ]
+      },
+      "ground": {
+        "role": "neutral",
+        "displayName": "Ground",
+        "tonalRamp": [
+          "#00212a",
+          "#384048",
+          "#60666d",
+          "#a3a7ab",
+          "#d5d4dc",
+          "#e6edf0",
+          "#f0f7f9",
+          "#f7f9f9"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Deep Petrol Ink",
+        "tonalRamp": [
+          "#00212a",
+          "#384048",
+          "#60666d",
+          "#a3a7ab",
+          "#d5d4dc",
+          "#e6edf0",
+          "#f0f7f9",
+          "#ffffff"
+        ]
+      },
+      "night-ground": {
+        "role": "neutral",
+        "displayName": "Night Deep Petrol",
+        "tonalRamp": [
+          "#00212a",
+          "#002b37",
+          "#003340",
+          "#003f4f",
+          "#0b5266",
+          "#4f7c89",
+          "#8aaeb8",
+          "#f2fffe"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "board": {
+        "displayName": "Board",
+        "purpose": "View title, once per view."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Panel titles, env name, band text."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Default text and nav items."
+      },
+      "data": {
+        "displayName": "Data",
+        "purpose": "Table cells, buttons, inputs."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Sentence-case bold labels: table headers, fields, nav groups."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "Hosts, ports, IDs, SQL, logs."
+      }
+    },
+    "shadows": [
+      {
+        "name": "shadow-card",
+        "value": "0 1px 2px rgba(0, 33, 42, 0.04), 0 1px 3px rgba(0, 33, 42, 0.06)",
+        "purpose": "Panels at rest (Day). Night: none."
+      },
+      {
+        "name": "shadow-pop",
+        "value": "0 16px 40px -12px rgba(0, 33, 42, 0.22), 0 2px 6px rgba(0, 33, 42, 0.06)",
+        "purpose": "Floating layers only: toasts, palette, popovers, settings sheet."
+      },
+      {
+        "name": "shadow-pop-night",
+        "value": "0 22px 60px -10px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.3)",
+        "purpose": "Night variant of Pop."
+      },
+      {
+        "name": "focus-ring",
+        "value": "outline: 2px solid var(--focus); outline-offset: 1px",
+        "purpose": "Global :focus-visible; petrol in Day, turquoise in Night."
+      }
+    ],
+    "motion": [
+      {
+        "name": "step",
+        "value": "cubic-bezier(0.2, 0.7, 0.2, 1)",
+        "purpose": "House easing for all state transitions."
+      },
+      {
+        "name": "t-step",
+        "value": "140ms",
+        "purpose": "Hover/colour/background transitions."
+      },
+      {
+        "name": "toast-in",
+        "value": "180ms translateY(8px) to none",
+        "purpose": "Toast entrance."
+      },
+      {
+        "name": "env-flip",
+        "value": "260ms rotateX(80deg) to none",
+        "purpose": "Env plate change after switching connection."
+      },
+      {
+        "name": "led-blink",
+        "value": "1.8s ease-in-out infinite",
+        "purpose": "Live status LEDs only."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "animation/transition: none",
+        "purpose": "prefers-reduced-motion disables all motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "ticker-collapse",
+        "value": "1240px"
+      }
+    ],
+    "themes": {
+      "day": "Brand default; :root or [data-theme=day].",
+      "night": "[data-theme=night] or prefers-color-scheme: dark when not forced to day. Deep-petrol ground, turquoise action.",
+      "source": "scripts/gen-theme.js -> public/theme.css + public/theme.js"
+    },
+    "tailwindBridge": "theme.js exports LC_TAILWIND_CONFIG: Material-style colour names (primary, surface, error, on-*) and Tailwind palettes (red, amber, emerald, blue, slate, gray…) map to rgb(var(--rgb-*)/--tw-*) channel tokens; borderRadius clamped to 4/6/8/12; gradients disabled; fontFamily all Manrope + mono."
+  },
+  "components": [
+    {
+      "name": "Header with environment plate",
+      "kind": "nav",
+      "refersTo": "topbar",
+      "description": "Petrol header: logo chip, numbered env plate, ticker. Add .prod for the production band.",
+      "html": "<div class=\"ds-topbar\"><span class=\"ds-chip\">Helper</span><span class=\"ds-plate\">1</span><span class=\"ds-env\">Dev<small>localhost:8090/lillian_care_core</small></span><span class=\"ds-tk\"><i></i>Docker <b>running</b></span></div><div class=\"ds-topbar prod\"><span class=\"ds-chip\">Helper</span><span class=\"ds-plate\">4</span><span class=\"ds-env\">Production<small>database.lillian.care:5432</small></span><span class=\"ds-tk\">Production database. Every write is real.</span></div>",
+      "css": ".ds-topbar{display:flex;align-items:center;gap:14px;height:48px;padding:0 16px;background:var(--topbar,#004e64);color:#fff;font-family:var(--font-ui);margin-bottom:8px}.ds-topbar.prod{background:var(--band,#b53535)}.ds-chip{font:600 12px/1 var(--font-ui);color:rgba(255,255,255,.72);padding:3px 7px;border:1px solid rgba(255,255,255,.28);border-radius:999px}.ds-plate{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;font:800 20px/1 var(--font-ui);background:#fff;color:var(--topbar,#004e64);cursor:pointer}.ds-plate:hover{outline:2px solid rgba(255,255,255,.35);outline-offset:1px}.prod .ds-plate{color:var(--band,#b53535)}.ds-env{display:flex;flex-direction:column;font:700 14.5px/1.1 var(--font-ui)}.ds-env small{font:400 11px/1.2 var(--font-mono);color:rgba(255,255,255,.62)}.ds-tk{display:flex;align-items:center;gap:6px;font-size:12px;color:rgba(255,255,255,.78);padding-left:12px;border-left:1px solid rgba(255,255,255,.12)}.ds-tk i{width:8px;height:8px;border-radius:50%;background:#2bd2c9}.ds-tk b{color:#fff;font-weight:600}"
+    },
+    {
+      "name": "Sidebar navigation",
+      "kind": "nav",
+      "refersTo": "nav-item-active",
+      "description": "Grouped sidebar; active item on Petrol Highlight with petrol bold text.",
+      "html": "<nav class=\"ds-nav\"><div class=\"ds-nav-label\">Data</div><a class=\"ds-nav-item\" href=\"#\">Users<span>U</span></a><a class=\"ds-nav-item active\" href=\"#\">Query Runner<span>Q</span></a><a class=\"ds-nav-item\" href=\"#\">Bookings</a></nav>",
+      "css": ".ds-nav{width:228px;padding:12px 8px;background:var(--surface-1);border-right:1px solid var(--rule);font-family:var(--font-ui);}.ds-nav-label{font:700 11.5px/1 var(--font-ui);letter-spacing:.03em;color:var(--ink-3);padding:0 12px;margin:0 0 6px}.ds-nav-item{display:flex;align-items:center;height:30px;padding:0 10px;border-radius:8px;color:var(--ink-2);font-size:13px;text-decoration:none;transition:background var(--t-step) var(--step),color var(--t-step) var(--step)}.ds-nav-item span{margin-left:auto;font:500 11px/1 var(--font-mono);color:var(--ink-3)}.ds-nav-item:hover{background:var(--surface-3);color:var(--ink)}.ds-nav-item:focus-visible{outline:2px solid var(--focus);outline-offset:1px}.ds-nav-item.active{background:var(--highlight);color:var(--action);font-weight:700}.ds-nav-item.active span{color:var(--action);opacity:.7}"
+    },
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Petrol fill (Night: turquoise); one per panel or view header.",
+      "html": "<button class=\"ds-btn ds-btn-primary\">Run query</button>",
+      "css": ".ds-btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 14px;border:1px solid var(--rule-strong);border-radius:8px;background:var(--surface-1);color:var(--ink);font:600 12.5px/1 var(--font-ui);cursor:pointer;transition:background var(--t-step) var(--step),border-color var(--t-step) var(--step),color var(--t-step) var(--step)}.ds-btn:focus-visible{outline:2px solid var(--focus);outline-offset:1px}.ds-btn-primary{background:var(--action);color:var(--action-ink);border-color:var(--action);font-weight:700}.ds-btn-primary:hover{background:#00667f;border-color:#00667f}"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "White with hairline border; default action button.",
+      "html": "<button class=\"ds-btn2\">Restart</button>",
+      "css": ".ds-btn2{display:inline-flex;align-items:center;height:32px;padding:0 14px;border:1px solid var(--rule-strong);border-radius:8px;background:var(--surface-1);color:var(--ink);font:600 12.5px/1 var(--font-ui);cursor:pointer;transition:background var(--t-step) var(--step)}.ds-btn2:hover{background:var(--surface-3)}.ds-btn2:focus-visible{outline:2px solid var(--focus);outline-offset:1px}"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "Outline red; fills Disruption Red on hover.",
+      "html": "<button class=\"ds-btn-danger\">Delete praxis</button>",
+      "css": ".ds-btn-danger{display:inline-flex;align-items:center;height:32px;padding:0 14px;border:1px solid color-mix(in srgb,var(--red) 45%,transparent);border-radius:8px;background:transparent;color:var(--red);font:600 12.5px/1 var(--font-ui);cursor:pointer;transition:background var(--t-step) var(--step),color var(--t-step) var(--step)}.ds-btn-danger:hover{background:var(--band);border-color:var(--band);color:#fff}.ds-btn-danger:focus-visible{outline:2px solid var(--focus);outline-offset:1px}"
+    },
+    {
+      "name": "Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "34px field with bold sentence-case label; petrol focus ring.",
+      "html": "<label class=\"ds-field\"><span>Host</span><input class=\"ds-input\" value=\"localhost\"></label>",
+      "css": ".ds-field{display:flex;flex-direction:column;gap:5px;width:260px}.ds-field span{font:600 12px/1 var(--font-ui);color:var(--ink-2)}.ds-input{height:34px;padding:0 12px;background:var(--surface-2);border:1px solid var(--rule-strong);border-radius:8px;color:var(--ink);font:400 12.5px var(--font-mono);outline:none}.ds-input:focus,.ds-input:focus-visible{border-color:var(--focus);box-shadow:0 0 0 1px var(--focus)}"
+    },
+    {
+      "name": "Board table with pills",
+      "kind": "card",
+      "refersTo": "table-header",
+      "description": "Dense board table: sticky bold header, 32px rows, status pills, boxed port plate.",
+      "html": "<div class=\"ds-panel\"><table class=\"ds-table\"><thead><tr><th>Service</th><th>Status</th><th class=\"n\">Port</th></tr></thead><tbody><tr><td>Serverpod API</td><td><span class=\"ds-pill plate-err\">Crashed</span></td><td class=\"n\"><span class=\"ds-gleis\">8080</span></td></tr><tr><td>Postgres</td><td><span class=\"ds-pill ok\">Running</span></td><td class=\"n\"><span class=\"ds-gleis\">8090</span></td></tr></tbody></table></div>",
+      "css": ".ds-panel{background:var(--surface-1);border:1px solid var(--rule);border-radius:8px;box-shadow:var(--shadow-card);overflow:hidden;width:460px}.ds-table{width:100%;border-collapse:collapse;font:400 12.5px var(--font-ui)}.ds-table th{font:700 12px/1.2 var(--font-ui);color:var(--ink-3);text-align:left;padding:9px 12px 8px;border-bottom:1px solid var(--rule-strong)}.ds-table td{height:32px;padding:0 12px;border-bottom:1px solid var(--rule);color:var(--ink-2)}.ds-table td:first-child{color:var(--ink);font-weight:600}.ds-table tr:hover td{background:var(--surface-3);color:var(--ink)}.ds-table .n{text-align:right}.ds-pill{display:inline-flex;align-items:center;height:22px;padding:0 9px;border-radius:999px;font:600 11px/1 var(--font-ui)}.ds-pill.ok{background:var(--green-soft);color:var(--green)}.ds-pill.plate-err{background:var(--band);color:#fff}.ds-gleis{display:inline-grid;place-items:center;min-width:48px;height:22px;padding:0 8px;border-radius:6px;background:var(--highlight);color:var(--action);font:700 12px/1 var(--font-mono)}"
+    },
+    {
+      "name": "Destructive band",
+      "kind": "custom",
+      "refersTo": "band",
+      "description": "Red strip over any database-writing step, with a red section border.",
+      "html": "<section class=\"ds-destructive\"><div class=\"ds-band\">Destructive: changes data in the target database</div><div class=\"ds-body\">Type the lcId to enable the delete button.</div></section>",
+      "css": ".ds-destructive{width:460px;border:1px solid var(--band);border-radius:8px;background:var(--surface-1);overflow:hidden}.ds-band{display:flex;align-items:center;height:34px;padding:0 16px;background:var(--band);color:#fff;font:700 13px/1 var(--font-ui);letter-spacing:.01em}.ds-body{padding:16px;font:400 13px/1.5 var(--font-ui);color:var(--ink-2)}"
+    },
+    {
+      "name": "Toast",
+      "kind": "card",
+      "refersTo": "toast",
+      "description": "Floating bottom-right confirmation with Pop shadow.",
+      "html": "<div class=\"ds-toast\"><span class=\"ds-dot\"></span>Copied 214 rows to staging</div>",
+      "css": ".ds-toast{display:inline-flex;align-items:center;gap:10px;padding:10px 14px;background:var(--surface-1);border:1px solid var(--rule-strong);border-radius:8px;box-shadow:var(--shadow-pop);font:400 12.5px var(--font-ui);color:var(--ink);animation:ds-toast-in 180ms var(--step)}.ds-dot{width:8px;height:8px;border-radius:50%;background:var(--green)}@keyframes ds-toast-in{from{transform:translateY(8px);opacity:0}to{transform:none;opacity:1}}"
+    },
+    {
+      "name": "Command palette",
+      "kind": "custom",
+      "refersTo": "command-palette",
+      "description": "620px ⌘K sheet; focused row on Petrol Highlight.",
+      "html": "<div class=\"ds-cmdk\"><input class=\"ds-cmdk-in\" placeholder=\"Jump to…\"><div class=\"ds-cmdk-sec\">Views</div><div class=\"ds-cmdk-item focus\">Query Runner<span>Q</span></div><div class=\"ds-cmdk-item\">Users<span>U</span></div></div>",
+      "css": ".ds-cmdk{width:420px;background:var(--surface-1);border:1px solid var(--rule-strong);border-radius:12px;box-shadow:var(--shadow-pop);overflow:hidden;font-family:var(--font-ui);}.ds-cmdk-in{width:100%;height:52px;border:0;border-bottom:1px solid var(--rule-strong);padding:0 16px;background:transparent;color:var(--ink);font:400 16px var(--font-ui);outline:none}.ds-cmdk-sec{padding:10px 16px 4px;font:700 11.5px/1 var(--font-ui);letter-spacing:.03em;color:var(--ink-3)}.ds-cmdk-item{display:flex;align-items:center;height:36px;margin:0 6px;padding:0 10px;border-radius:8px;color:var(--ink-2);font-size:13px;cursor:pointer}.ds-cmdk-item span{margin-left:auto;font:500 11px/1 var(--font-mono);color:var(--ink-3)}.ds-cmdk-item:hover,.ds-cmdk-item.focus{background:var(--highlight);color:var(--action);font-weight:600}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Petrol Console",
+    "overview": "**Creative North Star: \"The Petrol Console\"**\n\nLC Helper is an internal tool that wears the LillianCare corporate identity rather than inventing its own. The source of truth is the Flutter design system (`apps-frontend/packages/design_system`: colors.dart, fonts.dart, borders.dart): petrol primary, the turquoise of the logo, Manrope, white grounds and 8px corners. The helper takes that identity and makes it dense. It is a debugging console first, so the palette serves state and scanning, not decoration.\n\nDay is the brand: a near-white ground, white panels, a petrol header carrying the white LillianCare logo. Night is a deep-petrol variant for late incidents, where petrol becomes the ground and turquoise takes over as the action colour. Both themes come from one generated token file (`public/theme.css`, written by `scripts/gen-theme.js`) shared by the shell, the monitoring iframe, and every tool page, so the app and its iframes always match.\n\nProduction must be unmistakable in the whole window: when the connection points at prod, the entire header turns into a red band. That is the one place the system gets loud.",
+    "keyCharacteristics": [
+      "Petrol header with white logo; white panels on a near-white ground (Day), petrol layers (Night).",
+      "Numbered environment plates 1–4 (Dev, Test, Staging, Prod); production recolours the whole header red.",
+      "Dense board-style tables with sticky headers, 32px rows, tabular figures.",
+      "Flat panels with a hairline border and a barely-there card shadow; shadows only on floating layers.",
+      "One radius family: 8px everywhere, 12px for floating sheets, full pills for status.",
+      "Signal colours (red, amber, green, blue) carry state; greys never do."
+    ],
+    "rules": [
+      {
+        "name": "The Brand Source Rule",
+        "body": "Every brand colour traces to `colors.dart`. New hex values go into `scripts/gen-theme.js` and are regenerated, never typed into a page.",
+        "section": "colors"
+      },
+      {
+        "name": "The Signal Rule",
+        "body": "Red, amber, green and blue mean error, warning, healthy and info. Nothing else uses them, and grey never signals state.",
+        "section": "colors"
+      },
+      {
+        "name": "The Whole-Window Production Rule",
+        "body": "Production is announced by the header band itself, not by a badge. Any new surface that can act on a database inherits this.",
+        "section": "colors"
+      },
+      {
+        "name": "The Sentence-Case Rule",
+        "body": "Labels are sentence case in bold Manrope. No tracked uppercase micro-labels; the shell actively rewrites them in legacy views.",
+        "section": "typography"
+      },
+      {
+        "name": "The Only-Floaters-Lift Rule",
+        "body": "A shadow above Card means the element floats over content. Buttons never carry shadows.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** take every brand value from `public/theme.css`; add or change tokens only in `scripts/gen-theme.js` and regenerate.",
+      "**Do** load `/theme.js` then `/theme.css` in every page and iframe so Day/Night/System follow the shell.",
+      "**Do** keep the Tailwind bridge intact: Tailwind utility colours (`primary`, `surface`, `error`, `red-500`, `slate-*`…) resolve through `LC_TAILWIND_CONFIG` to `rgb(var(--rgb-*))` / `--tw-*` channel tokens, so legacy utility markup re-themes with the tokens. New Tailwind colour names must be mapped there, never hard-coded.",
+      "**Do** put any database-writing step under the destructive band, and let production recolour the header.",
+      "**Do** use mono for hosts, ports, IDs and logs, and Manrope for everything else.",
+      "**Do** keep numbers tabular and right-aligned in tables."
+    ],
+    "donts": [
+      "**Don't** reintroduce the rejected rail / departures-board world: no timetable-poster styling, platform signage, split-flap or station metaphors.",
+      "**Don't** use gradients; the bridge flattens `bg-gradient-*` to none and petrol is always a solid fill.",
+      "**Don't** use tracked uppercase micro-labels or eyebrows above titles.",
+      "**Don't** add press-scale (`active:scale-*`) or lift-on-hover transforms to buttons.",
+      "**Don't** use turquoise as a Day button fill or text colour on white; in Day it is the logo and LED colour only.",
+      "**Don't** use signal colours decoratively, or show production with anything smaller than the whole header.",
+      "**Don't** add radii outside 4 / 6 / 8 / 12 / full."
+    ]
+  }
+}

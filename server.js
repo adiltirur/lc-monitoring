@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express = require('express');
-const { Pool } = require('pg');
+const { Pool, Client } = require('pg');
 const path = require('path');
 const fs = require('fs');
 const { BedrockRuntimeClient, ConverseCommand } = require('@aws-sdk/client-bedrock-runtime');
@@ -8,7 +8,19 @@ const { GoogleAuth } = require('google-auth-library');
 const { EC2Client, DescribeInstancesCommand } = require('@aws-sdk/client-ec2');
 const { CloudWatchClient, GetMetricDataCommand, DescribeAlarmsCommand, SetAlarmStateCommand } = require('@aws-sdk/client-cloudwatch');
 const { CloudWatchLogsClient, FilterLogEventsCommand, DescribeLogGroupsCommand } = require('@aws-sdk/client-cloudwatch-logs');
-const { RDSClient, DescribeDBInstancesCommand } = require('@aws-sdk/client-rds');
+const {
+  RDSClient,
+  DescribeDBInstancesCommand,
+  DescribeDBClustersCommand,
+  DescribeDBClusterSnapshotsCommand,
+  RestoreDBClusterFromSnapshotCommand,
+  RestoreDBClusterToPointInTimeCommand,
+  RestoreDBInstanceFromDBSnapshotCommand,
+  RestoreDBInstanceToPointInTimeCommand,
+  CreateDBInstanceCommand,
+  DeleteDBInstanceCommand,
+  DeleteDBClusterCommand,
+} = require('@aws-sdk/client-rds');
 const { ElasticLoadBalancingV2Client, DescribeLoadBalancersCommand } = require('@aws-sdk/client-elastic-load-balancing-v2');
 const { ElastiCacheClient, DescribeCacheClustersCommand } = require('@aws-sdk/client-elasticache');
 const { S3Client, ListBucketsCommand } = require('@aws-sdk/client-s3');
@@ -82,6 +94,7 @@ app.get('/api/env-config', (req, res) => {
   res.json({
     passwords: {
       dev:        process.env.DB_DEV_PASSWORD        || '',
+      test:       process.env.DB_TEST_PASSWORD       || '',
       staging:    process.env.DB_STAGING_PASSWORD    || '',
       production: process.env.DB_PROD_PASSWORD       || '',
     },
@@ -726,14 +739,16 @@ app.get('/api/analytics/overview', async (req, res) => {
                   WHERE "praxisId" IS NOT NULL AND "createdAt">=$1 AND "createdAt"<$2 GROUP BY "praxisId"`, [rangeStart, rangeEnd]),
       query(req, `SELECT "praxisId", COUNT(*)::int AS c FROM app_user_appointment
                   WHERE "praxisId" IS NOT NULL AND "startTime" IS NOT NULL
-                    AND "startTime">=$1 AND "startTime"<$2 GROUP BY "praxisId"`, [rangeStartIso, rangeEndIso]),
+                    AND "startTime">=$1 AND "startTime"<$2 ${TOOK_PLACE_STATUS_FILTER}
+                  GROUP BY "praxisId"`, [rangeStartIso, rangeEndIso]),
       query(req, `SELECT "praxisId",
                     COUNT(*)::int AS total,
                     COUNT(*) FILTER (WHERE "isBookedFromPraxis"=true)::int AS praxis,
                     COUNT(*) FILTER (WHERE "isBookedFromPraxis" IS NOT TRUE)::int AS web
                   FROM guest_appointment
                   WHERE "praxisId" IS NOT NULL AND "startTime" IS NOT NULL
-                    AND "startTime">=$1 AND "startTime"<$2 GROUP BY "praxisId"`, [rangeStartIso, rangeEndIso]),
+                    AND "startTime">=$1 AND "startTime"<$2 ${TOOK_PLACE_STATUS_FILTER}
+                  GROUP BY "praxisId"`, [rangeStartIso, rangeEndIso]),
       query(req, `SELECT "praxisId", COUNT(*)::int AS c FROM app_user_nps_sent
                   WHERE "createdAt">=$1 AND "createdAt"<$2 GROUP BY "praxisId"`, [rangeStart, rangeEnd]),
       query(req, `SELECT "praxisId",
@@ -772,7 +787,10 @@ app.get('/api/analytics/overview', async (req, res) => {
       appointmentsTotal: 0,
       appTookPlace: 0, guestTookPlaceWeb: 0, guestTookPlacePraxis: 0,
       tookPlaceTotal: 0,
-      npsEmailsSent: 0, guestNPS: 0, guestNPSNoEmail: 0, totalNPS: 0,
+      npsEmailsSent: 0,
+      guestNPS: 0, guestNPSNoEmail: 0,            // corrected (real :422 attempts)
+      guestNPSRaw: 0, guestNPSRawNoEmail: 0,      // raw fhir_nps counts (incl. :329 spurious)
+      totalNPS: 0,
       docRequests: 0, docRequestsFromApp: 0, docRequestsFromWeb: 0,
       openConsultations: 0,
       newRegistrations: 0, newVerifiedRegistrations: 0,
@@ -796,8 +814,8 @@ app.get('/api/analytics/overview', async (req, res) => {
     for (const r of npsSentByPraxis) touch(r.praxisId).npsEmailsSent = r.c;
     for (const r of fhirNpsByPraxis) {
       const p = touch(r.praxisId);
-      p.guestNPS        = r.total;
-      p.guestNPSNoEmail = r.no_email;
+      p.guestNPSRaw        = r.total;
+      p.guestNPSRawNoEmail = r.no_email;
     }
     for (const r of docRequestByPraxis) {
       const p = touch(r.praxisId);
@@ -819,10 +837,19 @@ app.get('/api/analytics/overview', async (req, res) => {
 
     // Derive totals per praxis + rates.
     const praxes = Object.values(byPraxis).map(p => {
-      p.appointmentsTotal = p.appAppointments + p.guestBookedFromWeb + p.guestBookedFromPraxis + p.guestBookedFromPraxisNoEmail;
+      // praxisNoEmail is a subset of guestBookedFromPraxis — do not add it again.
+      p.appointmentsTotal = p.appAppointments + p.guestBookedFromWeb + p.guestBookedFromPraxis;
       p.tookPlaceTotal = p.appTookPlace + p.guestTookPlaceWeb + p.guestTookPlacePraxis;
+      // guestNPS recovery: subtract :329 spurious writes (= praxis-booked
+      // guest_appointments) from raw fhir_nps. See _emptyMonthlyKpi() above
+      // for the full explanation of why these are spurious.
+      p.guestNPS        = Math.max(0, (p.guestNPSRaw        || 0) - (p.guestBookedFromPraxis         || 0));
+      p.guestNPSNoEmail = Math.max(0, (p.guestNPSRawNoEmail || 0) - (p.guestBookedFromPraxisNoEmail || 0));
       p.totalNPS = p.npsEmailsSent + p.guestNPS;
-      p.npsCoveragePercentage = p.appointmentsTotal > 0 ? (p.totalNPS / p.appointmentsTotal) * 100 : 0;
+      // NPS-eligible events = appointments + doc requests + open consultations
+      // (backend triggers an NPS after each of these). 30-day per-user dedup.
+      p.npsEligibleEvents     = p.appointmentsTotal + (p.docRequests || 0) + (p.openConsultations || 0);
+      p.npsCoveragePercentage = p.npsEligibleEvents > 0 ? (p.totalNPS / p.npsEligibleEvents) * 100 : 0;
       p.verificationRate      = p.newRegistrations > 0 ? (p.newVerifiedRegistrations / p.newRegistrations) * 100 : 0;
       return p;
     }).sort((a, b) => b.appointmentsTotal - a.appointmentsTotal);
@@ -842,13 +869,15 @@ app.get('/api/analytics/overview', async (req, res) => {
       npsEmailsSent:           sumAll('npsEmailsSent'),
       guestNPS:                sumAll('guestNPS'),
       guestNPSNoEmail:         sumAll('guestNPSNoEmail'),
+      guestNPSRaw:             sumAll('guestNPSRaw'),
+      guestNPSRawNoEmail:      sumAll('guestNPSRawNoEmail'),
       totalNPS:                sumAll('totalNPS'),
       // Global (not per-praxis in the schema)
       totalCancellations:      totalCancellations[0].c,
       totalQuestionnaires:     totalQuestionnaires[0].c,
       totalDeletions:          totalDeletions[0].c,
-      pmsDowntimeSeconds:      parseInt(pmsDowntimeSum[0].s, 10) || 0,
-      pmsDowntimeMinutes:      (parseInt(pmsDowntimeSum[0].s, 10) || 0) / 60,
+      pmsDownTimeInSeconds:    parseInt(pmsDowntimeSum[0].s, 10) || 0,
+      pmsDownTimeInMinutes:    (parseInt(pmsDowntimeSum[0].s, 10) || 0) / 60,
     };
 
     res.json({
@@ -956,18 +985,28 @@ app.get('/api/analytics', async (req, res) => {
       countOne(`SELECT COUNT(*) FROM fhir_nps          WHERE "praxisId"=$1 AND "createdAt">=$2 AND "createdAt"<$3 AND "hasEmail"=false`, [praxisId, rangeStart, rangeEnd]),
       countOne(`SELECT COUNT(*) FROM app_user_info     WHERE "praxisId"=$1`, [praxisId]),
       countOne(`SELECT COUNT(*) FROM app_user_info     WHERE "praxisId"=$1 AND "isVerified"=true`, [praxisId]),
-      countOne(`SELECT COUNT(*) FROM app_user_appointment WHERE "praxisId"=$1 AND "startTime" IS NOT NULL AND "startTime">=$2 AND "startTime"<$3`, [praxisId, rangeStartIso, rangeEndIso]),
-      countOne(`SELECT COUNT(*) FROM guest_appointment    WHERE "praxisId"=$1 AND "startTime" IS NOT NULL AND "startTime">=$2 AND "startTime"<$3 AND ("isBookedFromPraxis" IS NOT TRUE)`, [praxisId, rangeStartIso, rangeEndIso]),
-      countOne(`SELECT COUNT(*) FROM guest_appointment    WHERE "praxisId"=$1 AND "startTime" IS NOT NULL AND "startTime">=$2 AND "startTime"<$3 AND "isBookedFromPraxis"=true`, [praxisId, rangeStartIso, rangeEndIso]),
-      countOne(`SELECT COUNT(*) FROM guest_appointment    WHERE "praxisId"=$1 AND "startTime" IS NOT NULL AND "startTime">=$2 AND "startTime"<$3 AND "isBookedFromPraxis"=true AND "hasEmail"=false`, [praxisId, rangeStartIso, rangeEndIso]),
+      countOne(`SELECT COUNT(*) FROM app_user_appointment WHERE "praxisId"=$1 AND "startTime" IS NOT NULL AND "startTime">=$2 AND "startTime"<$3 ${TOOK_PLACE_STATUS_FILTER}`, [praxisId, rangeStartIso, rangeEndIso]),
+      countOne(`SELECT COUNT(*) FROM guest_appointment    WHERE "praxisId"=$1 AND "startTime" IS NOT NULL AND "startTime">=$2 AND "startTime"<$3 AND ("isBookedFromPraxis" IS NOT TRUE) ${TOOK_PLACE_STATUS_FILTER}`, [praxisId, rangeStartIso, rangeEndIso]),
+      countOne(`SELECT COUNT(*) FROM guest_appointment    WHERE "praxisId"=$1 AND "startTime" IS NOT NULL AND "startTime">=$2 AND "startTime"<$3 AND "isBookedFromPraxis"=true ${TOOK_PLACE_STATUS_FILTER}`, [praxisId, rangeStartIso, rangeEndIso]),
+      countOne(`SELECT COUNT(*) FROM guest_appointment    WHERE "praxisId"=$1 AND "startTime" IS NOT NULL AND "startTime">=$2 AND "startTime"<$3 AND "isBookedFromPraxis"=true AND "hasEmail"=false ${TOOK_PLACE_STATUS_FILTER}`, [praxisId, rangeStartIso, rangeEndIso]),
       query(req, `SELECT id, "userId", "familyMemberId", category, reason, "appointmentId", "pmsAppointmentId", status, "praxisId", "startTime", "createdAt" FROM app_user_appointment WHERE "praxisId"=$1 AND "createdAt">=$2 AND "createdAt"<$3`, [praxisId, rangeStart, rangeEnd]),
       query(req, `SELECT id, "bookingId", "patientId", "praxisId", category, "hasEmail", "isBookedFromPraxis", "createdAt" FROM guest_appointment WHERE "praxisId"=$1 AND "createdAt">=$2 AND "createdAt"<$3`, [praxisId, rangeStart, rangeEnd]),
       query(req, `SELECT id, "totalDownTimeInSeconds", "createdAt" FROM analytics_pms_downtime WHERE "createdAt">=$1 AND "createdAt"<$2`, [rangeStart, rangeEnd]),
       query(req, `SELECT id, "userId", category, reason, "praxisId", status, "createdAt" FROM app_user_open_consultation WHERE "praxisId"=$1 AND "createdAt">=$2 AND "createdAt"<$3`, [praxisId, rangeStart, rangeEnd]),
-      query(req, `SELECT id, "userId", reason, "createdAt" FROM app_user_appointment_cancellation_reason WHERE "createdAt">=$1 AND "createdAt"<$2`, [rangeStart, rangeEnd]),
+      query(req, `SELECT c.id, c."userId", c.reason, c."createdAt"
+                    FROM app_user_appointment_cancellation_reason c
+                    JOIN app_user_info ui ON ui.id = c."userId"
+                    WHERE ui."praxisId"=$1 AND c."createdAt">=$2 AND c."createdAt"<$3
+                      AND EXISTS (
+                        SELECT 1 FROM app_user_appointment a
+                        WHERE a."userId" = c."userId" AND a."praxisId" = $1
+                      )`, [praxisId, rangeStart, rangeEnd]),
       query(req, `SELECT id, "firstName", "lastName", email, "praxisId", "isVerified", "createdAt" FROM app_user_info WHERE "praxisId"=$1 AND "createdAt">=$2 AND "createdAt"<$3`, [praxisId, rangeStart, rangeEnd]),
       query(req, `SELECT id, "userId", category, "praxisId", "isFromWeb", "createdAt" FROM app_user_document_request WHERE "praxisId"=$1 AND "createdAt">=$2 AND "createdAt"<$3`, [praxisId, rangeStart, rangeEnd]),
-      query(req, `SELECT id, "userInfoId", "questionnaireId", "answeredAt", "createdAt" FROM app_user_questionnaire WHERE "answeredAt">=$1 AND "answeredAt"<$2`, [rangeStart, rangeEnd]),
+      query(req, `SELECT q.id, q."userInfoId", q."questionnaireId", q."answeredAt", q."createdAt"
+                    FROM app_user_questionnaire q
+                    JOIN app_user_info ui ON ui.id = q."userInfoId"
+                    WHERE ui."praxisId"=$1 AND q."answeredAt">=$2 AND q."answeredAt"<$3`, [praxisId, rangeStart, rangeEnd]),
       query(req, `SELECT id, reason, "createdAt" FROM app_user_deletion_feedback WHERE "createdAt">=$1 AND "createdAt"<$2`, [rangeStart, rangeEnd]),
     ]);
 
@@ -977,7 +1016,9 @@ app.get('/api/analytics', async (req, res) => {
     const appointmentsBookedFromWeb    = webAppointmentsInRange.filter(a => a.isBookedFromPraxis !== true).length;
     const appointmentsBookedFromPraxis = webAppointmentsInRange.filter(a => a.isBookedFromPraxis === true).length;
     const appointmentsBookedFromPraxisWithoutEmail = webAppointmentsInRange.filter(a => a.isBookedFromPraxis === true && a.hasEmail !== true).length;
-    const totalAppointments = appointmentsBookedFromApp + appointmentsBookedFromWeb + appointmentsBookedFromPraxis + appointmentsBookedFromPraxisWithoutEmail;
+    // praxisWithoutEmail is a SUBSET of praxis (same rows, narrower filter) —
+    // do not add it to the total or it double-counts.
+    const totalAppointments = appointmentsBookedFromApp + appointmentsBookedFromWeb + appointmentsBookedFromPraxis;
 
     const newVerifiedRegistrations = newRegistrations.filter(u => u.isVerified === true).length;
     const familyMemberAppointments = appAppointmentsInRange.filter(a => a.familyMemberId != null).length;
@@ -991,10 +1032,23 @@ app.get('/api/analytics', async (req, res) => {
     const cancellationRate = totalAppointments > 0 ? (totalCancellations / totalAppointments) * 100 : 0;
     const verificationRate = newRegistrations.length > 0 ? (newVerifiedRegistrations / newRegistrations.length) * 100 : 0;
     const familyMemberBookingRate = totalAppointments > 0 ? (familyMemberAppointments / totalAppointments) * 100 : 0;
-    const totalNPSSent = npsEmailsSent + guestNPSSent;
-    const npsCoveragePercentage = totalAppointments > 0 ? (totalNPSSent / totalAppointments) * 100 : 0;
-    const pmsDowntimeSeconds = pmsDowntimes.reduce((s, d) => s + (d.totalDownTimeInSeconds || 0), 0);
+    // guestNPS recovery: raw fhir_nps − :329 spurious writes (one per
+    // praxis-booked guest_appointment). See `_emptyMonthlyKpi()` for the full
+    // backend trace.
+    const guestNPSRaw                          = guestNPSSent;
+    const guestNPSRawWithoutEmail              = guestNPSRequestWithoutEmail;
+    const guestNPSCorrected                    = Math.max(0, guestNPSRaw - appointmentsBookedFromPraxis);
+    const guestNPSRequestWithoutEmailCorrected = Math.max(0, guestNPSRawWithoutEmail - appointmentsBookedFromPraxisWithoutEmail);
+    const totalNPSSent = npsEmailsSent + guestNPSCorrected;
+    // NPS fires after appointments + document requests + open consultations
+    // (see backend handlers). 30-day per-user dedup means <100% is expected.
+    const totalNpsEligibleEvents = totalAppointments + totalDocumentRequests + openConsultations.length;
+    const npsCoveragePercentage = totalNpsEligibleEvents > 0 ? (totalNPSSent / totalNpsEligibleEvents) * 100 : 0;
+    // pg returns bigint columns as strings to preserve precision — coerce
+    // before summing or you get string concatenation ("262" + "188" = "262188").
+    const pmsDowntimeSeconds = pmsDowntimes.reduce((s, d) => s + Number(d.totalDownTimeInSeconds || 0), 0);
     const pmsDowntimeMinutes = pmsDowntimeSeconds / 60;
+    // praxisWithoutEmail is a SUBSET of praxis — do not add to total.
     const totalAppointmentsTookPlace = appointmentsTookPlaceFromApp + appointmentsTookPlaceFromWeb + appointmentsTookPlaceFromPraxis;
 
     // Daily time-series — one bucket per calendar day in [start, end).
@@ -1080,7 +1134,11 @@ app.get('/api/analytics', async (req, res) => {
       rangeStart: start.toISOString(),
       rangeEnd:   end.toISOString(),
       // Counters
-      npsEmailsSent, guestNPSSent, guestNPSRequestWithoutEmail, totalNPSSent,
+      npsEmailsSent,
+      guestNPS:                    guestNPSCorrected,
+      guestNPSRequestWithoutEmail: guestNPSRequestWithoutEmailCorrected,
+      guestNPSRaw, guestNPSRawWithoutEmail,
+      totalNPSSent,
       totalPatients, totalVerifiedPatients,
       appointmentsBookedFromApp, appointmentsBookedFromWeb,
       appointmentsBookedFromPraxis, appointmentsBookedFromPraxisWithoutEmail,
@@ -1097,7 +1155,7 @@ app.get('/api/analytics', async (req, res) => {
       totalQuestionnairesCompleted: questionnairesAnswered.length,
       familyMemberAppointments, familyMemberBookingRate,
       npsCoveragePercentage,
-      pmsDowntimeSeconds, pmsDowntimeMinutes,
+      pmsDownTimeInSeconds: pmsDowntimeSeconds, pmsDownTimeInMinutes: pmsDowntimeMinutes,
       // Charts
       dailyTimeSeries,
       appointmentCategories,
@@ -1110,6 +1168,1520 @@ app.get('/api/analytics', async (req, res) => {
       openConsultations,
       newRegistrations,
       documentRequestsInRange,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Status enum values that mean "did NOT take place" — used to filter
+// "Took Place" queries so cancellations / no-shows / fake admin rows don't
+// inflate the count. Indices match CoreAppUserAppointmentStatus from the
+// Serverpod yaml (mirrored in public/index.html APT_STATUS):
+//   5 = cancelled, 6 = noshow, 7 = enteredInError.
+// Other statuses (booked / arrived / fulfilled / rescheduled / checkedIn /
+// waitlist / proposed / pending) are kept — for past startTimes they mean
+// "happened or was intended to happen at this time".
+const DID_NOT_TAKE_PLACE_STATUSES = '(5, 6, 7)';
+const TOOK_PLACE_STATUS_FILTER    = `AND status NOT IN ${DID_NOT_TAKE_PLACE_STATUSES}`;
+
+// ─── Routes: Historical Analytics Export ─────────────────────────────────────
+// One-time bulk export of aggregated analytics from the earliest data in the
+// DB through a chosen end date. Writes XLSX + JSON + a self-contained HTML
+// report. Walks praxes one-at-a-time to keep DB load identical to a single
+// normal user request at any moment.
+//
+//   GET /api/analytics/export-historical?endDate=YYYY-MM-DD
+//
+// Returns { ok, outDir, files, praxesProcessed, monthsCovered, dataStart, dataEnd }.
+
+function _padMonth(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function _enumerateMonths(start, end) {
+  const out = [];
+  const cur = new Date(start.getFullYear(), start.getMonth(), 1);
+  while (cur <= end) {
+    out.push(_padMonth(cur));
+    cur.setMonth(cur.getMonth() + 1);
+  }
+  return out;
+}
+
+// Per-praxis monthly KPI shape. Excludes truly-global metrics (PMS downtime,
+// deletion feedback) — those have no praxisId path and live in their own
+// global section in the report.
+//
+// guestNPS recovery: fhir_nps has TWO write sites in the backend
+// (lib/src/endpoints/fhir/helper/fhir_appointment_handler.dart):
+//   1. handleNewAppointment :329 — fires on the unregistered-patient booking
+//      branch (booked / rescheduled / cancelled). NO NPS email is sent here;
+//      the row is "spurious" w.r.t. actual NPS delivery. Always paired with
+//      a guest_appointment insert :320 carrying isBookedFromPraxis=true.
+//   2. handleUnknownBooking :422 — fires only when status=fulfilled, paired
+//      with scheduleGuestNPS(...) which actually triggers the Brevo send.
+//      Writes NO guest_appointment row.
+// So "real" guest NPS attempts ≈ fhir_nps − guest_appointment(isBookedFromPraxis=true).
+// Both raw and corrected counts are kept here so the report can show the gap.
+function _emptyMonthlyKpi() {
+  return {
+    appointmentsBookedFromApp: 0,
+    appointmentsBookedFromWeb: 0,
+    appointmentsBookedFromPraxis: 0,
+    appointmentsBookedFromPraxisWithoutEmail: 0,
+    totalAppointments: 0,
+    appointmentsTookPlaceFromApp: 0,
+    appointmentsTookPlaceFromWeb: 0,
+    appointmentsTookPlaceFromPraxis: 0,
+    appointmentsTookPlaceFromPraxisWithoutEmail: 0,
+    totalAppointmentsTookPlace: 0,
+    npsEmailsSent: 0,
+    guestNPS: 0,                          // corrected: real :422 attempts
+    guestNPSRequestWithoutEmail: 0,       // corrected: real :422 attempts w/o email
+    guestNPSRaw: 0,                       // raw fhir_nps count (incl. :329 spurious)
+    guestNPSRawWithoutEmail: 0,           // raw fhir_nps where hasEmail=false
+    guestNPSSpurious: 0,                  // :329 writes (= praxis-booked guest_appointments)
+    totalNPSSent: 0,
+    documentRequestFromApp: 0,
+    documentRequestFromWeb: 0,
+    documentRequestUnknown: 0,
+    totalDocumentRequests: 0,
+    openConsultations: 0,
+    newRegistrations: 0,
+    newVerifiedRegistrations: 0,
+    cancellations: 0,
+    questionnairesCompleted: 0,
+  };
+}
+
+async function _fetchPraxisAggregates(req, praxisId, rangeStart, rangeEnd) {
+  // One pass per praxis: pull only the columns we need for aggregation. No
+  // patient PII (firstName/lastName/email/userId) is read — we only need
+  // category/flags/timestamps to compute counts.
+  const [
+    npsSent,
+    fhirNps,
+    appAppts,
+    webAppts,
+    docReqs,
+    openCons,
+    cancellations,
+    registrations,
+    appAppointmentsTookPlace,
+    guestAppointmentsTookPlace,
+    questionnaires,
+    totalsRow,
+  ] = await Promise.all([
+    query(req, `SELECT "createdAt"                             FROM app_user_nps_sent              WHERE "praxisId"=$1 AND "createdAt" BETWEEN $2 AND $3`, [praxisId, rangeStart, rangeEnd]),
+    query(req, `SELECT "createdAt", "hasEmail"                 FROM fhir_nps                       WHERE "praxisId"=$1 AND "createdAt" BETWEEN $2 AND $3`, [praxisId, rangeStart, rangeEnd]),
+    query(req, `SELECT "createdAt", "startTime", category, "familyMemberId"
+                                                                FROM app_user_appointment           WHERE "praxisId"=$1 AND "createdAt" BETWEEN $2 AND $3`, [praxisId, rangeStart, rangeEnd]),
+    query(req, `SELECT "createdAt", "startTime", category, "isBookedFromPraxis", "hasEmail"
+                                                                FROM guest_appointment              WHERE "praxisId"=$1 AND "createdAt" BETWEEN $2 AND $3`, [praxisId, rangeStart, rangeEnd]),
+    query(req, `SELECT "createdAt", "isFromWeb", category       FROM app_user_document_request      WHERE "praxisId"=$1 AND "createdAt" BETWEEN $2 AND $3`, [praxisId, rangeStart, rangeEnd]),
+    query(req, `SELECT "createdAt", category                    FROM app_user_open_consultation     WHERE "praxisId"=$1 AND "createdAt" BETWEEN $2 AND $3`, [praxisId, rangeStart, rangeEnd]),
+    // Cancellation attribution: only count when the cancelling user actually
+    // has at least one appointment at THIS praxis. cancellation_reason has no
+    // praxisId/appointmentId in schema, so pure user→praxis JOIN over-attributes
+    // (users registered at A who book+cancel at B end up showing under A).
+    // The EXISTS filter excludes those phantom cancellations; they're counted
+    // globally as "Unattributed Cancellations".
+    query(req, `SELECT c."createdAt", c.reason
+                  FROM app_user_appointment_cancellation_reason c
+                  JOIN app_user_info ui ON ui.id = c."userId"
+                  WHERE ui."praxisId"=$1 AND c."createdAt" BETWEEN $2 AND $3
+                    AND EXISTS (
+                      SELECT 1 FROM app_user_appointment a
+                      WHERE a."userId" = c."userId" AND a."praxisId" = $1
+                    )`, [praxisId, rangeStart, rangeEnd]),
+    query(req, `SELECT "createdAt", "isVerified"                FROM app_user_info                  WHERE "praxisId"=$1 AND "createdAt" BETWEEN $2 AND $3`, [praxisId, rangeStart, rangeEnd]),
+    query(req, `SELECT "startTime"                              FROM app_user_appointment           WHERE "praxisId"=$1 AND "startTime" IS NOT NULL AND "startTime" BETWEEN $2 AND $3 ${TOOK_PLACE_STATUS_FILTER}`, [praxisId, rangeStart.toISOString(), rangeEnd.toISOString()]),
+    query(req, `SELECT "startTime", "isBookedFromPraxis", "hasEmail"
+                                                                FROM guest_appointment              WHERE "praxisId"=$1 AND "startTime" IS NOT NULL AND "startTime" BETWEEN $2 AND $3 ${TOOK_PLACE_STATUS_FILTER}`, [praxisId, rangeStart.toISOString(), rangeEnd.toISOString()]),
+    query(req, `SELECT q."answeredAt"
+                  FROM app_user_questionnaire q
+                  JOIN app_user_info ui ON ui.id = q."userInfoId"
+                  WHERE ui."praxisId"=$1 AND q."answeredAt" BETWEEN $2 AND $3`, [praxisId, rangeStart, rangeEnd]),
+    query(req, `SELECT
+                  (SELECT COUNT(*)::int FROM app_user_info WHERE "praxisId"=$1)                          AS total_patients,
+                  (SELECT COUNT(*)::int FROM app_user_info WHERE "praxisId"=$1 AND "isVerified"=true)    AS total_verified`, [praxisId]),
+  ]);
+
+  const monthly = {};
+  const ensureMonth = (key) => (monthly[key] ||= _emptyMonthlyKpi());
+  const monthKey = (d) => _padMonth(new Date(d));
+
+  // totalNPSSent is recomputed at the end of this function from
+  // (npsEmailsSent + corrected guestNPS), so no in-loop increment here.
+  for (const r of npsSent) {
+    const m = ensureMonth(monthKey(r.createdAt));
+    m.npsEmailsSent++;
+  }
+  // Raw fhir_nps counts (both write sites combined). Corrected to actual NPS
+  // attempts further down by subtracting the :329 spurious writes (= count of
+  // guest_appointment rows with isBookedFromPraxis=true in the same month).
+  for (const r of fhirNps) {
+    const m = ensureMonth(monthKey(r.createdAt));
+    m.guestNPSRaw++;
+    if (r.hasEmail === false) m.guestNPSRawWithoutEmail++;
+  }
+  const apptCategories = {};
+  for (const r of appAppts) {
+    const m = ensureMonth(monthKey(r.createdAt));
+    m.appointmentsBookedFromApp++;
+    m.totalAppointments++;
+    apptCategories[r.category || '—'] = (apptCategories[r.category || '—'] || 0) + 1;
+  }
+  // Praxis-booked guest_appointments are exactly the rows that triggered the
+  // :329 spurious fhir_nps write — track separately for the guestNPS recovery.
+  const praxisBookedNoEmailByMonth = {};
+  for (const r of webAppts) {
+    const mk = monthKey(r.createdAt);
+    const m = ensureMonth(mk);
+    if (r.isBookedFromPraxis === true) {
+      m.appointmentsBookedFromPraxis++;
+      m.guestNPSSpurious++;
+      if (r.hasEmail !== true) {
+        m.appointmentsBookedFromPraxisWithoutEmail++;
+        praxisBookedNoEmailByMonth[mk] = (praxisBookedNoEmailByMonth[mk] || 0) + 1;
+      }
+    } else {
+      m.appointmentsBookedFromWeb++;
+    }
+    m.totalAppointments++;
+    apptCategories[r.category || '—'] = (apptCategories[r.category || '—'] || 0) + 1;
+  }
+  // Apply the recovery formula: corrected guestNPS = raw − spurious.
+  // The :329 site sets fhir_nps.hasEmail to the same value as the paired
+  // guest_appointment.hasEmail (both come from userInfo.email.isNotEmpty in
+  // handleNewAppointment), so we subtract the matching no-email subset too.
+  // Clamp at 0 in case of any cross-month boundary mismatch.
+  for (const [mk, m] of Object.entries(monthly)) {
+    m.guestNPS                   = Math.max(0, m.guestNPSRaw - m.guestNPSSpurious);
+    m.guestNPSRequestWithoutEmail = Math.max(0, m.guestNPSRawWithoutEmail - (praxisBookedNoEmailByMonth[mk] || 0));
+    m.totalNPSSent               = m.npsEmailsSent + m.guestNPS;
+  }
+  for (const r of appAppointmentsTookPlace) {
+    const m = ensureMonth(monthKey(r.startTime));
+    m.appointmentsTookPlaceFromApp++;
+    m.totalAppointmentsTookPlace++;
+  }
+  for (const r of guestAppointmentsTookPlace) {
+    const m = ensureMonth(monthKey(r.startTime));
+    if (r.isBookedFromPraxis === true) {
+      m.appointmentsTookPlaceFromPraxis++;
+      if (r.hasEmail !== true) m.appointmentsTookPlaceFromPraxisWithoutEmail++;
+    } else {
+      m.appointmentsTookPlaceFromWeb++;
+    }
+    m.totalAppointmentsTookPlace++;
+  }
+  for (const r of docReqs) {
+    const m = ensureMonth(monthKey(r.createdAt));
+    if (r.isFromWeb === true) m.documentRequestFromWeb++;
+    else if (r.isFromWeb === false) m.documentRequestFromApp++;
+    else m.documentRequestUnknown++;
+    m.totalDocumentRequests++;
+  }
+  for (const r of openCons) {
+    const m = ensureMonth(monthKey(r.createdAt));
+    m.openConsultations++;
+  }
+  // app_user_appointment_cancellation_reason.reason is a JSON array — pg
+  // returns it as a real JS array. Iterate and count each entry.
+  const cancellationReasons = {};
+  for (const r of cancellations) {
+    const m = ensureMonth(monthKey(r.createdAt));
+    m.cancellations++;
+    const list = Array.isArray(r.reason) ? r.reason : (r.reason != null ? [r.reason] : ['—']);
+    for (const reason of list) {
+      const k = String(reason).slice(0, 120);
+      cancellationReasons[k] = (cancellationReasons[k] || 0) + 1;
+    }
+  }
+  for (const r of registrations) {
+    const m = ensureMonth(monthKey(r.createdAt));
+    m.newRegistrations++;
+    if (r.isVerified === true) m.newVerifiedRegistrations++;
+  }
+  for (const r of questionnaires) {
+    const m = ensureMonth(monthKey(r.answeredAt));
+    m.questionnairesCompleted++;
+  }
+  // Deletion feedback has no praxisId path in schema — handled in the
+  // global section of the report, not bucketed per-praxis.
+
+  const totals = _emptyMonthlyKpi();
+  for (const m of Object.values(monthly)) {
+    for (const k of Object.keys(totals)) totals[k] += (m[k] || 0);
+  }
+  totals.cancellationRate            = totals.totalAppointments > 0 ? (totals.cancellations / totals.totalAppointments) * 100 : 0;
+  totals.verificationRate            = totals.newRegistrations > 0 ? (totals.newVerifiedRegistrations / totals.newRegistrations) * 100 : 0;
+  // NPS is triggered after appointments, document requests, and open
+  // consultations (see backend booking + document_request + open_consultation
+  // handlers). Coverage denominator must reflect all three. Note: backend
+  // dedupes NPS to once per 30 days per user, so <100% is normal even if
+  // every event would otherwise trigger a send.
+  totals.totalNpsEligibleEvents      = totals.totalAppointments + totals.totalDocumentRequests + totals.openConsultations;
+  totals.npsCoveragePercentage       = totals.totalNpsEligibleEvents > 0 ? (totals.totalNPSSent / totals.totalNpsEligibleEvents) * 100 : 0;
+  totals.totalPatients               = totalsRow[0] ? parseInt(totalsRow[0].total_patients, 10) || 0 : 0;
+  totals.totalVerifiedPatients       = totalsRow[0] ? parseInt(totalsRow[0].total_verified, 10) || 0 : 0;
+
+  // Diagnostic: raw row counts from each query + arithmetic invariant check.
+  // Lets us confirm the export numbers match direct DB reality and surfaces
+  // any code-side bug (e.g. accidental double-increment) loudly.
+  const sanity = {
+    rowCounts: {
+      npsSent: npsSent.length,
+      fhirNps: fhirNps.length,
+      appAppts: appAppts.length,
+      webAppts: webAppts.length,
+      docReqs: docReqs.length,
+      openCons: openCons.length,
+      cancellations: cancellations.length,
+      registrations: registrations.length,
+      appAppointmentsTookPlace: appAppointmentsTookPlace.length,
+      guestAppointmentsTookPlace: guestAppointmentsTookPlace.length,
+      questionnaires: questionnaires.length,
+    },
+    invariants: {
+      totalAppointmentsMatchesSum: totals.totalAppointments === (totals.appointmentsBookedFromApp + totals.appointmentsBookedFromWeb + totals.appointmentsBookedFromPraxis),
+      totalAppointmentsTookPlaceMatchesSum: totals.totalAppointmentsTookPlace === (totals.appointmentsTookPlaceFromApp + totals.appointmentsTookPlaceFromWeb + totals.appointmentsTookPlaceFromPraxis),
+      praxisNoEmailLessOrEqualPraxis: totals.appointmentsBookedFromPraxisWithoutEmail <= totals.appointmentsBookedFromPraxis,
+      // guestNPS correction: spurious writes shouldn't exceed raw fhir_nps
+      // count or the count of praxis-booked guest_appointments (both sides
+      // of the recovery identity must hold).
+      guestNPSSpuriousMatchesPraxisBooked: totals.guestNPSSpurious === totals.appointmentsBookedFromPraxis,
+      guestNPSRawCoversCorrection: totals.guestNPSRaw >= totals.guestNPSSpurious,
+    },
+    // Headline counts for the recovery formula. Show both raw and corrected
+    // so we can quantify the gap when explaining to stakeholders.
+    guestNPSRecovery: {
+      rawFhirNps:               totals.guestNPSRaw,
+      spuriousFromPraxisBooked: totals.guestNPSSpurious,
+      correctedAttempts:        totals.guestNPS,
+      rawNoEmail:               totals.guestNPSRawWithoutEmail,
+      correctedNoEmail:         totals.guestNPSRequestWithoutEmail,
+    },
+  };
+  if (!sanity.invariants.totalAppointmentsMatchesSum || !sanity.invariants.totalAppointmentsTookPlaceMatchesSum) {
+    console.warn(`[export] sanity FAIL for ${praxisId}:`, JSON.stringify({ rowCounts: sanity.rowCounts, totals: { app: totals.appointmentsBookedFromApp, web: totals.appointmentsBookedFromWeb, praxis: totals.appointmentsBookedFromPraxis, noEmail: totals.appointmentsBookedFromPraxisWithoutEmail, total: totals.totalAppointments } }));
+  } else {
+    console.log(`[export] ${praxisId}: app=${totals.appointmentsBookedFromApp} web=${totals.appointmentsBookedFromWeb} praxis=${totals.appointmentsBookedFromPraxis} (noEmail=${totals.appointmentsBookedFromPraxisWithoutEmail}) total=${totals.totalAppointments}`);
+  }
+
+  const top10 = (counts) => Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([k, v]) => ({ category: k, count: v }));
+
+  return {
+    monthly,
+    totals,
+    appointmentCategories: top10(apptCategories),
+    cancellationReasons:   top10(cancellationReasons),
+    _debug: sanity,
+  };
+}
+
+async function _gatherCockpitOverview(req) {
+  const { year: cy, week: cw } = currentIsoYearWeek();
+  const cwKey = cy * 53 + cw;
+  const [praxes, consHours, workHours, overrides, versions, pdes, matrix] = await Promise.all([
+    query(req, `SELECT id, "lcId", "bundeslandCode" FROM praxis_config`),
+    query(req, `SELECT "praxisId", COUNT(*)::int AS rows, COALESCE(SUM(EXTRACT(EPOCH FROM ("end"::time - "start"::time)) / 60), 0)::int AS minutes FROM cockpit_consultation_hours GROUP BY "praxisId"`),
+    query(req, `SELECT "praxisId", COUNT(*)::int AS rows, COALESCE(SUM(EXTRACT(EPOCH FROM ("end"::time - "start"::time)) / 60), 0)::int AS minutes, COALESCE(SUM("breakMin"), 0)::int AS break_minutes FROM cockpit_work_hours GROUP BY "praxisId"`),
+    query(req, `SELECT "praxisId", COUNT(*)::int AS c FROM cockpit_week_override GROUP BY "praxisId"`),
+    query(req, `SELECT "praxisId", COUNT(*)::int AS c FROM cockpit_standard_week_version GROUP BY "praxisId"`),
+    query(req, `SELECT "praxisId", COUNT(*)::int AS c FROM cockpit_person_duration_exception WHERE ("validFromIsoYear" * 53 + "validFromIsoWeek") <= $1 AND ("validUntilIsoYear" IS NULL OR ("validUntilIsoYear" * 53 + "validUntilIsoWeek") >= $1) GROUP BY "praxisId"`, [cwKey]),
+    query(req, `SELECT "praxisId", COUNT(*)::int AS c FROM cockpit_appointment_type_matrix GROUP BY "praxisId"`),
+  ]);
+  const byId = (rows) => Object.fromEntries(rows.map(r => [r.praxisId, r]));
+  const c = byId(consHours), w = byId(workHours), o = byId(overrides), v = byId(versions), p = byId(pdes), m = byId(matrix);
+  return praxes.map(pr => ({
+    lcId: pr.lcId,
+    bundesland: pr.bundeslandCode != null ? (BUNDESLAND_CODES[pr.bundeslandCode] || null) : null,
+    consultationRows:    c[pr.id]?.rows    || 0,
+    consultationMinutes: c[pr.id]?.minutes || 0,
+    workRows:            w[pr.id]?.rows    || 0,
+    workMinutes:         w[pr.id]?.minutes || 0,
+    workBreakMinutes:    w[pr.id]?.break_minutes || 0,
+    overrideCount:       o[pr.id]?.c || 0,
+    versionCount:        v[pr.id]?.c || 0,
+    activePdeCount:      p[pr.id]?.c || 0,
+    matrixEntries:       m[pr.id]?.c || 0,
+    hasBaseline:         (c[pr.id]?.rows || 0) > 0 || (w[pr.id]?.rows || 0) > 0,
+  }));
+}
+
+function _xlsxFromPayload(payload) {
+  const xlsx = require('xlsx');
+  const wb = xlsx.utils.book_new();
+
+  const indexRows = payload.praxes.map(p => ({
+    lcId: p.lcId, name: p.name, shortName: p.shortName, bundesland: p.bundesland,
+  }));
+  xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(indexRows), 'Praxes');
+
+  const totalRows = payload.praxes.map(p => ({
+    lcId: p.lcId, name: p.name, ...p.totals,
+  }));
+  xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(totalRows), 'Totals');
+
+  const monthlyRows = [];
+  for (const p of payload.praxes) {
+    for (const month of payload.monthsCovered) {
+      const m = p.monthly[month] || _emptyMonthlyKpi();
+      monthlyRows.push({ lcId: p.lcId, name: p.name, month, ...m });
+    }
+  }
+  xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(monthlyRows), 'Monthly');
+
+  const catRows = [];
+  for (const p of payload.praxes) {
+    for (const c of p.appointmentCategories) catRows.push({ lcId: p.lcId, name: p.name, category: c.category, count: c.count });
+  }
+  xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(catRows.length ? catRows : [{ lcId: '', name: '', category: '', count: 0 }]), 'AppointmentCategories');
+
+  const cancelRows = [];
+  for (const p of payload.praxes) {
+    for (const c of p.cancellationReasons) cancelRows.push({ lcId: p.lcId, name: p.name, reason: c.category, count: c.count });
+  }
+  xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(cancelRows.length ? cancelRows : [{ lcId: '', name: '', reason: '', count: 0 }]), 'CancellationReasons');
+
+  xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(payload.pmsDowntimes.length ? payload.pmsDowntimes : [{ id: '', totalDownTimeInSeconds: 0, createdAt: '' }]), 'PMSDowntimes');
+
+  xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(payload.cockpit.length ? payload.cockpit : [{ lcId: '' }]), 'CockpitSummary');
+
+  xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(payload.deletionReasons.length ? payload.deletionReasons : [{ reason: '', count: 0 }]), 'DeletionReasons');
+
+  const unattrRows = (payload.unattributedCancellations?.byUserRegisteredPraxis?.length
+    ? payload.unattributedCancellations.byUserRegisteredPraxis
+    : [{ lcId: '', count: 0 }]);
+  xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(unattrRows), 'UnattributedCancellations');
+
+  return xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+}
+
+// Compute [start, end] ISO timestamps for a "YYYY-MM" bucket key. The export
+// buckets rows in JS using local-time getFullYear/getMonth — we use UTC here
+// for the SQL filter; for end-of-month boundaries the difference is rare and
+// the validator output will be within 1 row of the report.
+function _monthRange(monthStr) {
+  const [year, month] = monthStr.split('-').map(Number);
+  const start = `${year}-${String(month).padStart(2, '0')}-01T00:00:00.000Z`;
+  const nextY = month === 12 ? year + 1 : year;
+  const nextM = month === 12 ? 1 : month + 1;
+  const nextStart = new Date(Date.UTC(nextY, nextM - 1, 1));
+  const endInclusive = new Date(nextStart.getTime() - 1).toISOString();
+  return { start, end: endInclusive };
+}
+
+// SQL for a single monthly-table cell. Each column maps to one COUNT query.
+// (The existing _validationSqlFor builders return multi-column breakdowns;
+// for cells, single-COUNT is cleaner.)
+function _monthCellSql(column, lcId, start, end) {
+  const r = (s) => s.trim();
+  const px = `"praxisId" = '${lcId}'`;
+  const win = `BETWEEN '${start}' AND '${end}'`;
+  switch (column) {
+    case 'app':
+      return r(`SELECT COUNT(*) FROM app_user_appointment WHERE ${px} AND "createdAt" ${win};`);
+    case 'web':
+      return r(`SELECT COUNT(*) FROM guest_appointment WHERE ${px} AND "createdAt" ${win} AND ("isBookedFromPraxis" IS NOT TRUE);`);
+    case 'praxis':
+      return r(`SELECT COUNT(*) FROM guest_appointment WHERE ${px} AND "createdAt" ${win} AND "isBookedFromPraxis" = true;`);
+    case 'praxisNoEmail':
+      return r(`SELECT COUNT(*) FROM guest_appointment WHERE ${px} AND "createdAt" ${win} AND "isBookedFromPraxis" = true AND "hasEmail" = false;`);
+    case 'totalBooked':
+      return r(`-- app + web + praxis (praxisNoEmail is a subset of praxis):
+WITH counts AS (
+  SELECT
+    (SELECT COUNT(*)::int FROM app_user_appointment WHERE ${px} AND "createdAt" ${win}) AS app,
+    (SELECT COUNT(*)::int FROM guest_appointment WHERE ${px} AND "createdAt" ${win} AND ("isBookedFromPraxis" IS NOT TRUE)) AS web,
+    (SELECT COUNT(*)::int FROM guest_appointment WHERE ${px} AND "createdAt" ${win} AND "isBookedFromPraxis" = true) AS praxis
+)
+SELECT app, web, praxis, (app + web + praxis) AS total FROM counts;`);
+    case 'tookPlaceApp':
+      return r(`-- status NOT IN (5,6,7) excludes cancelled / noshow / enteredInError.
+SELECT COUNT(*) FROM app_user_appointment WHERE ${px} AND "startTime" IS NOT NULL AND "startTime" ${win} AND status NOT IN (5, 6, 7);`);
+    case 'tookPlaceWeb':
+      return r(`-- status NOT IN (5,6,7) excludes cancelled / noshow / enteredInError.
+SELECT COUNT(*) FROM guest_appointment WHERE ${px} AND "startTime" IS NOT NULL AND "startTime" ${win} AND ("isBookedFromPraxis" IS NOT TRUE) AND status NOT IN (5, 6, 7);`);
+    case 'tookPlacePraxis':
+      return r(`-- status NOT IN (5,6,7) excludes cancelled / noshow / enteredInError.
+SELECT COUNT(*) FROM guest_appointment WHERE ${px} AND "startTime" IS NOT NULL AND "startTime" ${win} AND "isBookedFromPraxis" = true AND status NOT IN (5, 6, 7);`);
+    case 'tookPlace':
+      return r(`-- startTime within month, status NOT IN (5,6,7) excludes
+-- cancelled / noshow / enteredInError. Combines app + web + praxis:
+WITH counts AS (
+  SELECT
+    (SELECT COUNT(*)::int FROM app_user_appointment WHERE ${px} AND "startTime" IS NOT NULL AND "startTime" ${win} AND status NOT IN (5, 6, 7)) AS app,
+    (SELECT COUNT(*)::int FROM guest_appointment WHERE ${px} AND "startTime" IS NOT NULL AND "startTime" ${win} AND ("isBookedFromPraxis" IS NOT TRUE) AND status NOT IN (5, 6, 7)) AS web,
+    (SELECT COUNT(*)::int FROM guest_appointment WHERE ${px} AND "startTime" IS NOT NULL AND "startTime" ${win} AND "isBookedFromPraxis" = true AND status NOT IN (5, 6, 7)) AS praxis
+)
+SELECT app, web, praxis, (app + web + praxis) AS total FROM counts;`);
+    case 'docReqApp':
+      return r(`SELECT COUNT(*) FROM app_user_document_request WHERE ${px} AND "createdAt" ${win} AND "isFromWeb" = false;`);
+    case 'docReqWeb':
+      return r(`SELECT COUNT(*) FROM app_user_document_request WHERE ${px} AND "createdAt" ${win} AND "isFromWeb" = true;`);
+    case 'npsSent':
+      return r(`SELECT COUNT(*) FROM app_user_nps_sent WHERE ${px} AND "createdAt" ${win};`);
+    case 'guestNps':
+      // Recovery: raw fhir_nps minus :329 spurious writes (one per
+      // praxis-booked guest_appointment in the same window).
+      return r(`SELECT
+  (SELECT COUNT(*)::int FROM fhir_nps WHERE ${px} AND "createdAt" ${win})
+  - (SELECT COUNT(*)::int FROM guest_appointment WHERE ${px} AND "createdAt" ${win} AND "isBookedFromPraxis" = true)
+  AS guest_nps_corrected;`);
+    case 'newReg':
+      return r(`SELECT COUNT(*) FROM app_user_info WHERE ${px} AND "createdAt" ${win};`);
+    case 'verifiedReg':
+      return r(`-- isVerified is the user's CURRENT state, not historical state at registration time.
+SELECT COUNT(*) FROM app_user_info WHERE ${px} AND "createdAt" ${win} AND "isVerified" = true;`);
+    case 'cancellations':
+      return r(`-- EXISTS filter: only count cancellations from users who actually booked at this praxis.
+SELECT COUNT(*)
+FROM app_user_appointment_cancellation_reason c
+JOIN app_user_info ui ON ui.id = c."userId"
+WHERE ui."praxisId" = '${lcId}' AND c."createdAt" ${win}
+  AND EXISTS (
+    SELECT 1 FROM app_user_appointment a
+    WHERE a."userId" = c."userId" AND a."praxisId" = '${lcId}'
+  );`);
+    case 'openCons':
+      return r(`SELECT COUNT(*) FROM app_user_open_consultation WHERE ${px} AND "createdAt" ${win};`);
+    case 'questionnaires':
+      return r(`SELECT COUNT(*)
+FROM app_user_questionnaire q
+JOIN app_user_info ui ON ui.id = q."userInfoId"
+WHERE ui."praxisId" = '${lcId}' AND q."answeredAt" ${win};`);
+    default:
+      return null;
+  }
+}
+
+// Validation SQL builders. Each takes (lcId, startISO, endISO) and returns a
+// standalone SQL statement matching the helper export's data-fetching logic.
+// Used by the validator HTML's per-card copy buttons.
+//
+// When lcId is empty/null, builds the "all praxes" variant — same logic but
+// scoped to "praxisId IS NOT NULL AND <> ''" (matches the export's praxes
+// discovery filter, so totals should equal the report's top-summary cards).
+function _validationSqlFor(metric, lcId, start, end) {
+  const r = (s) => s.trim();
+  const isAll = !lcId;
+  // Direct praxisId-column tables: WHERE clause for praxis filter.
+  // For all-praxes mode, scope to lcIds present in praxis_config — this matches
+  // the report's targetPraxes set (the report excludes orphans whose praxisId
+  // doesn't resolve to a known praxis_config row, so the SQL must too).
+  const px      = isAll ? `"praxisId" IN (SELECT "lcId" FROM praxis_config WHERE "lcId" IS NOT NULL)`     : `"praxisId" = '${lcId}'`;
+  const uiPx    = isAll ? `ui."praxisId" IN (SELECT "lcId" FROM praxis_config WHERE "lcId" IS NOT NULL)` : `ui."praxisId" = '${lcId}'`;
+  const head    = isAll ? `-- Across ALL praxes — should match the report's top-summary card.\n-- Filter "praxisId IN (SELECT lcId FROM praxis_config)" excludes orphan rows\n-- whose praxisId doesn't match any known praxis (the report does the same).\n` : '';
+  switch (metric) {
+    case 'Total Patients':
+      return r(`${head}SELECT COUNT(*) FROM app_user_info WHERE ${px};${isAll ? `\n\n-- Diagnostic: orphan users whose praxisId doesn't map to any praxis_config row.\n-- These are excluded from the report's totals. Expect a small/zero count.\n-- SELECT ui."praxisId", COUNT(*) AS user_count\n-- FROM app_user_info ui\n-- WHERE ui."praxisId" IS NOT NULL AND ui."praxisId" <> ''\n--   AND NOT EXISTS (SELECT 1 FROM praxis_config pc WHERE pc."lcId" = ui."praxisId")\n-- GROUP BY ui."praxisId"\n-- ORDER BY user_count DESC;` : ''}`);
+    case 'Verified Patients':
+      return r(`${head}SELECT COUNT(*) FROM app_user_info WHERE ${px} AND "isVerified" = true;`);
+    case 'New Registrations':
+      return r(`${head}SELECT COUNT(*) FROM app_user_info
+WHERE ${px}
+  AND "createdAt" BETWEEN '${start}' AND '${end}';`);
+    case 'Verification Rate':
+      return r(`${head}-- verification_rate_pct matches the report's KPI value.
+SELECT
+  COUNT(*) FILTER (WHERE "isVerified" = true) AS verified,
+  COUNT(*) AS new_registrations,
+  ROUND(100.0 * COUNT(*) FILTER (WHERE "isVerified" = true) / NULLIF(COUNT(*), 0), 1) AS verification_rate_pct
+FROM app_user_info
+WHERE ${px}
+  AND "createdAt" BETWEEN '${start}' AND '${end}';`);
+    case 'Total Appointments':
+      return r(`${head}-- READ THIS BEFORE SUMMING:
+--   app + web + praxis = total  (this is the KPI value)
+--   "of_which_praxis_no_email" is a SUBSET of "praxis" — same rows, narrower
+--   filter (praxis bookings where the patient had no email). Don't add it!
+WITH counts AS (
+  SELECT
+    (SELECT COUNT(*)::int FROM app_user_appointment
+       WHERE ${px} AND "createdAt" BETWEEN '${start}' AND '${end}') AS app,
+    (SELECT COUNT(*)::int FROM guest_appointment
+       WHERE ${px} AND "createdAt" BETWEEN '${start}' AND '${end}'
+         AND ("isBookedFromPraxis" IS NOT TRUE)) AS web,
+    (SELECT COUNT(*)::int FROM guest_appointment
+       WHERE ${px} AND "createdAt" BETWEEN '${start}' AND '${end}'
+         AND "isBookedFromPraxis" = true) AS praxis,
+    (SELECT COUNT(*)::int FROM guest_appointment
+       WHERE ${px} AND "createdAt" BETWEEN '${start}' AND '${end}'
+         AND "isBookedFromPraxis" = true AND "hasEmail" = false) AS praxis_no_email
+)
+SELECT
+  app,
+  web,
+  praxis,
+  (app + web + praxis)                AS total,
+  praxis_no_email                      AS of_which_praxis_no_email
+FROM counts;`);
+    case 'Took Place':
+      return r(`${head}-- Total = app + web + praxis. startTime within window (column is text ISO).
+-- status NOT IN (5, 6, 7) excludes cancelled / noshow / enteredInError
+-- so cancelled rows in the past don't inflate this count. Other statuses
+-- (booked / arrived / fulfilled / rescheduled / etc.) are kept.
+WITH counts AS (
+  SELECT
+    (SELECT COUNT(*)::int FROM app_user_appointment
+       WHERE ${px} AND "startTime" IS NOT NULL
+         AND "startTime" BETWEEN '${start}' AND '${end}'
+         AND status NOT IN (5, 6, 7)) AS app,
+    (SELECT COUNT(*)::int FROM guest_appointment
+       WHERE ${px} AND "startTime" IS NOT NULL
+         AND "startTime" BETWEEN '${start}' AND '${end}'
+         AND ("isBookedFromPraxis" IS NOT TRUE)
+         AND status NOT IN (5, 6, 7)) AS web,
+    (SELECT COUNT(*)::int FROM guest_appointment
+       WHERE ${px} AND "startTime" IS NOT NULL
+         AND "startTime" BETWEEN '${start}' AND '${end}'
+         AND "isBookedFromPraxis" = true
+         AND status NOT IN (5, 6, 7)) AS praxis
+)
+SELECT app, web, praxis, (app + web + praxis) AS total FROM counts;`);
+    case 'NPS Sent':
+      return r(`${head}-- Total = app NPS + corrected guest NPS.
+-- guest_nps corrected = raw fhir_nps minus the spurious writes from
+-- handleNewAppointment :329 (one per praxis-booked guest_appointment in
+-- the same window). The :329 site does NOT actually trigger an NPS email;
+-- only the :422 site in handleUnknownBooking does.
+WITH counts AS (
+  SELECT
+    (SELECT COUNT(*)::int FROM app_user_nps_sent
+       WHERE ${px} AND "createdAt" BETWEEN '${start}' AND '${end}') AS app_nps,
+    (SELECT COUNT(*)::int FROM fhir_nps
+       WHERE ${px} AND "createdAt" BETWEEN '${start}' AND '${end}') AS guest_nps_raw,
+    (SELECT COUNT(*)::int FROM guest_appointment
+       WHERE ${px} AND "createdAt" BETWEEN '${start}' AND '${end}'
+         AND "isBookedFromPraxis" = true) AS guest_nps_spurious
+)
+SELECT
+  app_nps,
+  guest_nps_raw,
+  guest_nps_spurious,
+  GREATEST(0, guest_nps_raw - guest_nps_spurious) AS guest_nps_corrected,
+  (app_nps + GREATEST(0, guest_nps_raw - guest_nps_spurious)) AS total
+FROM counts;`);
+    case 'Guest NPS':
+      return r(`${head}-- Corrected guest NPS = raw fhir_nps minus :329 spurious writes
+-- (one per praxis-booked guest_appointment in the same window).
+-- :329 writes a fhir_nps row but never triggers an NPS email — only the
+-- :422 site in handleUnknownBooking actually sends one.
+WITH counts AS (
+  SELECT
+    (SELECT COUNT(*)::int FROM fhir_nps
+       WHERE ${px} AND "createdAt" BETWEEN '${start}' AND '${end}') AS raw_fhir_nps,
+    (SELECT COUNT(*)::int FROM guest_appointment
+       WHERE ${px} AND "createdAt" BETWEEN '${start}' AND '${end}'
+         AND "isBookedFromPraxis" = true) AS spurious_writes
+)
+SELECT
+  raw_fhir_nps,
+  spurious_writes,
+  GREATEST(0, raw_fhir_nps - spurious_writes) AS guest_nps_corrected
+FROM counts;`);
+    case 'Guest NPS · no email':
+      return r(`${head}-- Corrected guest NPS where the recipient had no email.
+-- Both sides of the subtraction are filtered to hasEmail = false because
+-- the :329 site copies userInfo.email.isNotEmpty into BOTH the fhir_nps
+-- row and the paired guest_appointment row.
+WITH counts AS (
+  SELECT
+    (SELECT COUNT(*)::int FROM fhir_nps
+       WHERE ${px} AND "createdAt" BETWEEN '${start}' AND '${end}'
+         AND "hasEmail" = false) AS raw_no_email,
+    (SELECT COUNT(*)::int FROM guest_appointment
+       WHERE ${px} AND "createdAt" BETWEEN '${start}' AND '${end}'
+         AND "isBookedFromPraxis" = true AND "hasEmail" = false) AS spurious_no_email
+)
+SELECT
+  raw_no_email,
+  spurious_no_email,
+  GREATEST(0, raw_no_email - spurious_no_email) AS guest_nps_no_email_corrected
+FROM counts;`);
+    case 'NPS Coverage':
+      return r(`${head}-- coverage_pct = (app_nps + corrected_guest_nps) / (appointments + doc_requests + open_consultations) * 100
+-- 30-day per-user dedup at the backend means <100% is normal even if every event would otherwise trigger a send.
+-- Guest NPS here is the corrected count (raw fhir_nps minus :329 spurious writes).
+WITH counts AS (
+  SELECT
+    ((SELECT COUNT(*)::int FROM app_user_nps_sent WHERE ${px} AND "createdAt" BETWEEN '${start}' AND '${end}')
+     + GREATEST(0,
+         (SELECT COUNT(*)::int FROM fhir_nps WHERE ${px} AND "createdAt" BETWEEN '${start}' AND '${end}')
+         - (SELECT COUNT(*)::int FROM guest_appointment WHERE ${px} AND "createdAt" BETWEEN '${start}' AND '${end}' AND "isBookedFromPraxis" = true)
+       )) AS nps_sent,
+    ((SELECT COUNT(*)::int FROM app_user_appointment WHERE ${px} AND "createdAt" BETWEEN '${start}' AND '${end}')
+     + (SELECT COUNT(*)::int FROM guest_appointment WHERE ${px} AND "createdAt" BETWEEN '${start}' AND '${end}')
+     + (SELECT COUNT(*)::int FROM app_user_document_request WHERE ${px} AND "createdAt" BETWEEN '${start}' AND '${end}')
+     + (SELECT COUNT(*)::int FROM app_user_open_consultation WHERE ${px} AND "createdAt" BETWEEN '${start}' AND '${end}')) AS eligible_events
+)
+SELECT
+  nps_sent,
+  eligible_events,
+  ROUND(100.0 * nps_sent / NULLIF(eligible_events, 0), 1) AS coverage_pct
+FROM counts;`);
+    case 'Doc Requests':
+      return r(`${head}-- "total" matches the report's KPI value.
+SELECT
+  COUNT(*) FILTER (WHERE "isFromWeb" = false) AS from_app,
+  COUNT(*) FILTER (WHERE "isFromWeb" = true)  AS from_web,
+  COUNT(*) FILTER (WHERE "isFromWeb" IS NULL) AS unknown,
+  COUNT(*) AS total
+FROM app_user_document_request
+WHERE ${px} AND "createdAt" BETWEEN '${start}' AND '${end}';`);
+    case 'Open Consultations':
+      return r(`${head}SELECT COUNT(*) FROM app_user_open_consultation
+WHERE ${px} AND "createdAt" BETWEEN '${start}' AND '${end}';`);
+    case 'Cancellations':
+      return r(`${head}-- cancellation_reason has NO praxisId/appointmentId. Attributed via user
+-- registration AND filtered to users who actually booked here (EXISTS clause)
+-- to avoid attributing cancellations from users who booked at other praxes.
+-- Cancellations excluded by this filter are counted globally as "Unattributed
+-- Cancellations" in the report.
+SELECT COUNT(*)
+FROM app_user_appointment_cancellation_reason c
+JOIN app_user_info ui ON ui.id = c."userId"
+WHERE ${uiPx}
+  AND c."createdAt" BETWEEN '${start}' AND '${end}'
+  AND EXISTS (
+    SELECT 1 FROM app_user_appointment a
+    WHERE a."userId" = c."userId"
+      ${isAll ? `AND a."praxisId" = ui."praxisId"` : `AND a."praxisId" = '${lcId}'`}
+  );`);
+    case 'Unattributed Cancellations':
+      return r(`-- Cancellations whose user is registered at some praxis but has NO appointment
+-- at that praxis. The cancelled appointment was at another praxis (which we
+-- can't determine from the schema — cancellation_reason has no appointmentId).
+SELECT COUNT(*)
+FROM app_user_appointment_cancellation_reason c
+JOIN app_user_info ui ON ui.id = c."userId"
+WHERE c."createdAt" BETWEEN '${start}' AND '${end}'
+  AND ui."praxisId" IS NOT NULL AND ui."praxisId" <> ''
+  AND NOT EXISTS (
+    SELECT 1 FROM app_user_appointment a
+    WHERE a."userId" = c."userId" AND a."praxisId" = ui."praxisId"
+  );
+
+-- Breakdown: how many unattributed cancellations per registered praxis.
+SELECT ui."praxisId" AS user_registered_praxis, COUNT(*) AS unattributed_cancellations
+FROM app_user_appointment_cancellation_reason c
+JOIN app_user_info ui ON ui.id = c."userId"
+WHERE c."createdAt" BETWEEN '${start}' AND '${end}'
+  AND ui."praxisId" IS NOT NULL AND ui."praxisId" <> ''
+  AND NOT EXISTS (
+    SELECT 1 FROM app_user_appointment a
+    WHERE a."userId" = c."userId" AND a."praxisId" = ui."praxisId"
+  )
+GROUP BY ui."praxisId"
+ORDER BY unattributed_cancellations DESC;`);
+    case 'Cancellation Rate':
+      return r(`${head}-- cancellation_rate_pct = cancellations / total_appointments × 100.
+-- Numerator uses the same EXISTS filter as the Cancellations metric — only
+-- cancellations from users who actually booked at this praxis are counted.
+WITH counts AS (
+  SELECT
+    (SELECT COUNT(*)::int FROM app_user_appointment_cancellation_reason c
+     JOIN app_user_info ui ON ui.id = c."userId"
+     WHERE ${uiPx} AND c."createdAt" BETWEEN '${start}' AND '${end}'
+       AND EXISTS (
+         SELECT 1 FROM app_user_appointment a
+         WHERE a."userId" = c."userId"
+           ${isAll ? `AND a."praxisId" = ui."praxisId"` : `AND a."praxisId" = '${lcId}'`}
+       )) AS cancellations,
+    ((SELECT COUNT(*)::int FROM app_user_appointment WHERE ${px} AND "createdAt" BETWEEN '${start}' AND '${end}')
+     + (SELECT COUNT(*)::int FROM guest_appointment WHERE ${px} AND "createdAt" BETWEEN '${start}' AND '${end}')) AS total_appointments
+)
+SELECT
+  cancellations,
+  total_appointments,
+  ROUND(100.0 * cancellations / NULLIF(total_appointments, 0), 1) AS cancellation_rate_pct
+FROM counts;`);
+    case 'Questionnaires':
+      return r(`${head}-- questionnaire has no praxisId; JOIN through userInfoId → app_user_info.praxisId:
+SELECT COUNT(*)
+FROM app_user_questionnaire q
+JOIN app_user_info ui ON ui.id = q."userInfoId"
+WHERE ${uiPx}
+  AND q."answeredAt" BETWEEN '${start}' AND '${end}';`);
+    case 'PMS Downtime Events':
+      return r(`-- analytics_pms_downtime is platform-wide (no praxisId column):
+SELECT COUNT(*) FROM analytics_pms_downtime
+WHERE "createdAt" BETWEEN '${start}' AND '${end}';`);
+    case 'PMS Downtime (sec)':
+      return r(`-- Cast totalDownTimeInSeconds explicitly: it's bigint, not int:
+SELECT COALESCE(SUM("totalDownTimeInSeconds"), 0)::bigint AS total_seconds
+FROM analytics_pms_downtime
+WHERE "createdAt" BETWEEN '${start}' AND '${end}';`);
+    case 'PMS Downtime (min)':
+      return r(`-- Match the HTML's Math.round behaviour (round half-up, not truncate).
+-- Plain integer division ("...::bigint / 60") would truncate 480.5 → 480 and
+-- disagree with the report's rounded minute count by 1.
+SELECT ROUND(COALESCE(SUM("totalDownTimeInSeconds"), 0) / 60.0)::int AS total_minutes,
+       COALESCE(SUM("totalDownTimeInSeconds"), 0)::bigint AS total_seconds
+FROM analytics_pms_downtime
+WHERE "createdAt" BETWEEN '${start}' AND '${end}';`);
+    case 'Account Deletions (total)':
+      return r(`-- Schema has no praxisId — global count of unique deletion records:
+SELECT COUNT(*) FROM app_user_deletion_feedback
+WHERE "createdAt" BETWEEN '${start}' AND '${end}';`);
+    case 'Reasons Selected (total)':
+      return r(`-- reason is a List<String>; this counts the total reason
+-- occurrences (one row may contribute multiple). Will be >= Account Deletions:
+SELECT COALESCE(SUM(jsonb_array_length(reason::jsonb)), 0) AS reasons_selected
+FROM app_user_deletion_feedback
+WHERE "createdAt" BETWEEN '${start}' AND '${end}';`);
+    default:
+      return null;
+  }
+}
+
+function _htmlFromPayload(payload, opts = {}) {
+  const withCopySql = !!opts.withCopySql;
+  const fmt = (n) => Number.isFinite(n) ? n.toLocaleString('en-US') : '0';
+  const fmtPct = (n) => Number.isFinite(n) ? `${n.toFixed(1)}%` : '0%';
+  // For ratios where denominator may legitimately be 0 (e.g. cancellation
+  // rate when there are no appointments), show "—" instead of "0.0%" which
+  // would imply "the rate is zero" rather than "the rate is undefined".
+  const fmtPctOrDash = (n, denom) => (denom > 0 && Number.isFinite(n)) ? `${n.toFixed(1)}%` : '—';
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+
+  // Metric explanations — shown both as hover tooltips on each KPI card and
+  // in a glossary section at the top. Keep concise; include any non-obvious
+  // gotchas (lifetime vs window, dedup behaviour, etc).
+  const HELP = {
+    'Total Patients':            'All-time count of patients registered with this praxis. NOT filtered by the report date range.',
+    'Verified Patients':         'All-time count of patients with verified identity status (current state, not historical).',
+    'Total Appointments':        'Appointments booked in the report window. Sum of: app + web + praxis. (praxisWithoutEmail is a subset of praxis, not added separately.)',
+    'Took Place':                'Appointments whose startTime fell within the report window AND were not cancelled/noshow/enteredInError. Independent of when they were booked.',
+    'NPS Sent':                  'Total NPS surveys sent: app users (app_user_nps_sent) + corrected guest NPS (see Guest NPS for the correction).',
+    'NPS Coverage':              'Sent / NPS-eligible events × 100. Eligible = appointments + document requests + open consultations (backend triggers NPS after each). Uses the corrected Guest NPS numerator. Capped by 30-day per-user dedup, so <100% is normal.',
+    'Doc Requests':              'Document requests created in the window. Split by source: from app vs web (vs unknown source).',
+    'Open Consultations':        'Open-consultation requests created in the window.',
+    'New Registrations':         'Patients whose app_user_info row was created within the window. Subset of Total Patients.',
+    'Verification Rate':         'New verified / new registrations × 100. Note: isVerified is the current state — a registration counted as "verified" may have verified later.',
+    'Cancellations':             'cancellation_reason has no praxisId/appointmentId. Filtered to cancellations where the same user has at least one appointment at THIS praxis (EXISTS clause). Cancellations excluded by this filter — user registered here but cancelled an appointment at another praxis — are counted globally as "Unattributed Cancellations".',
+    'Cancellation Rate':         'Cancellations / Total Appointments × 100. Shown as "—" when there are no appointments (rate is undefined).',
+    'Unattributed Cancellations': 'Global metric. Cancellations whose user is registered at some praxis but has NO appointment at that praxis — meaning the cancelled appointment was at a different praxis (schema doesn\'t expose which one). Sum of these + sum of per-praxis Cancellations = total cancellations in the window.',
+    'Questionnaires':            'Questionnaires answered within the window, scoped to this praxis (via JOIN through user → praxisId).',
+    'PMS Downtime Events':       'Number of PMS downtime incident records logged platform-wide in the window. Not per-praxis (PMS is the shared connector).',
+    'PMS Downtime (sec)':        'Sum of totalDownTimeInSeconds across all incidents in the window. Platform-wide.',
+    'PMS Downtime (min)':        'PMS Downtime seconds / 60. Platform-wide.',
+    'Account Deletions (total)': 'Number of unique account deletions in the window (= row count of app_user_deletion_feedback). Schema has no praxisId — counted globally only.',
+    'Reasons Selected (total)':  'Sum of reason occurrences across all deletions. Each user can pick multiple reasons (reason is List<String>), so this is ≥ Account Deletions (total).',
+    'Guest NPS':                 'Real NPS attempts to guest/non-app users — recovered as: (raw fhir_nps rows) − (guest_appointment rows with isBookedFromPraxis=true in the same window). The backend writes an fhir_nps row at handleNewAppointment :329 every time a praxis-booked appointment is registered (booked/rescheduled/cancelled), but that path does NOT send an NPS email. Only handleUnknownBooking :422 (status=fulfilled) calls scheduleGuestNPS and triggers Brevo. Subtracting :329 writes — uniquely identified by their paired isBookedFromPraxis=true guest_appointment row — gives the count of actual :422 attempts.',
+    'Guest NPS · no email':      'Subset of corrected Guest NPS where the guest had no email captured. Same recovery formula but restricted to hasEmail=false on both sides.',
+  };
+  const tip = (label) => HELP[label] ? `title="${esc(HELP[label])}"` : '';
+  // Metrics whose validation SQL has no praxisId concept at all (platform-wide
+  // tables). For everything else, a missing lcId means "all praxes" — the SQL
+  // builder generates the cross-praxis variant.
+  const GLOBAL_METRICS = new Set([
+    'PMS Downtime Events', 'PMS Downtime (sec)', 'PMS Downtime (min)',
+    'Account Deletions (total)', 'Reasons Selected (total)',
+    'Unattributed Cancellations',
+  ]);
+  const copyBtn = (label, lcId, allPraxes) => {
+    if (!withCopySql) return '';
+    if (!lcId && !allPraxes && !GLOBAL_METRICS.has(label)) return '';
+    const sql = _validationSqlFor(label, lcId || '', payload.dataStart, payload.dataEnd);
+    if (!sql) return '';
+    const title = allPraxes
+      ? 'Copy SQL — across all praxes (matches this top-summary value)'
+      : 'Copy validation SQL to clipboard';
+    return `<button class="copy-btn" data-sql="${esc(sql)}" onclick="copySQL(this)" title="${esc(title)}">📋</button>`;
+  };
+  const kpi = (label, val, opts = {}) => {
+    const { lcId, allPraxes = false, suffix = '' } = opts;
+    return `<div class="kpi" ${tip(label)}>${copyBtn(label, lcId, allPraxes)}<div class="kpi-label">${esc(label)}</div><div class="kpi-val">${esc(fmt(val))}${suffix}</div></div>`;
+  };
+  const kpiPct = (label, val, opts = {}) => {
+    const { lcId, allPraxes = false, denom } = opts;
+    const display = (denom !== undefined) ? fmtPctOrDash(val, denom) : fmtPct(val);
+    return `<div class="kpi" ${tip(label)}>${copyBtn(label, lcId, allPraxes)}<div class="kpi-label">${esc(label)}</div><div class="kpi-val">${esc(display)}</div></div>`;
+  };
+
+  const monthlyTableHeader = `
+    <tr>
+      <th>Month</th>
+      <th>Booked App</th><th>Booked Web</th><th>Booked Praxis</th><th>Booked Praxis (no email)</th><th>Total Booked</th>
+      <th>Took Place</th><th>Took Place App</th><th>Took Place Web</th><th>Took Place Praxis</th>
+      <th>Doc Req App</th><th>Doc Req Web</th>
+      <th>NPS Sent</th><th>Guest NPS</th>
+      <th>New Reg</th><th>Verified Reg</th>
+      <th>Cancellations</th><th>Open Cons</th><th>Questionnaires</th>
+    </tr>`;
+
+  const renderPraxis = (p) => {
+    const t = p.totals;
+    // Cell renderer: when validator mode is on, each numeric cell becomes
+    // clickable and copies a single-COUNT SQL scoped to (this praxis, this
+    // month, this column).
+    const mc = (column, value, monthStr, bold = false) => {
+      const inner = bold ? `<strong>${fmt(value)}</strong>` : fmt(value);
+      if (!withCopySql) return `<td>${inner}</td>`;
+      const { start, end } = _monthRange(monthStr);
+      const sql = _monthCellSql(column, p.lcId, start, end);
+      if (!sql) return `<td>${inner}</td>`;
+      return `<td class="clickable-cell" data-sql="${esc(sql)}" onclick="copySQL(this)" title="Click to copy SQL — ${esc(p.lcId)} · ${esc(monthStr)} · ${esc(column)}">${inner}</td>`;
+    };
+    const monthlyRows = payload.monthsCovered.map(month => {
+      const m = p.monthly[month] || _emptyMonthlyKpi();
+      return `<tr>
+        <td class="mono">${esc(month)}</td>
+        ${mc('app', m.appointmentsBookedFromApp, month)}
+        ${mc('web', m.appointmentsBookedFromWeb, month)}
+        ${mc('praxis', m.appointmentsBookedFromPraxis, month)}
+        ${mc('praxisNoEmail', m.appointmentsBookedFromPraxisWithoutEmail, month)}
+        ${mc('totalBooked', m.totalAppointments, month, true)}
+        ${mc('tookPlace', m.totalAppointmentsTookPlace, month)}
+        ${mc('tookPlaceApp', m.appointmentsTookPlaceFromApp, month)}
+        ${mc('tookPlaceWeb', m.appointmentsTookPlaceFromWeb, month)}
+        ${mc('tookPlacePraxis', m.appointmentsTookPlaceFromPraxis, month)}
+        ${mc('docReqApp', m.documentRequestFromApp, month)}
+        ${mc('docReqWeb', m.documentRequestFromWeb, month)}
+        ${mc('npsSent', m.npsEmailsSent, month)}
+        ${mc('guestNps', m.guestNPS, month)}
+        ${mc('newReg', m.newRegistrations, month)}
+        ${mc('verifiedReg', m.newVerifiedRegistrations, month)}
+        ${mc('cancellations', m.cancellations, month)}
+        ${mc('openCons', m.openConsultations, month)}
+        ${mc('questionnaires', m.questionnairesCompleted, month)}
+      </tr>`;
+    }).join('');
+
+    const catRows = (p.appointmentCategories.length ? p.appointmentCategories : [{ category: '—', count: 0 }])
+      .map(c => `<tr><td>${esc(c.category)}</td><td>${fmt(c.count)}</td></tr>`).join('');
+    const cancelRows = (p.cancellationReasons.length ? p.cancellationReasons : [{ category: '—', count: 0 }])
+      .map(c => `<tr><td>${esc(c.category)}</td><td>${fmt(c.count)}</td></tr>`).join('');
+
+    const dbg = p._debug;
+    const sanityFail = dbg && (!dbg.invariants.totalAppointmentsMatchesSum || !dbg.invariants.totalAppointmentsTookPlaceMatchesSum || !dbg.invariants.praxisNoEmailLessOrEqualPraxis);
+    const dbgBadge = sanityFail
+      ? `<div style="background:#fee2e2;border:1px solid #ef4444;color:#7f1d1d;padding:8px 12px;border-radius:6px;margin:8px 0;font-size:12px"><strong>Sanity check FAILED</strong> — see _debug in JSON. Raw row counts: ${esc(JSON.stringify(dbg.rowCounts))}</div>`
+      : (dbg ? `<div class="muted" style="font-size:11px;margin:6px 0">DB rows fetched: appAppts=${dbg.rowCounts.appAppts} webAppts=${dbg.rowCounts.webAppts} appTook=${dbg.rowCounts.appAppointmentsTookPlace} guestTook=${dbg.rowCounts.guestAppointmentsTookPlace} cancellations=${dbg.rowCounts.cancellations} questionnaires=${dbg.rowCounts.questionnaires}</div>` : '');
+    return `
+      <section class="praxis" id="${esc(p.lcId)}">
+        <h2>${esc(p.name || p.lcId)} <span class="muted">(${esc(p.lcId)}${p.bundesland ? ` · ${esc(p.bundesland.toUpperCase())}` : ''})</span></h2>
+        ${dbgBadge}
+        <h3>Totals (${esc(payload.dataStart.slice(0,10))} → ${esc(payload.dataEnd.slice(0,10))})</h3>
+        <div class="kpi-grid">
+          ${kpi('Total Patients', t.totalPatients, { lcId: p.lcId })}
+          ${kpi('Verified Patients', t.totalVerifiedPatients, { lcId: p.lcId })}
+          ${kpi('Total Appointments', t.totalAppointments, { lcId: p.lcId })}
+          ${kpi('Took Place', t.totalAppointmentsTookPlace, { lcId: p.lcId })}
+          ${kpi('NPS Sent', t.totalNPSSent, { lcId: p.lcId })}
+          ${kpiPct('NPS Coverage', t.npsCoveragePercentage, { lcId: p.lcId, denom: t.totalNpsEligibleEvents })}
+          ${kpi('Doc Requests', t.totalDocumentRequests, { lcId: p.lcId })}
+          ${kpi('Open Consultations', t.openConsultations, { lcId: p.lcId })}
+          ${kpi('New Registrations', t.newRegistrations, { lcId: p.lcId })}
+          ${kpiPct('Verification Rate', t.verificationRate, { lcId: p.lcId, denom: t.newRegistrations })}
+          ${kpi('Cancellations', t.cancellations, { lcId: p.lcId })}
+          ${kpiPct('Cancellation Rate', t.cancellationRate, { lcId: p.lcId, denom: t.totalAppointments })}
+          ${kpi('Questionnaires', t.questionnairesCompleted, { lcId: p.lcId })}
+        </div>
+
+        <h3>Monthly Breakdown</h3>
+        <div class="scroll"><table class="data">${monthlyTableHeader}${monthlyRows}</table></div>
+
+        <div class="two-col">
+          <div>
+            <h3>Top Appointment Categories</h3>
+            <table class="data narrow"><tr><th>Category</th><th>Count</th></tr>${catRows}</table>
+          </div>
+          <div>
+            <h3>Top Cancellation Reasons</h3>
+            <table class="data narrow"><tr><th>Reason</th><th>Count</th></tr>${cancelRows}</table>
+          </div>
+        </div>
+      </section>`;
+  };
+
+  const summary = payload.praxes.reduce((acc, p) => {
+    acc.totalAppointments += p.totals.totalAppointments;
+    acc.totalAppointmentsTookPlace += p.totals.totalAppointmentsTookPlace;
+    acc.totalNPSSent += p.totals.totalNPSSent;
+    acc.totalDocumentRequests += p.totals.totalDocumentRequests;
+    acc.totalCancellations += p.totals.cancellations;
+    acc.openConsultations += p.totals.openConsultations;
+    acc.newRegistrations += p.totals.newRegistrations;
+    acc.totalPatients += p.totals.totalPatients;
+    acc.totalVerifiedPatients += p.totals.totalVerifiedPatients;
+    return acc;
+  }, { totalAppointments: 0, totalAppointmentsTookPlace: 0, totalNPSSent: 0, totalDocumentRequests: 0, totalCancellations: 0, openConsultations: 0, newRegistrations: 0, totalPatients: 0, totalVerifiedPatients: 0 });
+
+  const tocRows = payload.praxes.map(p =>
+    `<li><a href="#${esc(p.lcId)}">${esc(p.name || p.lcId)} <span class="muted">(${esc(p.lcId)})</span></a> — ${fmt(p.totals.totalAppointments)} bookings</li>`
+  ).join('');
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>LillianCare — Historical Analytics (${esc(payload.dataStart.slice(0,10))} → ${esc(payload.dataEnd.slice(0,10))})</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 24px; background: #fafaf9; color: #1a1a1a; }
+  h1 { margin: 0 0 4px; font-size: 28px; }
+  h2 { margin: 32px 0 12px; padding-bottom: 8px; border-bottom: 2px solid #e5e7eb; font-size: 22px; }
+  h3 { margin: 20px 0 10px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.05em; color: #555; }
+  .muted { color: #888; font-weight: normal; font-size: 0.85em; }
+  .header { background: white; padding: 20px 24px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 20px; }
+  .global-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-top: 16px; }
+  .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+  .kpi { background: white; padding: 10px 12px; border-radius: 8px; border: 1px solid #e5e7eb; position: relative; }
+  .kpi-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: #666; }
+  .kpi-val { font-size: 20px; font-weight: 600; margin-top: 2px; }
+  .copy-btn { position: absolute; top: 6px; right: 6px; background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 4px; padding: 2px 6px; cursor: pointer; font-size: 12px; line-height: 1; transition: background 0.15s; }
+  .copy-btn:hover { background: #e0e7ff; border-color: #6366f1; }
+  .copy-btn.copied { background: #16a34a; color: white; border-color: #16a34a; }
+  .clickable-cell { cursor: copy; transition: background 0.15s, color 0.15s; }
+  .clickable-cell:hover { background: #e0e7ff !important; color: #1e40af; }
+  .clickable-cell.cell-copied { background: #16a34a !important; color: white !important; transition: none; }
+  #copy-toast { position: fixed; bottom: 24px; right: 24px; background: #16a34a; color: white; padding: 10px 16px; border-radius: 8px; font-size: 14px; opacity: 0; transition: opacity 0.2s; pointer-events: none; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+  #copy-toast.show { opacity: 1; }
+  .validator-banner { background: #fef3c7; border: 1px solid #f59e0b; color: #78350f; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; }
+  .praxis { background: white; padding: 20px 24px; border-radius: 12px; margin-bottom: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+  table.data { border-collapse: collapse; width: 100%; font-size: 12px; }
+  table.data th, table.data td { padding: 6px 8px; border-bottom: 1px solid #eee; text-align: right; white-space: nowrap; }
+  table.data th { background: #f3f4f6; font-weight: 600; text-align: right; position: sticky; top: 0; }
+  table.data td:first-child, table.data th:first-child { text-align: left; }
+  table.data.narrow th, table.data.narrow td { text-align: left; }
+  table.data.narrow td:last-child, table.data.narrow th:last-child { text-align: right; }
+  .scroll { overflow-x: auto; max-height: 420px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 6px; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+  @media (max-width: 700px) { .two-col { grid-template-columns: 1fr; } }
+  .mono { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  ul.toc { columns: 2; margin: 0; padding-left: 20px; font-size: 13px; }
+  ul.toc li { break-inside: avoid; margin: 2px 0; }
+  ul.toc a { color: #1d4ed8; text-decoration: none; }
+  ul.toc a:hover { text-decoration: underline; }
+  @media print { body { background: white; } .praxis { break-inside: avoid; box-shadow: none; border: 1px solid #ddd; } }
+</style>
+</head>
+<body>
+  ${withCopySql ? `<div class="validator-banner"><strong>Validator mode:</strong> click the 📋 button on any KPI card, or click any numeric cell in a monthly breakdown table, to copy a standalone SQL query that produces that number.</div>` : ''}
+  <div class="header">
+    <h1>LillianCare — Historical Analytics${withCopySql ? ' <span style="font-size:14px;color:#f59e0b;font-weight:normal">(validator)</span>' : ''}</h1>
+    <div class="muted">${esc(payload.dataStart.slice(0,10))} → ${esc(payload.dataEnd.slice(0,10))} · ${payload.praxes.length} praxes · ${payload.monthsCovered.length} months · generated ${esc(payload.generatedAt)}</div>
+    <div class="global-kpis">
+      ${kpi('Total Appointments', summary.totalAppointments, { allPraxes: true })}
+      ${kpi('Took Place', summary.totalAppointmentsTookPlace, { allPraxes: true })}
+      ${kpi('NPS Sent', summary.totalNPSSent, { allPraxes: true })}
+      ${kpi('Doc Requests', summary.totalDocumentRequests, { allPraxes: true })}
+      ${kpi('Cancellations', summary.totalCancellations, { allPraxes: true })}
+      ${kpi('Open Consultations', summary.openConsultations, { allPraxes: true })}
+      ${kpi('Total Patients', summary.totalPatients, { allPraxes: true })}
+      ${kpi('Verified Patients', summary.totalVerifiedPatients, { allPraxes: true })}
+    </div>
+    <h3>Praxes</h3>
+    <ul class="toc">${tocRows}</ul>
+  </div>
+
+  <details class="praxis" id="__glossary__" style="border-left: 4px solid #f59e0b;">
+    <summary style="cursor: pointer; list-style: none; font-size: 18px; font-weight: 600;">📖 Glossary — what each metric means <span class="muted" style="font-weight: normal; font-size: 14px;">(click to expand)</span></summary>
+    <div style="margin-top: 16px;">
+      <table class="data narrow" style="font-size: 13px;">
+        <tr><th style="width: 220px;">Metric</th><th>Meaning</th></tr>
+        ${Object.entries(HELP).map(([label, desc]) => `<tr><td><strong>${esc(label)}</strong></td><td style="white-space: normal;">${esc(desc)}</td></tr>`).join('')}
+      </table>
+      <div class="muted" style="margin-top: 12px; font-size: 12px;">
+        Hover any KPI card below to see its definition as a tooltip.
+        <br>NPS triggers: backend sends an NPS email after appointments, document requests, and open consultations — gated to once per 30 days per user (configurable via <code>CorePraxisInfoMarketingConfig.npsFrequencyDays</code>).
+      </div>
+    </div>
+  </details>
+
+  <section class="praxis" id="__global__" style="border-left: 4px solid #6366f1;">
+    <h2>Global / Platform-wide <span class="muted">(no praxisId in schema — applies to all)</span></h2>
+    <h3>System metrics</h3>
+    <div class="kpi-grid">
+      ${(() => {
+        const totalSec = payload.pmsDowntimes.reduce((s, d) => s + Number(d.totalDownTimeInSeconds || 0), 0);
+        return kpi('PMS Downtime Events', payload.pmsDowntimes.length) +
+               kpi('PMS Downtime (sec)', totalSec) +
+               kpi('PMS Downtime (min)', Math.round(totalSec / 60));
+      })()}
+      ${kpi('Account Deletions (total)', payload.totalDeletions || 0)}
+      ${kpi('Reasons Selected (total)', payload.deletionReasons.reduce((s, r) => s + Number(r.count || 0), 0))}
+      ${kpi('Unattributed Cancellations', payload.unattributedCancellations?.total || 0)}
+    </div>
+
+    <div class="two-col">
+      <div>
+        <h3>PMS Downtime Events</h3>
+        ${payload.pmsDowntimes.length === 0
+          ? `<div class="muted" style="font-size:13px">No PMS downtime in this range.</div>`
+          : `<div class="scroll" style="max-height:280px"><table class="data narrow">
+              <tr><th>When</th><th>Duration (sec)</th></tr>
+              ${payload.pmsDowntimes.map(d => `<tr><td class="mono">${esc(String(d.createdAt).slice(0,19))}</td><td>${fmt(Number(d.totalDownTimeInSeconds || 0))}</td></tr>`).join('')}
+            </table></div>`}
+      </div>
+      <div>
+        <h3>Top Deletion Reasons</h3>
+        ${payload.deletionReasons.length === 0
+          ? `<div class="muted" style="font-size:13px">No account deletions in this range.</div>`
+          : `<table class="data narrow"><tr><th>Reason</th><th>Count</th></tr>${payload.deletionReasons.map(r => `<tr><td>${esc(r.reason)}</td><td>${fmt(r.count)}</td></tr>`).join('')}</table>`}
+      </div>
+    </div>
+
+    ${(payload.unattributedCancellations?.total || 0) > 0 ? `
+    <h3 style="margin-top: 24px;">Unattributed Cancellations — by user-registered praxis</h3>
+    <div class="muted" style="font-size: 12px; margin-bottom: 8px;">
+      These cancellations come from users registered at the listed praxis, but the user has NO appointment at that praxis — so the cancelled appointment was at a different praxis.
+      Schema doesn't expose which one.
+    </div>
+    <table class="data narrow">
+      <tr><th>User registered at</th><th>Cancellations</th></tr>
+      ${payload.unattributedCancellations.byUserRegisteredPraxis.map(r => `<tr><td class="mono">${esc(r.lcId)}</td><td>${fmt(r.count)}</td></tr>`).join('')}
+    </table>
+    ` : ''}
+  </section>
+
+  ${payload.praxes.map(renderPraxis).join('\n')}
+  <div id="copy-toast"></div>
+  <script>
+    window.__DATA__ = ${JSON.stringify(payload).replace(/</g, '\\u003c')};
+    function copySQL(el) {
+      const sql = el.getAttribute('data-sql');
+      if (!sql) return;
+      const isCell = el.tagName === 'TD';
+      const done = () => {
+        if (isCell) {
+          el.classList.add('cell-copied');
+          setTimeout(() => el.classList.remove('cell-copied'), 900);
+        } else {
+          el.classList.add('copied');
+          const orig = el.textContent;
+          el.textContent = '✓';
+          setTimeout(() => { el.classList.remove('copied'); el.textContent = orig; }, 1500);
+        }
+        const toast = document.getElementById('copy-toast');
+        toast.textContent = isCell ? 'Cell SQL copied' : 'SQL copied — paste into your DB client to verify';
+        toast.classList.add('show');
+        setTimeout(() => { toast.classList.remove('show'); }, 2000);
+      };
+      const fallback = () => {
+        const ta = document.createElement('textarea');
+        ta.value = sql; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); done(); } catch (e) { alert('Copy failed: ' + e.message); }
+        document.body.removeChild(ta);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(sql).then(done).catch(fallback);
+      } else {
+        fallback();
+      }
+    }
+  </script>
+</body>
+</html>`;
+}
+
+app.get('/api/analytics/export-historical', async (req, res) => {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+
+    const endDateStr = (req.query.endDate || '2026-04-30').toString();
+    const endDate = new Date(`${endDateStr}T23:59:59.999Z`);
+    if (isNaN(endDate.getTime())) return res.status(400).json({ error: 'invalid endDate (YYYY-MM-DD)' });
+
+    // 1. Detect data start = MIN(createdAt) across the analytics tables.
+    const startProbe = await query(req, `
+      SELECT MIN("createdAt") AS m FROM (
+        SELECT MIN("createdAt") AS "createdAt" FROM app_user_appointment
+        UNION ALL SELECT MIN("createdAt") FROM guest_appointment
+        UNION ALL SELECT MIN("createdAt") FROM app_user_info
+        UNION ALL SELECT MIN("createdAt") FROM app_user_nps_sent
+        UNION ALL SELECT MIN("createdAt") FROM app_user_document_request
+      ) t`);
+    const dataStart = startProbe[0]?.m ? new Date(startProbe[0].m) : new Date('2024-01-01');
+    const rangeStart = dataStart;
+    const rangeEnd   = endDate;
+
+    // 2. Praxis directory. `bundeslandCode` is cockpit-only and may not exist
+    //    in prod — try with it, fall back without.
+    let praxisDirRows;
+    try {
+      praxisDirRows = await query(req, `SELECT "lcId", name, "shortName", "bundeslandCode" FROM praxis_config WHERE "lcId" IS NOT NULL ORDER BY "lcId"`);
+    } catch (_) {
+      praxisDirRows = await query(req, `SELECT "lcId", name, "shortName" FROM praxis_config WHERE "lcId" IS NOT NULL ORDER BY "lcId"`);
+    }
+    const praxisDir = praxisDirRows.map(r => ({
+      lcId: r.lcId,
+      name: r.name || r.shortName || r.lcId,
+      shortName: r.shortName || null,
+      bundesland: r.bundeslandCode != null ? (BUNDESLAND_CODES[r.bundeslandCode] || null) : null,
+    }));
+
+    // 3. Discover lcIds that actually have data (some praxis_config rows may
+    //    be empty placeholders).
+    const usedRows = await query(req, `SELECT DISTINCT "praxisId" FROM app_user_info WHERE "praxisId" IS NOT NULL AND "praxisId" <> ''`);
+    const used = new Set(usedRows.map(r => r.praxisId));
+    const targetPraxes = praxisDir.filter(p => used.has(p.lcId));
+    if (targetPraxes.length === 0) return res.status(400).json({ error: 'no praxes with data found' });
+
+    // 4. Walk praxes one-at-a-time. Each iteration runs ~13 indexed queries
+    //    in parallel — same load profile as a normal /api/analytics request.
+    const results = [];
+    for (const p of targetPraxes) {
+      const agg = await _fetchPraxisAggregates(req, p.lcId, rangeStart, rangeEnd);
+      results.push({ ...p, ...agg });
+    }
+
+    // 5. Global PMS downtime list + deletion reasons (not praxis-scoped).
+    //    Cockpit tables don't exist in prod — query is best-effort.
+    //    deletion_feedback.reason is a JSON array; aggregate in JS, not SQL.
+    //    Unattributed cancellations: rows where the user has no appointment at
+    //    their registered praxis — the actual cancelled appointment was
+    //    elsewhere (typically another praxis the user also booked at).
+    const [pmsDowntimes, deletionRaw, unattributedCancellations, cockpit] = await Promise.all([
+      query(req, `SELECT id, "totalDownTimeInSeconds", "createdAt" FROM analytics_pms_downtime WHERE "createdAt" BETWEEN $1 AND $2 ORDER BY "createdAt"`, [rangeStart, rangeEnd]),
+      query(req, `SELECT reason FROM app_user_deletion_feedback WHERE "createdAt" BETWEEN $1 AND $2`, [rangeStart, rangeEnd]),
+      query(req, `SELECT c."createdAt", c.reason, ui."praxisId" AS user_registered_praxis
+                    FROM app_user_appointment_cancellation_reason c
+                    JOIN app_user_info ui ON ui.id = c."userId"
+                    WHERE c."createdAt" BETWEEN $1 AND $2
+                      AND ui."praxisId" IS NOT NULL AND ui."praxisId" <> ''
+                      AND NOT EXISTS (
+                        SELECT 1 FROM app_user_appointment a
+                        WHERE a."userId" = c."userId" AND a."praxisId" = ui."praxisId"
+                      )`, [rangeStart, rangeEnd]),
+      _gatherCockpitOverview(req).catch((e) => { console.warn('cockpit gather skipped:', e.message); return []; }),
+    ]);
+
+    // Aggregate unattributed cancellations: count + reasons + by-user-praxis breakdown.
+    const unattributedTotal = unattributedCancellations.length;
+    const unattributedReasonCounts = {};
+    const unattributedByPraxis = {};
+    for (const row of unattributedCancellations) {
+      const list = Array.isArray(row.reason) ? row.reason : (row.reason != null ? [row.reason] : ['—']);
+      for (const r of list) {
+        const k = String(r).slice(0, 120);
+        unattributedReasonCounts[k] = (unattributedReasonCounts[k] || 0) + 1;
+      }
+      const px = row.user_registered_praxis;
+      unattributedByPraxis[px] = (unattributedByPraxis[px] || 0) + 1;
+    }
+    const unattributedReasons = Object.entries(unattributedReasonCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 20)
+      .map(([reason, count]) => ({ reason, count }));
+    const unattributedByPraxisArr = Object.entries(unattributedByPraxis)
+      .sort((a, b) => b[1] - a[1])
+      .map(([lcId, count]) => ({ lcId, count }));
+
+    // deletionRaw row count = unique account deletions (each user appears once
+    // per deletion event). The reason column is a List<String> — same user can
+    // select multiple reasons, so the reason-breakdown counts will sum to MORE
+    // than totalDeletions. Track them separately.
+    const totalDeletions = deletionRaw.length;
+    const deletionCounts = {};
+    for (const row of deletionRaw) {
+      const list = Array.isArray(row.reason) ? row.reason : (row.reason != null ? [row.reason] : ['—']);
+      for (const r of list) {
+        const k = String(r).slice(0, 120);
+        deletionCounts[k] = (deletionCounts[k] || 0) + 1;
+      }
+    }
+    const deletionRows = Object.entries(deletionCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 50)
+      .map(([reason, count]) => ({ reason, count }));
+
+    const monthsCovered = _enumerateMonths(rangeStart, rangeEnd);
+
+    const payload = {
+      generatedAt: new Date().toISOString(),
+      dataStart:   rangeStart.toISOString(),
+      dataEnd:     rangeEnd.toISOString(),
+      monthsCovered,
+      praxes: results,
+      pmsDowntimes,
+      totalDeletions,
+      deletionReasons: deletionRows,
+      unattributedCancellations: {
+        total: unattributedTotal,
+        reasons: unattributedReasons,
+        byUserRegisteredPraxis: unattributedByPraxisArr,
+      },
+      cockpit,
+    };
+
+    // 6. Write outputs.
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const outDir = path.join(__dirname, 'exports', `historical-${endDate.toISOString().slice(0,10)}-${stamp}`);
+    fs.mkdirSync(outDir, { recursive: true });
+
+    const withCopySql = req.query.validator === '1' || req.query.validator === 'true';
+    const jsonPath = path.join(outDir, 'analytics.json');
+    const xlsxPath = path.join(outDir, 'analytics.xlsx');
+    const htmlPath = path.join(outDir, withCopySql ? 'analytics-validator.html' : 'analytics.html');
+
+    fs.writeFileSync(jsonPath, JSON.stringify(payload, null, 2));
+    fs.writeFileSync(xlsxPath, _xlsxFromPayload(payload));
+    fs.writeFileSync(htmlPath, _htmlFromPayload(payload, { withCopySql }));
+
+    res.json({
+      ok: true,
+      outDir,
+      validator: withCopySql,
+      files: { json: jsonPath, xlsx: xlsxPath, html: htmlPath },
+      praxesProcessed: results.length,
+      monthsCovered: monthsCovered.length,
+      dataStart: payload.dataStart,
+      dataEnd:   payload.dataEnd,
+    });
+  } catch (e) {
+    console.error('export-historical failed:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Routes: Analytics / Cockpit (per-praxis schedule config) ────────────────
+// Cockpit is the schedule editor in the praxis app. It writes to:
+//   • cockpit_consultation_hours / cockpit_work_hours      (baseline per weekday)
+//   • cockpit_week_override                                 (one-off per ISO week)
+//   • cockpit_standard_week_version                         (versioned standard weeks)
+//   • cockpit_person_duration_exception                     (per-employee overlay)
+//   • cockpit_appointment_type_matrix                       (provider routing)
+//   • praxis_config.bundeslandCode                          (holiday region)
+//
+// All `praxisId` columns on cockpit tables are int FKs to praxis_config.id, while
+// the analytics overview uses praxis_config.lcId (string). We keep this layer
+// keyed by lcId to match the rest of the analytics surface.
+const BUNDESLAND_CODES = ['bw','by','be','bb','hb','hh','he','mv','ni','nw','rp','sl','sn','st','sh','th'];
+const COCKPIT_KIND_NAMES = ['vorOrt','homeoffice','akut','heimversorgung','urlaub','nichtBuchbar','buffer'];
+const COCKPIT_DAY_NAMES = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'];
+
+function currentIsoYearWeek(d = new Date()) {
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  t.setUTCDate(t.getUTCDate() + 4 - (t.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(((t - yearStart) / 86400000 + 1) / 7);
+  return { year: t.getUTCFullYear(), week };
+}
+
+// Cockpit metrics keyed by praxis_config.lcId — rendered in the Analytics
+// Overview table next to the booking/registration columns.
+app.get('/api/analytics/cockpit-overview', async (req, res) => {
+  try {
+    const { year: cy, week: cw } = currentIsoYearWeek();
+    const cwKey = cy * 53 + cw;
+
+    const [praxes, consHours, workHours, overrides, versions, pdes, matrix] = await Promise.all([
+      query(req, `SELECT id, "lcId", "bundeslandCode" FROM praxis_config`),
+      query(req, `SELECT "praxisId",
+                    COUNT(*)::int AS rows,
+                    COALESCE(SUM(EXTRACT(EPOCH FROM ("end"::time - "start"::time)) / 60), 0)::int AS minutes
+                  FROM cockpit_consultation_hours GROUP BY "praxisId"`),
+      query(req, `SELECT "praxisId",
+                    COUNT(*)::int AS rows,
+                    COALESCE(SUM(EXTRACT(EPOCH FROM ("end"::time - "start"::time)) / 60), 0)::int AS minutes,
+                    COALESCE(SUM("breakMin"), 0)::int AS break_minutes
+                  FROM cockpit_work_hours GROUP BY "praxisId"`),
+      query(req, `SELECT "praxisId", COUNT(*)::int AS c FROM cockpit_week_override GROUP BY "praxisId"`),
+      query(req, `SELECT "praxisId", COUNT(*)::int AS c FROM cockpit_standard_week_version GROUP BY "praxisId"`),
+      query(req, `SELECT "praxisId", COUNT(*)::int AS c FROM cockpit_person_duration_exception
+                  WHERE ("validFromIsoYear" * 53 + "validFromIsoWeek") <= $1
+                    AND ("validUntilIsoYear" IS NULL
+                         OR ("validUntilIsoYear" * 53 + "validUntilIsoWeek") >= $1)
+                  GROUP BY "praxisId"`, [cwKey]),
+      query(req, `SELECT "praxisId", COUNT(*)::int AS c FROM cockpit_appointment_type_matrix GROUP BY "praxisId"`),
+    ]);
+
+    const byPid = {};
+    for (const r of consHours)  (byPid[r.praxisId] ||= {}).consultation = { rows: r.rows, minutes: r.minutes };
+    for (const r of workHours)  (byPid[r.praxisId] ||= {}).work         = { rows: r.rows, minutes: r.minutes, breakMinutes: r.break_minutes };
+    for (const r of overrides)  (byPid[r.praxisId] ||= {}).overrides    = r.c;
+    for (const r of versions)   (byPid[r.praxisId] ||= {}).versions     = r.c;
+    for (const r of pdes)       (byPid[r.praxisId] ||= {}).activePdes   = r.c;
+    for (const r of matrix)     (byPid[r.praxisId] ||= {}).matrixEntries = r.c;
+
+    const result = praxes.map(p => {
+      const m = byPid[p.id] || {};
+      const cons = m.consultation || { rows: 0, minutes: 0 };
+      const work = m.work || { rows: 0, minutes: 0, breakMinutes: 0 };
+      const blIdx = p.bundeslandCode === null || p.bundeslandCode === undefined ? null : Number(p.bundeslandCode);
+      return {
+        lcId: p.lcId,
+        bundesland: blIdx === null ? null : (BUNDESLAND_CODES[blIdx] || null),
+        hasBaseline: cons.rows > 0 || work.rows > 0,
+        consultationRows: cons.rows,
+        consultationMinutes: cons.minutes,
+        workRows: work.rows,
+        workMinutes: work.minutes,
+        workBreakMinutes: work.breakMinutes,
+        overrideCount: m.overrides || 0,
+        versionCount: m.versions || 0,
+        activePdeCount: m.activePdes || 0,
+        matrixEntries: m.matrixEntries || 0,
+      };
+    });
+
+    res.json({
+      currentIsoYear: cy,
+      currentIsoWeek: cw,
+      praxes: result,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Cockpit detail for a single praxis (lcId) — consumed by the per-praxis
+// analytics view to render a dedicated Cockpit tab.
+app.get('/api/analytics/cockpit', async (req, res) => {
+  try {
+    const lcId = (req.query.praxisId || '').toString().trim();
+    if (!lcId) return res.status(400).json({ error: 'praxisId is required' });
+    const { year: cy, week: cw } = currentIsoYearWeek();
+    const cwKey = cy * 53 + cw;
+
+    const praxisRows = await query(req, `SELECT id, "lcId", name, "bundeslandCode" FROM praxis_config WHERE "lcId" = $1`, [lcId]);
+    if (!praxisRows.length) return res.status(404).json({ error: 'praxis not found' });
+    const p = praxisRows[0];
+
+    const [cons, work, matrix, overrides, versions, pdes] = await Promise.all([
+      query(req, `SELECT "employeeId", day, kind, "start", "end", "onlineBookable",
+                    EXTRACT(EPOCH FROM ("end"::time - "start"::time)) / 60 AS minutes
+                  FROM cockpit_consultation_hours WHERE "praxisId" = $1
+                  ORDER BY "employeeId", day, "start"`, [p.id]),
+      query(req, `SELECT "employeeId", day, "start", "end", "breakMin",
+                    EXTRACT(EPOCH FROM ("end"::time - "start"::time)) / 60 AS minutes
+                  FROM cockpit_work_hours WHERE "praxisId" = $1
+                  ORDER BY "employeeId", day, "start"`, [p.id]),
+      query(req, `SELECT "appointmentTypeKey", providers, "modifiedAt"
+                  FROM cockpit_appointment_type_matrix WHERE "praxisId" = $1
+                  ORDER BY "appointmentTypeKey"`, [p.id]),
+      query(req, `SELECT "isoYear", "isoWeek",
+                    "openingHoursJson" IS NOT NULL AS has_opening,
+                    "consultationHoursJson" IS NOT NULL AS has_consultation,
+                    "workHoursJson" IS NOT NULL AS has_work,
+                    "mfaGenericHoursJson" IS NOT NULL AS has_mfa_generic,
+                    "modifiedAt"
+                  FROM cockpit_week_override WHERE "praxisId" = $1
+                  ORDER BY "isoYear" DESC, "isoWeek" DESC LIMIT 25`, [p.id]),
+      query(req, `SELECT "validFromIsoYear", "validFromIsoWeek",
+                    "openingHoursJson" IS NOT NULL AS has_opening,
+                    "consultationHoursJson" IS NOT NULL AS has_consultation,
+                    "workHoursJson" IS NOT NULL AS has_work,
+                    "mfaGenericHoursJson" IS NOT NULL AS has_mfa_generic,
+                    "createdBy", "createdAt"
+                  FROM cockpit_standard_week_version WHERE "praxisId" = $1
+                  ORDER BY "validFromIsoYear" DESC, "validFromIsoWeek" DESC LIMIT 25`, [p.id]),
+      query(req, `SELECT id, "employeeId", kind, day, "start", "end",
+                    "validFromIsoYear", "validFromIsoWeek",
+                    "validUntilIsoYear", "validUntilIsoWeek", note,
+                    (("validFromIsoYear" * 53 + "validFromIsoWeek") <= $2
+                     AND ("validUntilIsoYear" IS NULL
+                          OR ("validUntilIsoYear" * 53 + "validUntilIsoWeek") >= $2)) AS is_active
+                  FROM cockpit_person_duration_exception WHERE "praxisId" = $1
+                  ORDER BY "validFromIsoYear" DESC, "validFromIsoWeek" DESC, id DESC`, [p.id, cwKey]),
+    ]);
+
+    const consByEmp = {};
+    let consTotalMinutes = 0, consBookableMinutes = 0;
+    const consKindMinutes = {};
+    for (const r of cons) {
+      const mins = parseFloat(r.minutes) || 0;
+      consTotalMinutes += mins;
+      if (r.onlineBookable) consBookableMinutes += mins;
+      const kindName = COCKPIT_KIND_NAMES[Number(r.kind)] || `kind_${r.kind}`;
+      consKindMinutes[kindName] = (consKindMinutes[kindName] || 0) + mins;
+      const e = (consByEmp[r.employeeId] ||= { employeeId: r.employeeId, minutes: 0, slots: 0 });
+      e.minutes += mins;
+      e.slots += 1;
+    }
+
+    const workByEmp = {};
+    let workTotalMinutes = 0, workBreakMinutes = 0;
+    for (const r of work) {
+      const mins = parseFloat(r.minutes) || 0;
+      workTotalMinutes += mins;
+      workBreakMinutes += r.breakMin || 0;
+      const e = (workByEmp[r.employeeId] ||= { employeeId: r.employeeId, minutes: 0, breakMinutes: 0, slots: 0 });
+      e.minutes += mins;
+      e.breakMinutes += r.breakMin || 0;
+      e.slots += 1;
+    }
+
+    const employees = {};
+    for (const id of Object.keys(consByEmp)) (employees[id] ||= { employeeId: parseInt(id, 10), consultationMinutes: 0, workMinutes: 0, workBreakMinutes: 0 }).consultationMinutes = consByEmp[id].minutes;
+    for (const id of Object.keys(workByEmp)) {
+      const e = (employees[id] ||= { employeeId: parseInt(id, 10), consultationMinutes: 0, workMinutes: 0, workBreakMinutes: 0 });
+      e.workMinutes = workByEmp[id].minutes;
+      e.workBreakMinutes = workByEmp[id].breakMinutes;
+    }
+    const employeeRows = Object.values(employees).sort((a, b) => b.workMinutes - a.workMinutes);
+
+    const activePdes = pdes.filter(p => p.is_active).length;
+
+    const blIdx = p.bundeslandCode === null || p.bundeslandCode === undefined ? null : Number(p.bundeslandCode);
+    res.json({
+      praxisId: lcId,
+      praxisName: p.name,
+      bundesland: blIdx === null ? null : (BUNDESLAND_CODES[blIdx] || null),
+      currentIsoYear: cy,
+      currentIsoWeek: cw,
+      summary: {
+        consultationMinutes: Math.round(consTotalMinutes),
+        consultationBookableMinutes: Math.round(consBookableMinutes),
+        consultationKindMinutes: Object.fromEntries(Object.entries(consKindMinutes).map(([k, v]) => [k, Math.round(v)])),
+        workMinutes: Math.round(workTotalMinutes),
+        workBreakMinutes: Math.round(workBreakMinutes),
+        employeeCount: employeeRows.length,
+        overrideCount: overrides.length,
+        versionCount: versions.length,
+        matrixEntries: matrix.length,
+        activePdeCount: activePdes,
+        totalPdeCount: pdes.length,
+      },
+      employees: employeeRows,
+      overrides: overrides.map(r => ({
+        isoYear: r.isoYear,
+        isoWeek: r.isoWeek,
+        hasOpening: r.has_opening,
+        hasConsultation: r.has_consultation,
+        hasWork: r.has_work,
+        hasMfaGeneric: r.has_mfa_generic,
+        modifiedAt: r.modifiedAt,
+      })),
+      versions: versions.map(r => ({
+        validFromIsoYear: r.validFromIsoYear,
+        validFromIsoWeek: r.validFromIsoWeek,
+        hasOpening: r.has_opening,
+        hasConsultation: r.has_consultation,
+        hasWork: r.has_work,
+        hasMfaGeneric: r.has_mfa_generic,
+        createdBy: r.createdBy,
+        createdAt: r.createdAt,
+      })),
+      pdes: pdes.map(r => ({
+        id: r.id,
+        employeeId: r.employeeId,
+        kind: COCKPIT_KIND_NAMES[Number(r.kind)] || `kind_${r.kind}`,
+        day: COCKPIT_DAY_NAMES[Number(r.day)] || `day_${r.day}`,
+        start: r.start,
+        end: r.end,
+        validFromIsoYear: r.validFromIsoYear,
+        validFromIsoWeek: r.validFromIsoWeek,
+        validUntilIsoYear: r.validUntilIsoYear,
+        validUntilIsoWeek: r.validUntilIsoWeek,
+        note: r.note,
+        isActive: r.is_active,
+      })),
+      matrix: matrix.map(r => ({
+        appointmentTypeKey: r.appointmentTypeKey,
+        providers: r.providers || [],
+        modifiedAt: r.modifiedAt,
+      })),
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -1286,6 +2858,38 @@ app.post('/api/message-outbox/:id/kill', async (req, res) => {
       [killMsg, id]
     );
     res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Routes: Brevo email resend (manual replay from session-log payloads) ────
+app.post('/api/email/resend', async (req, res) => {
+  const key = process.env.BREVO_API_KEY;
+  if (!key) {
+    return res.status(500).json({ error: 'BREVO_API_KEY is not set in helper/.env' });
+  }
+  const payload = req.body;
+  if (!payload || typeof payload !== 'object') {
+    return res.status(400).json({ error: 'Body must be the parsed Brevo payload (JSON object).' });
+  }
+  try {
+    const r = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        'api-key': key,
+        'content-type': 'application/json',
+        accept: 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+    const text = await r.text();
+    let parsed;
+    try { parsed = JSON.parse(text); } catch (_) { parsed = { raw: text }; }
+    if (!r.ok) {
+      return res.status(r.status).json({ error: `Brevo ${r.status}`, brevo: parsed });
+    }
+    res.json({ ok: true, status: r.status, brevo: parsed });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -2519,9 +4123,3934 @@ app.patch('/api/gbp/locations', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Routes: praxis refresh (backup, wipe, import prod→staging, scrub, set-default)
+//
+// Single-env endpoints take the standard `x-db-*` headers. The cross-env import
+// endpoint takes TWO header sets — `x-src-db-*` and `x-tgt-db-*` — so prod and
+// staging pools are accessed in the same request.
+//
+// Hardcoded enumeration of praxis-config tables. These are the rows that get
+// backed up, wiped, and imported as a unit. Each row has a numeric `"praxisId"`
+// FK to `praxis_config.id`, except `praxis_config` itself, which is the root
+// (with `"lcId"` as the natural key).
+//
+// FK INSERT order — child after parent. Use `[...].reverse()` for delete order.
+// When backend adds a new praxis_*_config table, add it here AND the schema
+// drift check (GET /api/praxis/schema-drift-check) will already surface it.
+const PRAXIS_CONFIG_TABLES = [
+  'praxis_config',
+  'praxis_acute_consultation_config',
+  'praxis_hours_config',
+  'praxis_marketing_config',
+  'praxis_open_consultation_config',
+  'praxis_open_consultation_disabled_categories_config',
+  'praxis_open_consultation_hours_config',
+  'praxis_preanmnesis_config',
+  'praxis_preanmnesis_disabled_config',
+  'praxis_preanmnesis_popup_config',
+  'praxis_preanmnesis_treatment_category_config',
+  'praxis_preanmnesis_vitas_ai_treatment_category_config',
+  'praxis_short_notice_config',
+  'praxis_special_holiday_config',
+  'praxis_special_hours_config',
+  'praxis_support_email_config',
+  'praxis_technical_config',
+  'praxis_device_config',
+  'praxis_holiday_config',
+  'praxis_new_patient_config',
+  'praxis_new_patient_config_question',
+  'praxis_holiday_notice_config',
+  'cockpit_standard_week_version',
+  'cockpit_appointment_type_matrix',
+  'cockpit_week_override',
+];
+
+// Tables in the config family that we WIPE and BACKUP normally but SKIP on
+// import because they have a NOT NULL foreign key to a non-praxis table that
+// won't survive the cross-env hop. praxis_device_config has a second FK
+// (`userInfoId` → app_user_info.id) — prod's user ids don't exist on staging,
+// so any insert violates the FK. Staging operators can re-register devices on
+// staging if they need test devices.
+const PRAXIS_CONFIG_TABLES_SKIP_IMPORT = new Set([
+  'praxis_device_config',
+]);
+
+// Tables whose `praxisId` column holds an lcId STRING (not a numeric FK). We
+// list them so the schema-drift check can classify them as "intentionally not
+// wiped" rather than flagging them as drift. Step 5 (set-default) explicitly
+// fixes user-facing references on `app_user_info` + `admin_user_info`; the
+// rest stay orphaned.
+const PRAXIS_HISTORICAL_LCID_TABLES = [
+  'app_user_appointment',
+  'app_user_open_consultation',
+  'app_user_document_request',
+  'app_user_reserved_appointment',
+  'app_user_nps_sent',
+  'guest_appointment',
+  'questionnaire_reservation',
+  'fhir_nps',
+  'app_user_info',
+  'app_user_pms_invitation',
+  'admin_audit_log',
+  // numeric praxis_id but historical (NOT config) — explicitly excluded from wipe
+  'app_user_appointment_reminder',
+  'cockpit_person_duration_exception',
+  'praxis_hours_sync_target',
+];
+
+// Resolve a connection spec from an arbitrary header prefix (e.g. 'x-src-db-'
+// or the default 'x-db-'). Mirrors `getPool` but caller-controlled.
+function poolFromHeaders(req, prefix = 'x-db-') {
+  const host = req.headers[`${prefix}host`] || 'localhost';
+  const port = parseInt(req.headers[`${prefix}port`] || '8090');
+  const database = req.headers[`${prefix}name`] || 'lillian_care_core';
+  const user = req.headers[`${prefix}user`] || 'postgres';
+  const password = req.headers[`${prefix}password`] || '';
+  const key = `${host}:${port}/${database}:${user}:${password}`;
+  if (!pools[key]) {
+    pools[key] = new Pool({
+      host, port, database, user, password,
+      max: 5,
+      idleTimeoutMillis: 60000,
+      connectionTimeoutMillis: 5000,
+      ssl: host !== 'localhost' ? { rejectUnauthorized: false } : false,
+    });
+  }
+  return { pool: pools[key], host, port, database, user };
+}
+
+async function poolQuery(pool, sql, params = []) {
+  const result = await pool.query(sql, params);
+  return result.rows;
+}
+
+// Look up column metadata (name + data_type + udt_name) for a table. We re-read
+// schema each call; these are admin operations run rarely and the round-trip is
+// negligible. Returns rows shaped { column_name, data_type, udt_name }.
+async function tableColumns(pool, tableName) {
+  return await poolQuery(
+    pool,
+    `SELECT column_name, data_type, udt_name FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = $1
+     ORDER BY ordinal_position`,
+    [tableName],
+  );
+}
+
+function quoteIdent(ident) {
+  return `"${ident.replace(/"/g, '""')}"`;
+}
+
+// Coerce a value read from one DB into a form pg-node will bind correctly when
+// inserting into another DB's column. JSON/JSONB columns are the main case: pg
+// parses them into JS objects/arrays on read, but on write a JS object would
+// be coerced to "[object Object]" and Postgres rejects it.
+function bindValue(col, raw) {
+  if (raw === null || raw === undefined) return null;
+  if (col.data_type === 'json' || col.data_type === 'jsonb') {
+    return typeof raw === 'string' ? raw : JSON.stringify(raw);
+  }
+  return raw;
+}
+
+// ── GET /api/praxis/list ──────────────────────────────────────────────────────
+// Lists all praxes for the env addressed by `x-db-*` headers. Used by both the
+// frontend's source/target preview and the post-import default-praxis picker.
+app.get('/api/praxis/list', async (req, res) => {
+  try {
+    const rows = await query(
+      req,
+      `SELECT id, "lcId", name, "shortName", city, "isDraft"
+         FROM praxis_config
+        ORDER BY name`,
+    );
+    res.json({ rows, total: rows.length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── GET /api/praxis/schema-drift-check ────────────────────────────────────────
+// Compares the live target-env schema against the hardcoded config-table list
+// above. Returns:
+//   covered:    config tables we'll backup/wipe/import (intersection)
+//   historical: praxis-scoped tables we INTENTIONALLY don't wipe
+//   drift:      tables with a praxisId-shaped column that aren't in either list
+// The frontend gates destructive steps on `drift.length === 0` (or operator
+// override).
+app.get('/api/praxis/schema-drift-check', async (req, res) => {
+  try {
+    // Tables with any column named "praxisId" (Serverpod camelCase) — covers
+    // both numeric-FK (config) and string-lcId (historical) tables.
+    const found = await query(
+      req,
+      `SELECT table_name, data_type
+         FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND column_name = 'praxisId'
+        ORDER BY table_name`,
+    );
+    const known = new Set([...PRAXIS_CONFIG_TABLES, ...PRAXIS_HISTORICAL_LCID_TABLES]);
+    const covered = [];
+    const historical = [];
+    const drift = [];
+    for (const row of found) {
+      if (PRAXIS_CONFIG_TABLES.includes(row.table_name)) covered.push(row);
+      else if (PRAXIS_HISTORICAL_LCID_TABLES.includes(row.table_name)) historical.push(row);
+      else drift.push(row);
+    }
+    // Also flag any hardcoded config table that doesn't exist on this env.
+    const presentNames = new Set(found.map(r => r.table_name));
+    const missing = PRAXIS_CONFIG_TABLES.filter(t => t !== 'praxis_config' && !presentNames.has(t));
+    res.json({ covered, historical, drift, missing });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── POST /api/praxis/backup ───────────────────────────────────────────────────
+// Body: { lcIds?: string[] }  — if omitted, backs up every praxis on the env.
+// Dumps each praxis (root + all 24 child tables) to
+//   helper/backups/<envLabel>/<ISO-timestamp>/<lcId>.json
+// Returns the absolute paths so the frontend can show them.
+app.post('/api/praxis/backup', async (req, res) => {
+  try {
+    const envLabel = (req.headers['x-env-label'] || req.headers['x-env'] || 'unknown').toString().replace(/[^a-zA-Z0-9_-]/g, '_');
+    const { lcIds } = req.body || {};
+    const { pool } = poolFromHeaders(req);
+
+    const praxes = lcIds && lcIds.length
+      ? await poolQuery(pool, `SELECT * FROM praxis_config WHERE "lcId" = ANY($1::text[]) ORDER BY "lcId"`, [lcIds])
+      : await poolQuery(pool, `SELECT * FROM praxis_config ORDER BY "lcId"`);
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupDir = path.join(__dirname, 'backups', envLabel, timestamp);
+    fs.mkdirSync(backupDir, { recursive: true });
+
+    const written = [];
+    for (const praxis of praxes) {
+      const bundle = { praxis_config: praxis, related: {} };
+      for (let i = 1; i < PRAXIS_CONFIG_TABLES.length; i++) {
+        const t = PRAXIS_CONFIG_TABLES[i];
+        try {
+          const rows = await poolQuery(pool, `SELECT * FROM ${quoteIdent(t)} WHERE "praxisId" = $1`, [praxis.id]);
+          bundle.related[t] = rows;
+        } catch (e) {
+          // Treat a missing table as empty so a partially-migrated env can still backup.
+          bundle.related[t] = { __error: e.message };
+        }
+      }
+      const filename = `${praxis.lcId}.json`;
+      const filepath = path.join(backupDir, filename);
+      fs.writeFileSync(filepath, JSON.stringify(bundle, null, 2));
+      written.push({ lcId: praxis.lcId, name: praxis.name, path: filepath });
+    }
+    res.json({ ok: true, env: envLabel, dir: backupDir, files: written, count: written.length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── POST /api/praxis/wipe-staging ─────────────────────────────────────────────
+// Refuses unless: env-label === 'staging', `x-allow-destructive: yes`, and body
+// `confirmation` exactly equals 'WIPE STAGING'. Deletes from the 25 config
+// tables in reverse FK order. Historical praxis-scoped tables (appointments,
+// audit, NPS, etc.) are intentionally NOT touched — see CLAUDE.md.
+app.post('/api/praxis/wipe-staging', async (req, res) => {
+  try {
+    const envLabel = (req.headers['x-env-label'] || req.headers['x-env'] || '').toString().toLowerCase();
+    if (envLabel !== 'staging') {
+      return res.status(400).json({ error: `Refusing to wipe: x-env-label must be 'staging' (got '${envLabel}'). This guard exists to prevent accidental prod wipes.` });
+    }
+    if (req.headers['x-allow-destructive'] !== 'yes') {
+      return res.status(400).json({ error: `Refusing to wipe: x-allow-destructive header must be 'yes'.` });
+    }
+    if ((req.body && req.body.confirmation) !== 'WIPE STAGING') {
+      return res.status(400).json({ error: `Refusing to wipe: body.confirmation must be the literal string 'WIPE STAGING'.` });
+    }
+
+    const { pool } = poolFromHeaders(req);
+    const client = await pool.connect();
+    const counts = {};
+    try {
+      await client.query('BEGIN');
+      // Delete child tables first, then the root.
+      for (const t of [...PRAXIS_CONFIG_TABLES].reverse()) {
+        const r = await client.query(`DELETE FROM ${quoteIdent(t)}`);
+        counts[t] = r.rowCount;
+      }
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+    res.json({ ok: true, deletedRowsByTable: counts });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── POST /api/praxis/import ───────────────────────────────────────────────────
+// Headers: `x-src-db-*` (read-only, e.g. prod) AND `x-tgt-db-*` (writable, e.g.
+// staging). Body: { lcIds?: string[] } — defaults to all praxes on source.
+// Inserts each source praxis into the target with `"lcId"` preserved, generating
+// a NEW numeric `id` (Postgres default), then copies each child config table
+// remapping `"praxisId"` to the new target id. Sets `"isDraft" = false`.
+// Errors out cleanly if any lcId already exists on target.
+app.post('/api/praxis/import', async (req, res) => {
+  try {
+    const { lcIds } = req.body || {};
+    const src = poolFromHeaders(req, 'x-src-db-');
+    const tgt = poolFromHeaders(req, 'x-tgt-db-');
+    if (`${src.host}:${src.port}/${src.database}` === `${tgt.host}:${tgt.port}/${tgt.database}`) {
+      return res.status(400).json({ error: 'Source and target databases must be different.' });
+    }
+
+    const srcPraxes = lcIds && lcIds.length
+      ? await poolQuery(src.pool, `SELECT * FROM praxis_config WHERE "lcId" = ANY($1::text[]) ORDER BY "lcId"`, [lcIds])
+      : await poolQuery(src.pool, `SELECT * FROM praxis_config ORDER BY "lcId"`);
+
+    if (!srcPraxes.length) return res.json({ ok: true, imported: [], skipped: [], message: 'No source praxes found.' });
+
+    // Pre-check for collisions on target so we fail before any writes.
+    const tgtExisting = await poolQuery(
+      tgt.pool,
+      `SELECT "lcId" FROM praxis_config WHERE "lcId" = ANY($1::text[])`,
+      [srcPraxes.map(p => p.lcId)],
+    );
+    if (tgtExisting.length) {
+      return res.status(409).json({
+        error: `Target already has ${tgtExisting.length} of the requested lcId(s). Wipe first or pass a smaller lcIds list.`,
+        collisions: tgtExisting.map(r => r.lcId),
+      });
+    }
+
+    // Cache target table column lists once.
+    const childTables = PRAXIS_CONFIG_TABLES.slice(1);
+    const colsByTable = {};
+    for (const t of [...childTables, 'praxis_config']) {
+      colsByTable[t] = await tableColumns(tgt.pool, t);
+    }
+
+    const tgtClient = await tgt.pool.connect();
+    const imported = [];
+    const errors = [];
+    try {
+      await tgtClient.query('BEGIN');
+      for (const srcPraxis of srcPraxes) {
+        // Insert root, omit `id` so target assigns a fresh one. Preserve lcId
+        // and force isDraft=false so imported praxes are immediately live.
+        const rootCols = colsByTable['praxis_config'].filter(c => c.column_name !== 'id');
+        const rootValues = rootCols.map(c =>
+          c.column_name === 'isDraft' ? false : bindValue(c, srcPraxis[c.column_name])
+        );
+        const placeholders = rootCols.map((_, i) => `$${i + 1}`).join(',');
+        const colList = rootCols.map(c => quoteIdent(c.column_name)).join(',');
+        const inserted = await tgtClient.query(
+          `INSERT INTO praxis_config (${colList}) VALUES (${placeholders}) RETURNING id`,
+          rootValues,
+        );
+        const newPraxisId = inserted.rows[0].id;
+
+        // Copy each child config table, remapping the FK.
+        const perTable = {};
+        for (const t of childTables) {
+          if (PRAXIS_CONFIG_TABLES_SKIP_IMPORT.has(t)) {
+            perTable[t] = { skipped: 'cross-table FK to non-praxis table — see PRAXIS_CONFIG_TABLES_SKIP_IMPORT' };
+            continue;
+          }
+          let childRows;
+          try {
+            childRows = await poolQuery(src.pool, `SELECT * FROM ${quoteIdent(t)} WHERE "praxisId" = $1`, [srcPraxis.id]);
+          } catch (e) {
+            // Table may not exist on source (rare during migration). Skip silently.
+            perTable[t] = { skipped: e.message };
+            continue;
+          }
+          if (!childRows.length) { perTable[t] = 0; continue; }
+          const childCols = colsByTable[t].filter(c => c.column_name !== 'id');
+          const childColList = childCols.map(c => quoteIdent(c.column_name)).join(',');
+          const childPlaceholders = childCols.map((_, i) => `$${i + 1}`).join(',');
+          for (const row of childRows) {
+            const values = childCols.map(c =>
+              c.column_name === 'praxisId' ? newPraxisId : bindValue(c, row[c.column_name])
+            );
+            await tgtClient.query(
+              `INSERT INTO ${quoteIdent(t)} (${childColList}) VALUES (${childPlaceholders})`,
+              values,
+            );
+          }
+          perTable[t] = childRows.length;
+        }
+        imported.push({ lcId: srcPraxis.lcId, name: srcPraxis.name, newPraxisId, perTable });
+      }
+      await tgtClient.query('COMMIT');
+    } catch (e) {
+      await tgtClient.query('ROLLBACK');
+      errors.push(e.message);
+      throw new Error(`Import rolled back: ${e.message}`);
+    } finally {
+      tgtClient.release();
+    }
+    res.json({ ok: true, importedCount: imported.length, imported, errors });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── POST /api/praxis/scrub-contacts ───────────────────────────────────────────
+// Body: { email: string, phone: string, vitasAIPraxisId?: string }. Bulk-updates
+// email + phone on every praxis_config row. If vitasAIPraxisId is provided
+// (non-empty), also overwrites that column. Refuses on production.
+app.post('/api/praxis/scrub-contacts', async (req, res) => {
+  try {
+    const envLabel = (req.headers['x-env-label'] || req.headers['x-env'] || '').toString().toLowerCase();
+    if (envLabel === 'production' || envLabel === 'prod') {
+      return res.status(400).json({ error: 'Refusing to scrub on production.' });
+    }
+    const { email, phone, vitasAIPraxisId } = req.body || {};
+    if (!email || !phone) return res.status(400).json({ error: 'email and phone are required.' });
+    const setClauses = [`email = $1`, `phone = $2`];
+    const params = [email, phone];
+    if (typeof vitasAIPraxisId === 'string' && vitasAIPraxisId.length) {
+      params.push(vitasAIPraxisId);
+      setClauses.push(`"vitasAIPraxisId" = $${params.length}`);
+    }
+    const r = await query(req, `UPDATE praxis_config SET ${setClauses.join(', ')}`, params);
+    res.json({ ok: true, scrubbedRows: r.length, columnsUpdated: setClauses.length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── POST /api/praxis/set-default ──────────────────────────────────────────────
+// Body: { lcId: string }. Sets `praxisId` on every app_user_info row and
+// replaces `associatedPraxisIds` on every admin_user_info row with [lcId].
+// Refuses on production. Verifies the lcId exists in praxis_config first.
+app.post('/api/praxis/set-default', async (req, res) => {
+  try {
+    const envLabel = (req.headers['x-env-label'] || req.headers['x-env'] || '').toString().toLowerCase();
+    if (envLabel === 'production' || envLabel === 'prod') {
+      return res.status(400).json({ error: 'Refusing to bulk-set default praxis on production.' });
+    }
+    const { lcId } = req.body || {};
+    if (!lcId) return res.status(400).json({ error: 'lcId is required.' });
+
+    const exists = await query(req, `SELECT id FROM praxis_config WHERE "lcId" = $1 LIMIT 1`, [lcId]);
+    if (!exists.length) return res.status(404).json({ error: `lcId '${lcId}' not found in praxis_config on this env.` });
+
+    const { pool } = poolFromHeaders(req);
+    const client = await pool.connect();
+    let appUsers = 0, adminUsers = 0;
+    try {
+      await client.query('BEGIN');
+      const a = await client.query(`UPDATE app_user_info SET "praxisId" = $1`, [lcId]);
+      appUsers = a.rowCount;
+      // associatedPraxisIds is stored as JSON (array of strings), not Postgres text[].
+      const b = await client.query(`UPDATE admin_user_info SET "associatedPraxisIds" = $1::json`, [JSON.stringify([lcId])]);
+      adminUsers = b.rowCount;
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+    res.json({ ok: true, lcId, appUsersUpdated: appUsers, adminUsersUpdated: adminUsers });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Routes: cockpit fill (bulk-fill cockpit + opening hours from an Excel) ───
+//
+// The Excel ("Master Öffnungszeiten Sprechzeiten") has one sheet per praxis.
+// Each sheet has three blocks identified by header text in column A:
+//   1. "Öffnungszeiten"     → praxis-wide opening hours       → praxis_hours_config rows
+//   2. "Sprechstundenzeiten" → per-doctor consultation slots   → cockpit consultationHoursJson
+//   3. "Arbeitszeiten"      → per-role staff working hours    → cockpit workHoursJson
+//
+// Each row in the time blocks has 5 days × {AM start, AM end, PM start, PM end} in
+// columns 3–22, plus person/resource labels in cols 1–2 and weekly hours in col 23.
+//
+// Block positions are NOT fixed across sheets, so the parser scans by header text.
+// Times can arrive as strings ("8:00:00"), Excel serials (0.333…), or Date objects;
+// we normalize to "HH:MM" strings.
+
+const XLSX = require('xlsx');
+
+const COCKPIT_WEEKDAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
+const COCKPIT_DAY_ENUM_INDEX = { monday: 0, tuesday: 1, wednesday: 2, thursday: 3, friday: 4, saturday: 5, sunday: 6 };
+
+// Resource labels in column B (Sprechstundenzeiten block) → ConsultationKind.
+// Pattern matching is loose because the Excel has minor variations
+// ("Nicht buchbare Zeit" vs "Nicht buchbare Zeiten", trailing whitespace, etc.).
+function consultationKindFromLabel(label) {
+  if (!label) return null;
+  const s = String(label).toLowerCase().trim();
+  if (s.includes('homeoffice')) return 'homeoffice';
+  if (s.includes('vor ort')) return 'vorOrt';
+  if (s.includes('akut')) return 'akut';
+  if (s.includes('heimversorgung')) return 'heimversorgung';
+  if (s.includes('urlaub')) return 'urlaub';
+  if (s.includes('nicht buchbar')) return 'nichtBuchbar';
+  if (s.includes('buffer')) return 'buffer';
+  return null;
+}
+
+// Convert an Excel cell value to "HH:MM" or null. Handles string forms
+// ("8:00:00", "08:15", "9.00"), JS Date objects, and Excel time serials
+// (numbers in [0, 1) representing fraction of a day).
+//
+// Timezone note: SheetJS with cellDates: true encodes Excel time-of-day into
+// the LOCAL components of the Date — e.g. for the cell "08:15" it returns a
+// Date d such that d.getHours()===8 and d.getMinutes()===15, regardless of
+// the host's timezone. The absolute UTC instant is offset by the host's TZ
+// at the Excel epoch (1899-12-30), so getUTCHours() would give the wrong
+// hour on any non-UTC host. Always read getHours()/getMinutes() here.
+// Downstream the value flows as a wall-clock "HH:MM" string end-to-end
+// (DB stores text; backend + praxis app pass the string through without
+// constructing any DateTime), so a German user sees the Excel value as-is.
+function cellToHHMM(v) {
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'string') {
+    const s = v.trim();
+    if (!s || s.startsWith('#') || s === '0:00:00') return null;
+    // Try "H:MM:SS" or "HH:MM:SS" or "HH:MM"
+    const m = s.match(/^(\d{1,2})[:.](\d{2})(?:[:.](\d{2}))?$/);
+    if (m) return `${m[1].padStart(2, '0')}:${m[2]}`;
+    return null;
+  }
+  if (v instanceof Date) {
+    const h = String(v.getHours()).padStart(2, '0');
+    const m = String(v.getMinutes()).padStart(2, '0');
+    return `${h}:${m}`;
+  }
+  if (typeof v === 'number') {
+    // Excel time serial: fraction of a day. 0.5 = 12:00. Tolerate values >1
+    // (datetimes whose date part we ignore).
+    const frac = v - Math.floor(v);
+    const totalMin = Math.round(frac * 24 * 60);
+    const h = String(Math.floor(totalMin / 60)).padStart(2, '0');
+    const m = String(totalMin % 60).padStart(2, '0');
+    return `${h}:${m}`;
+  }
+  return null;
+}
+
+// Read row N as { A, B, slots: [{weekday, start, end} ...] }. Each weekday has
+// up to 2 slots (AM and PM) — emitted as separate flat entries.
+function readSlotRow(sheet, rowIdx) {
+  const row = { a: null, b: null, slots: [] };
+  // xlsx sheet uses A1 cell refs. Build them.
+  const cellAt = (col, r) => {
+    const ref = XLSX.utils.encode_cell({ c: col - 1, r: r - 1 });
+    const c = sheet[ref];
+    return c ? c.v : undefined;
+  };
+  row.a = cellAt(1, rowIdx);
+  row.b = cellAt(2, rowIdx);
+  // 5 days × 4 cols, starting at col 3
+  for (let d = 0; d < 5; d++) {
+    const baseCol = 3 + d * 4;
+    const amStart = cellToHHMM(cellAt(baseCol, rowIdx));
+    const amEnd   = cellToHHMM(cellAt(baseCol + 1, rowIdx));
+    const pmStart = cellToHHMM(cellAt(baseCol + 2, rowIdx));
+    const pmEnd   = cellToHHMM(cellAt(baseCol + 3, rowIdx));
+    if (amStart && amEnd) row.slots.push({ weekday: COCKPIT_WEEKDAYS[d], start: amStart, end: amEnd, half: 'AM' });
+    if (pmStart && pmEnd) row.slots.push({ weekday: COCKPIT_WEEKDAYS[d], start: pmStart, end: pmEnd, half: 'PM' });
+  }
+  return row;
+}
+
+function parseSheet(sheet, sheetName) {
+  const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:A1');
+  const maxRow = range.e.r + 1;
+  const blocks = { opening: [], consultation: [], working: [], persons: [] };
+
+  let currentBlock = null;
+  let currentPerson = null;
+  for (let r = 1; r <= maxRow; r++) {
+    const a = sheet[XLSX.utils.encode_cell({ c: 0, r: r - 1 })]?.v;
+    const aStr = a ? String(a).trim() : '';
+
+    if (aStr.includes('Öffnungszeiten')) { currentBlock = 'opening'; currentPerson = null; continue; }
+    if (aStr.includes('Sprechstundenzeiten')) { currentBlock = 'consultation'; currentPerson = null; continue; }
+    if (aStr.includes('Arbeitszeiten')) { currentBlock = 'working'; currentPerson = null; continue; }
+    if (aStr.startsWith('Gemeldete')) { currentBlock = null; currentPerson = null; continue; }
+    if (currentBlock === null) continue;
+
+    // Skip header sub-row (col C says 'Montag Vormittag').
+    const c3 = sheet[XLSX.utils.encode_cell({ c: 2, r: r - 1 })]?.v;
+    if (c3 === 'Montag Vormittag') continue;
+
+    const row = readSlotRow(sheet, r);
+
+    if (currentBlock === 'opening') {
+      if (row.slots.length) blocks.opening.push(...row.slots.map(s => ({ weekday: s.weekday, start: s.start, end: s.end })));
+    } else if (currentBlock === 'consultation') {
+      // Carry person name down the rows; col B is the resource label.
+      if (row.a && String(row.a).trim()) currentPerson = String(row.a).trim();
+      const personName = currentPerson;
+      const resourceLabel = row.b ? String(row.b).trim() : null;
+      const kind = consultationKindFromLabel(resourceLabel);
+      if (personName && kind && row.slots.length) {
+        if (!blocks.persons.includes(personName)) blocks.persons.push(personName);
+        for (const s of row.slots) {
+          blocks.consultation.push({
+            weekday: s.weekday,
+            personName,
+            kind,
+            start: s.start,
+            end: s.end,
+            onlineBookable: kind !== 'nichtBuchbar',
+            sourceLabel: resourceLabel,
+          });
+        }
+      }
+    } else if (currentBlock === 'working') {
+      // Carry person name down (same as consultation block). Doctor rows in
+      // Block 3 have col A = name, col B = blank; MFA rows have col A = name,
+      // col B = "MFA" / "MFA Homeoffice". Continuation rows have col A blank.
+      if (row.a && String(row.a).trim()) currentPerson = String(row.a).trim();
+      const personName = currentPerson;
+      const role = row.b ? String(row.b).trim() : null;
+      if (personName && row.slots.length) {
+        if (!blocks.persons.includes(personName)) blocks.persons.push(personName);
+        for (const s of row.slots) {
+          blocks.working.push({
+            weekday: s.weekday,
+            personName,
+            role,
+            start: s.start,
+            end: s.end,
+            breakMin: 0,
+          });
+        }
+      }
+    }
+  }
+  return { sheetName, ...blocks };
+}
+
+// ── POST /api/cockpit/parse-excel ─────────────────────────────────────────────
+// Body: { path: string }  — absolute path to the .xlsx on disk. Reads, parses,
+// returns per-sheet structured data plus a list of all sheet names found.
+app.post('/api/cockpit/parse-excel', async (req, res) => {
+  try {
+    const { path: filepath } = req.body || {};
+    if (!filepath) return res.status(400).json({ error: 'path is required' });
+    if (!fs.existsSync(filepath)) return res.status(404).json({ error: `File not found: ${filepath}` });
+
+    const wb = XLSX.readFile(filepath, { cellDates: true, cellNF: false, cellText: false });
+    // Skip templates and reference sheets — only real praxis sheets get parsed.
+    const skipRe = /^(Vorlage|Erklärung|Telefonistinnen)/i;
+    const sheets = wb.SheetNames.filter(n => /_Neu\s*$/i.test(n) && !skipRe.test(n));
+    const parsed = sheets.map(name => parseSheet(wb.Sheets[name], name.trim()));
+
+    // Aggregate distinct person names across all sheets so the UI can build a
+    // single mapping list.
+    const allPersons = Array.from(new Set(parsed.flatMap(p => p.persons))).sort();
+
+    res.json({
+      ok: true,
+      file: filepath,
+      sheets: parsed.map(p => ({
+        sheetName: p.sheetName,
+        opening: p.opening,
+        consultation: p.consultation,
+        working: p.working,
+        persons: p.persons,
+        counts: {
+          openingSlots: p.opening.length,
+          consultationSlots: p.consultation.length,
+          workingSlots: p.working.length,
+          persons: p.persons.length,
+        },
+      })),
+      allPersons,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Personio client (server-side, for name → employeeId resolution) ───────────
+let _personioToken = null;
+async function getPersonioToken() {
+  const id = process.env.PERSONIO_CLIENT_ID;
+  const secret = process.env.PERSONIO_CLIENT_SECRET;
+  if (!id || !secret) throw new Error('PERSONIO_CLIENT_ID/SECRET not set in .env — manual employeeId mapping required.');
+  const now = Date.now();
+  if (_personioToken && _personioToken.expiresAt - 60_000 > now) return _personioToken.token;
+  const r = await fetch('https://api.personio.de/v1/auth', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    body: JSON.stringify({ client_id: id, client_secret: secret }),
+  });
+  if (!r.ok) throw new Error(`Personio auth failed: HTTP ${r.status}`);
+  const j = await r.json();
+  if (!j?.success || !j?.data?.token) throw new Error('Personio auth response missing token');
+  // Default to 25 minutes (Personio docs say 24h tokens, but cache short to be safe).
+  _personioToken = { token: j.data.token, expiresAt: now + 25 * 60_000 };
+  return _personioToken.token;
+}
+
+// Personio employee fields we care about: id, first_name, last_name, email, office.
+// The /v1/company/employees endpoint paginates with offset+limit (default 200).
+async function fetchPersonioEmployees() {
+  const all = [];
+  const limit = 200;
+  for (let offset = 0; offset < 10000; offset += limit) {
+    const token = await getPersonioToken();
+    const r = await fetch(`https://api.personio.de/v1/company/employees?limit=${limit}&offset=${offset}`, {
+      headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${token}` },
+    });
+    if (r.status === 401) { _personioToken = null; continue; }
+    if (!r.ok) throw new Error(`Personio employees HTTP ${r.status}`);
+    const j = await r.json();
+    const data = j?.data || [];
+    if (!data.length) break;
+    for (const emp of data) {
+      const attrs = emp.attributes || {};
+      const office = attrs.office?.value?.attributes?.name || null;
+      let weitereStandorte = [];
+      for (const [key, val] of Object.entries(attrs)) {
+        if (!key.startsWith('dynamic_')) continue;
+        if (!val || typeof val !== 'object') continue;
+        if (val.label !== 'Weitere Standorte') continue;
+        const v = val.value;
+        if (typeof v === 'string' && v.length > 0) {
+          weitereStandorte = v.split(',').map(s => s.trim()).filter(Boolean);
+        }
+        break;
+      }
+      all.push({
+        id: attrs.id?.value ?? emp.id ?? null,
+        firstName: attrs.first_name?.value || '',
+        lastName: attrs.last_name?.value || '',
+        email: attrs.email?.value || '',
+        position: attrs.position?.value || '',
+        status: attrs.status?.value || null,
+        office,
+        weitereStandorte,
+      });
+    }
+    if (data.length < limit) break;
+  }
+  return all;
+}
+
+// ── GET /api/cockpit/personio-employees ───────────────────────────────────────
+// Returns the live Personio employee list. Used by the UI to populate the
+// "Excel name → Personio employee" matcher.
+app.get('/api/cockpit/personio-employees', async (req, res) => {
+  try {
+    const employees = await fetchPersonioEmployees();
+    res.json({ ok: true, count: employees.length, employees });
+  } catch (e) {
+    res.status(500).json({ error: e.message, configured: !!(process.env.PERSONIO_CLIENT_ID && process.env.PERSONIO_CLIENT_SECRET) });
+  }
+});
+
+// ── GET /api/personio/audit ───────────────────────────────────────────────────
+//
+// Read-only audit. Cross-checks the Personio employee roster (with the
+// `Weitere Standorte` custom field) against every (praxisId, employeeId) pair
+// stored in the cockpit tables. Surfaces three classes of mismatch:
+//
+//   • orphan       — stored employeeId not found in the live Personio roster
+//   • inactive-ref — stored record is in Personio but `status != active`
+//                    (suggests a live sibling record by name)
+//   • wrong-praxis — stored record is active but neither its primary office nor
+//                    its Weitere Standorte resolve to this praxis
+//
+// We mirror the backend matcher (LillianCare-Core/personio_service.dart):
+// primary office matches by substring against `<praxis.city>` and the city
+// extracted from `<praxis.name>` ("Praxis <City>"); Weitere Standorte entries
+// are exact-match (case-insensitive) against the same city set.
+//
+// Three sources are inspected:
+//   • cockpit_person_duration_exception (column employeeId)
+//   • cockpit_standard_week_version     (employeeIds inside JSON blobs)
+//   • cockpit_week_override             (employeeIds inside JSON blobs)
+function _normCity(s) {
+  return (s || '').toString().trim().toLowerCase();
+}
+function _extractCityFromPraxisName(name) {
+  const m = /Praxis\s+(.+)$/i.exec(name || '');
+  return m ? m[1].trim() : null;
+}
+function _praxisCitySet(p) {
+  const set = new Set();
+  if (p.city) set.add(_normCity(p.city));
+  const fromName = _extractCityFromPraxisName(p.name);
+  if (fromName) set.add(_normCity(fromName));
+  return set;
+}
+function _expectedPraxisIdsForEmployee(emp, praxes) {
+  const office = _normCity(emp.office || '');
+  const ws = (emp.weitereStandorte || []).map(_normCity).filter(Boolean);
+  const matched = [];
+  for (const p of praxes) {
+    const cities = _praxisCitySet(p);
+    let isMatch = false;
+    if (office) {
+      for (const c of cities) {
+        if (c && office.includes(c)) { isMatch = true; break; }
+      }
+    }
+    if (!isMatch && ws.length) {
+      for (const c of cities) {
+        if (c && ws.includes(c)) { isMatch = true; break; }
+      }
+    }
+    if (isMatch) matched.push(p);
+  }
+  return matched;
+}
+
+app.get('/api/personio/audit', async (req, res) => {
+  try {
+    const employees = await fetchPersonioEmployees();
+    const byId = new Map();
+    const byName = new Map();
+    for (const e of employees) {
+      const id = Number(e.id);
+      if (!Number.isFinite(id)) continue;
+      byId.set(id, e);
+      const key = `${(e.firstName || '').toLowerCase()}|${(e.lastName || '').toLowerCase()}`;
+      const arr = byName.get(key) || [];
+      arr.push(e);
+      byName.set(key, arr);
+    }
+
+    const praxes = await query(
+      req,
+      `SELECT id, "lcId", name, city FROM praxis_config ORDER BY "lcId"`,
+    );
+    const praxisById = new Map(praxes.map(p => [Number(p.id), p]));
+
+    const expectedByEmpId = new Map();
+    for (const emp of employees) {
+      const id = Number(emp.id);
+      if (!Number.isFinite(id)) continue;
+      const matched = _expectedPraxisIdsForEmployee(emp, praxes);
+      expectedByEmpId.set(id, new Set(matched.map(p => Number(p.id))));
+    }
+
+    const stored = new Map();
+    function pushStored(praxisId, employeeId, source) {
+      const pid = Number(praxisId);
+      const eid = Number(employeeId);
+      if (!Number.isFinite(pid) || !Number.isFinite(eid)) return;
+      const key = `${pid}|${eid}`;
+      const cur = stored.get(key);
+      if (cur) {
+        if (!cur.sources.includes(source)) cur.sources.push(source);
+      } else {
+        stored.set(key, { praxisId: pid, employeeId: eid, sources: [source] });
+      }
+    }
+
+    const [pdePairs, swvRows, woRows] = await Promise.all([
+      query(req, `SELECT DISTINCT "praxisId", "employeeId" FROM cockpit_person_duration_exception`),
+      query(req, `SELECT "praxisId", "consultationHoursJson", "workHoursJson" FROM cockpit_standard_week_version`),
+      query(req, `SELECT "praxisId", "consultationHoursJson", "workHoursJson" FROM cockpit_week_override`),
+    ]);
+    for (const r of pdePairs) pushStored(r.praxisId, r.employeeId, 'cockpit_person_duration_exception');
+
+    function harvestJsonBlob(praxisId, raw, source) {
+      if (!raw) return;
+      let parsed;
+      try { parsed = typeof raw === 'string' ? JSON.parse(raw) : raw; }
+      catch { return; }
+      if (!Array.isArray(parsed)) return;
+      for (const slot of parsed) {
+        if (slot && typeof slot === 'object' && Number.isFinite(Number(slot.employeeId))) {
+          pushStored(praxisId, slot.employeeId, source);
+        }
+      }
+    }
+    for (const r of swvRows) {
+      harvestJsonBlob(r.praxisId, r.consultationHoursJson, 'cockpit_standard_week_version.consultationHoursJson');
+      harvestJsonBlob(r.praxisId, r.workHoursJson, 'cockpit_standard_week_version.workHoursJson');
+    }
+    for (const r of woRows) {
+      harvestJsonBlob(r.praxisId, r.consultationHoursJson, 'cockpit_week_override.consultationHoursJson');
+      harvestJsonBlob(r.praxisId, r.workHoursJson, 'cockpit_week_override.workHoursJson');
+    }
+
+    const issues = [];
+    let okCount = 0;
+    for (const { praxisId, employeeId, sources } of stored.values()) {
+      const praxis = praxisById.get(praxisId);
+      const praxisLcId = praxis?.lcId || null;
+      const praxisName = praxis?.name || null;
+      const personio = byId.get(employeeId) || null;
+
+      if (!personio) {
+        issues.push({
+          kind: 'orphan',
+          praxisId, praxisLcId, praxisName,
+          employeeId,
+          personio: null,
+          suggested: null,
+          sources,
+        });
+        continue;
+      }
+
+      const fullName = `${personio.firstName || ''} ${personio.lastName || ''}`.trim();
+      const empMeta = {
+        id: employeeId,
+        firstName: personio.firstName,
+        lastName: personio.lastName,
+        fullName,
+        status: personio.status || null,
+        office: personio.office || null,
+        weitereStandorte: personio.weitereStandorte || [],
+      };
+
+      if ((personio.status || '').toLowerCase() !== 'active') {
+        const key = `${(personio.firstName || '').toLowerCase()}|${(personio.lastName || '').toLowerCase()}`;
+        const siblings = (byName.get(key) || []).filter(s => Number(s.id) !== employeeId && (s.status || '').toLowerCase() === 'active');
+        let suggestion = null;
+        for (const s of siblings) {
+          const exp = expectedByEmpId.get(Number(s.id)) || new Set();
+          if (exp.has(praxisId)) { suggestion = s; break; }
+        }
+        if (!suggestion && siblings.length) suggestion = siblings[0];
+        issues.push({
+          kind: 'inactive-ref',
+          praxisId, praxisLcId, praxisName,
+          employeeId,
+          personio: empMeta,
+          suggested: suggestion ? {
+            id: Number(suggestion.id),
+            firstName: suggestion.firstName,
+            lastName: suggestion.lastName,
+            status: suggestion.status,
+            office: suggestion.office,
+            weitereStandorte: suggestion.weitereStandorte,
+          } : null,
+          sources,
+        });
+        continue;
+      }
+
+      const expected = expectedByEmpId.get(employeeId) || new Set();
+      if (!expected.has(praxisId)) {
+        issues.push({
+          kind: 'wrong-praxis',
+          praxisId, praxisLcId, praxisName,
+          employeeId,
+          personio: empMeta,
+          suggested: null,
+          sources,
+        });
+        continue;
+      }
+
+      okCount++;
+    }
+
+    issues.sort((a, b) => {
+      const order = { 'orphan': 0, 'inactive-ref': 1, 'wrong-praxis': 2 };
+      const k = (order[a.kind] ?? 99) - (order[b.kind] ?? 99);
+      if (k !== 0) return k;
+      return (a.praxisLcId || '').localeCompare(b.praxisLcId || '');
+    });
+
+    const counts = {
+      storedPairs: stored.size,
+      ok: okCount,
+      orphan: issues.filter(i => i.kind === 'orphan').length,
+      inactiveRef: issues.filter(i => i.kind === 'inactive-ref').length,
+      wrongPraxis: issues.filter(i => i.kind === 'wrong-praxis').length,
+      personioActive: employees.filter(e => (e.status || '').toLowerCase() === 'active').length,
+      personioTotal: employees.length,
+      praxes: praxes.length,
+    };
+
+    res.json({ ok: true, fetchedAt: new Date().toISOString(), counts, issues });
+  } catch (e) {
+    res.status(500).json({ error: e.message, configured: !!(process.env.PERSONIO_CLIENT_ID && process.env.PERSONIO_CLIENT_SECRET) });
+  }
+});
+
+// ── POST /api/personio/audit/fix ──────────────────────────────────────────────
+// Apply remove/remap actions to the (praxisId, employeeId) pairs surfaced by
+// the personio audit. All actions run in a single transaction. Affects:
+//   • cockpit_person_duration_exception           (DELETE on remove, UPDATE employeeId on remap)
+//   • cockpit_standard_week_version JSON blobs    (consultationHoursJson, workHoursJson)
+//   • cockpit_week_override JSON blobs            (consultationHoursJson, workHoursJson)
+// Body: { actions: [{ praxisId, employeeId, mode: 'remove'|'remap', newEmployeeId? }] }
+// Refuses on production env-label.
+function _personioFixTransformBlob(raw, employeeId, mode, newEmployeeId) {
+  if (raw == null) return { json: raw, changed: false, touched: 0 };
+  let parsed;
+  try { parsed = typeof raw === 'string' ? JSON.parse(raw) : raw; }
+  catch { return { json: raw, changed: false, touched: 0 }; }
+  if (!Array.isArray(parsed)) return { json: raw, changed: false, touched: 0 };
+  let touched = 0;
+  let next;
+  if (mode === 'remove') {
+    next = parsed.filter(slot => {
+      if (slot && typeof slot === 'object' && Number(slot.employeeId) === employeeId) { touched++; return false; }
+      return true;
+    });
+  } else {
+    next = parsed.map(slot => {
+      if (slot && typeof slot === 'object' && Number(slot.employeeId) === employeeId) {
+        touched++;
+        return { ...slot, employeeId: newEmployeeId };
+      }
+      return slot;
+    });
+  }
+  if (touched === 0) return { json: raw, changed: false, touched: 0 };
+  return { json: JSON.stringify(next), changed: true, touched };
+}
+
+// cockpit_standard_week_version is append-only versioned (createdAt/createdBy only,
+// no modifiedAt). cockpit_week_override has both createdAt + modifiedAt. The
+// `touchModifiedAt` flag picks the right SET clause per table.
+async function _personioFixApplyJsonBlob(client, table, praxisId, employeeId, mode, newEmployeeId, touchModifiedAt) {
+  const rows = await client.query(
+    `SELECT id, "consultationHoursJson", "workHoursJson" FROM "${table}" WHERE "praxisId" = $1`,
+    [praxisId],
+  );
+  const stats = { rowsRead: rows.rowCount, rowsModified: 0, slotsConsultation: 0, slotsWork: 0 };
+  const setClause = touchModifiedAt
+    ? `"consultationHoursJson" = $1, "workHoursJson" = $2, "modifiedAt" = NOW()`
+    : `"consultationHoursJson" = $1, "workHoursJson" = $2`;
+  for (const row of rows.rows) {
+    const cons = _personioFixTransformBlob(row.consultationHoursJson, employeeId, mode, newEmployeeId);
+    const work = _personioFixTransformBlob(row.workHoursJson, employeeId, mode, newEmployeeId);
+    if (!cons.changed && !work.changed) continue;
+    await client.query(
+      `UPDATE "${table}" SET ${setClause} WHERE id = $3`,
+      [cons.json, work.json, row.id],
+    );
+    stats.rowsModified++;
+    stats.slotsConsultation += cons.touched;
+    stats.slotsWork += work.touched;
+  }
+  return stats;
+}
+
+app.post('/api/personio/audit/fix', async (req, res) => {
+  try {
+    const envLabel = (req.headers['x-env-label'] || req.headers['x-env'] || '').toString().toLowerCase();
+    if (envLabel === 'production' || envLabel === 'prod') {
+      return res.status(400).json({ error: 'Refusing to write cockpit data on production.' });
+    }
+    const { actions } = req.body || {};
+    if (!Array.isArray(actions) || !actions.length) {
+      return res.status(400).json({ error: 'actions array required' });
+    }
+
+    const { pool } = poolFromHeaders(req);
+    const client = await pool.connect();
+    const results = [];
+    try {
+      await client.query('BEGIN');
+      for (const action of actions) {
+        const praxisId = Number(action.praxisId);
+        const employeeId = Number(action.employeeId);
+        const mode = action.mode;
+        const newEmployeeId = action.newEmployeeId == null ? null : Number(action.newEmployeeId);
+        if (!Number.isFinite(praxisId) || !Number.isFinite(employeeId) || (mode !== 'remove' && mode !== 'remap')) {
+          results.push({ ...action, status: 'error', reason: 'invalid action shape' });
+          continue;
+        }
+        if (mode === 'remap' && !Number.isFinite(newEmployeeId)) {
+          results.push({ ...action, status: 'error', reason: 'newEmployeeId required for remap' });
+          continue;
+        }
+        if (mode === 'remap' && employeeId === newEmployeeId) {
+          results.push({ ...action, status: 'error', reason: 'newEmployeeId equals employeeId' });
+          continue;
+        }
+
+        let pdeRows = 0;
+        if (mode === 'remove') {
+          const r = await client.query(
+            `DELETE FROM cockpit_person_duration_exception WHERE "praxisId" = $1 AND "employeeId" = $2`,
+            [praxisId, employeeId],
+          );
+          pdeRows = r.rowCount;
+        } else {
+          const r = await client.query(
+            `UPDATE cockpit_person_duration_exception SET "employeeId" = $3, "modifiedAt" = NOW()
+              WHERE "praxisId" = $1 AND "employeeId" = $2`,
+            [praxisId, employeeId, newEmployeeId],
+          );
+          pdeRows = r.rowCount;
+        }
+
+        const swvStats = await _personioFixApplyJsonBlob(client, 'cockpit_standard_week_version', praxisId, employeeId, mode, newEmployeeId, false);
+        const woStats  = await _personioFixApplyJsonBlob(client, 'cockpit_week_override',         praxisId, employeeId, mode, newEmployeeId, true);
+
+        results.push({
+          praxisId,
+          employeeId,
+          mode,
+          newEmployeeId,
+          status: 'ok',
+          pde: pdeRows,
+          standardWeekVersion: swvStats,
+          weekOverride: woStats,
+        });
+      }
+      await client.query('COMMIT');
+    } catch (e) {
+      try { await client.query('ROLLBACK'); } catch {}
+      return res.status(500).json({ error: e.message, results });
+    } finally {
+      client.release();
+    }
+
+    res.json({ ok: true, results });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── POST /api/cockpit/import ──────────────────────────────────────────────────
+// Body: {
+//   parsedSheets: [...],                   // result from /parse-excel
+//   sheetToLcId: { 'Trier_Neu': 'lc_05' }, // operator-confirmed mapping
+//   nameToEmployeeId: { 'Claudia W': 12 }, // operator-confirmed mapping (ints)
+//   validFromIsoYear?: int, validFromIsoWeek?: int, // defaults to next Monday
+//   replace?: boolean,                     // default true
+// }
+// For each (sheet → lcId) pair: deletes prior cockpit_standard_week_version +
+// praxis_hours_config rows for that praxis (if replace), then inserts:
+//   - praxis_hours_config: one row per opening slot
+//   - cockpit_standard_week_version: one row with three JSON blobs.
+// Refuses on production env-label unless triple-gated: x-allow-destructive: yes
+// AND body.confirmation === 'IMPORT COCKPIT TO PRODUCTION'.
+app.post('/api/cockpit/import', async (req, res) => {
+  try {
+    const envLabel = (req.headers['x-env-label'] || req.headers['x-env'] || '').toString().toLowerCase();
+    if (envLabel === 'production' || envLabel === 'prod') {
+      if (req.headers['x-allow-destructive'] !== 'yes') {
+        return res.status(400).json({ error: `Refusing cockpit import on production: x-allow-destructive header must be 'yes'.` });
+      }
+      if ((req.body && req.body.confirmation) !== 'IMPORT COCKPIT TO PRODUCTION') {
+        return res.status(400).json({ error: `Refusing cockpit import on production: body.confirmation must be the literal string 'IMPORT COCKPIT TO PRODUCTION'.` });
+      }
+    }
+    const {
+      parsedSheets,
+      sheetToLcId = {},
+      nameToEmployeeId = {},
+      validFromIsoYear,
+      validFromIsoWeek,
+      replace = true,
+      createdBy = 'helper-cockpit-fill',
+    } = req.body || {};
+    if (!Array.isArray(parsedSheets) || !parsedSheets.length) {
+      return res.status(400).json({ error: 'parsedSheets array required' });
+    }
+
+    // Default validFrom to the upcoming Monday's ISO year/week.
+    function isoYearWeek(d) {
+      const dt = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+      const dayNum = (dt.getUTCDay() + 6) % 7; // Mon=0
+      dt.setUTCDate(dt.getUTCDate() - dayNum + 3);
+      const firstThursday = dt.getTime();
+      const yearStart = new Date(Date.UTC(dt.getUTCFullYear(), 0, 4));
+      const weekNum = 1 + Math.round((firstThursday - yearStart.getTime()) / (7 * 86400000));
+      return { year: dt.getUTCFullYear(), week: weekNum };
+    }
+    const fallback = isoYearWeek(new Date());
+    const isoYear = Number.isFinite(validFromIsoYear) ? validFromIsoYear : fallback.year;
+    const isoWeek = Number.isFinite(validFromIsoWeek) ? validFromIsoWeek : fallback.week;
+
+    const { pool } = poolFromHeaders(req);
+    const client = await pool.connect();
+    const results = [];
+    try {
+      await client.query('BEGIN');
+      for (const sheet of parsedSheets) {
+        const lcId = sheetToLcId[sheet.sheetName];
+        if (!lcId) { results.push({ sheet: sheet.sheetName, status: 'skipped', reason: 'no praxis mapping' }); continue; }
+        const found = await client.query(`SELECT id FROM praxis_config WHERE "lcId" = $1`, [lcId]);
+        if (!found.rows.length) { results.push({ sheet: sheet.sheetName, lcId, status: 'error', reason: 'lcId not in praxis_config' }); continue; }
+        const praxisDbId = found.rows[0].id;
+
+        if (replace) {
+          await client.query(`DELETE FROM praxis_hours_config WHERE "praxisId" = $1`, [praxisDbId]);
+          await client.query(`DELETE FROM cockpit_standard_week_version WHERE "praxisId" = $1`, [praxisDbId]);
+          await client.query(`DELETE FROM cockpit_week_override WHERE "praxisId" = $1`, [praxisDbId]);
+        }
+
+        // ── praxis_hours_config: one row per opening slot. Day stored as int enum.
+        let openingInserted = 0;
+        for (const slot of sheet.opening || []) {
+          await client.query(
+            `INSERT INTO praxis_hours_config ("praxisId", day, start, "end", "createdAt", "modifiedAt")
+             VALUES ($1, $2, $3, $4, NOW(), NOW())`,
+            [praxisDbId, COCKPIT_DAY_ENUM_INDEX[slot.weekday], slot.start, slot.end],
+          );
+          openingInserted++;
+        }
+
+        // ── cockpit_standard_week_version: build the three JSON blobs.
+        const openingHoursJson = JSON.stringify(
+          (sheet.opening || []).map(s => ({ weekday: s.weekday, start: s.start, end: s.end })),
+        );
+        const consultationSlots = [];
+        let unmatchedNames = [];
+        for (const c of sheet.consultation || []) {
+          const empId = nameToEmployeeId[c.personName];
+          if (!Number.isFinite(empId)) {
+            if (!unmatchedNames.includes(c.personName)) unmatchedNames.push(c.personName);
+            continue;
+          }
+          consultationSlots.push({
+            weekday: c.weekday,
+            employeeId: empId,
+            kind: c.kind,
+            start: c.start,
+            end: c.end,
+            onlineBookable: !!c.onlineBookable,
+          });
+        }
+        const consultationHoursJson = JSON.stringify(consultationSlots);
+
+        // workHoursJson: prefer Block 3 (Arbeitszeiten) entries — explicit
+        // per-person AM/PM working slots, including MFAs that don't have any
+        // consultation rows. For people whose name is in Block 2 only (no
+        // Block 3 row), fall back to deriving a single span from the earliest
+        // consultation start to the latest end on each day.
+        const workSlots = [];
+        const personsWithExplicitWork = new Set();
+        for (const w of sheet.working || []) {
+          const empId = nameToEmployeeId[w.personName];
+          if (!Number.isFinite(empId)) {
+            if (!unmatchedNames.includes(w.personName)) unmatchedNames.push(w.personName);
+            continue;
+          }
+          personsWithExplicitWork.add(empId);
+          workSlots.push({
+            weekday: w.weekday,
+            employeeId: empId,
+            start: w.start,
+            end: w.end,
+            breakMin: w.breakMin || 0,
+          });
+        }
+        const derivedByPersonDay = {};
+        for (const c of sheet.consultation || []) {
+          const empId = nameToEmployeeId[c.personName];
+          if (!Number.isFinite(empId) || personsWithExplicitWork.has(empId)) continue;
+          const key = `${empId}|${c.weekday}`;
+          const ws = derivedByPersonDay[key] || { weekday: c.weekday, employeeId: empId, start: c.start, end: c.end, breakMin: 0 };
+          if (c.start < ws.start) ws.start = c.start;
+          if (c.end > ws.end) ws.end = c.end;
+          derivedByPersonDay[key] = ws;
+        }
+        for (const ws of Object.values(derivedByPersonDay)) workSlots.push(ws);
+        const workHoursJson = JSON.stringify(workSlots);
+
+        await client.query(
+          `INSERT INTO cockpit_standard_week_version
+             ("praxisId", "validFromIsoYear", "validFromIsoWeek",
+              "openingHoursJson", "consultationHoursJson", "workHoursJson",
+              "createdAt", "createdBy")
+           VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7)`,
+          [praxisDbId, isoYear, isoWeek, openingHoursJson, consultationHoursJson, workHoursJson, createdBy],
+        );
+
+        results.push({
+          sheet: sheet.sheetName,
+          lcId,
+          praxisDbId,
+          openingInserted,
+          consultationSlots: consultationSlots.length,
+          workSlotsAggregated: workSlots.length,
+          unmatchedNames,
+          status: 'ok',
+        });
+      }
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw new Error(`Import rolled back: ${e.message}`);
+    } finally {
+      client.release();
+    }
+    res.json({ ok: true, isoYear, isoWeek, results });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Routes: single-praxis cleanup (deep delete + reference scrub) ──────────
+//
+// Removes every row that references a given lcId so the praxis can be safely
+// re-created. Goes further than the praxis-refresh wipe: that one only clears
+// the 25 praxis-config tables; this one also cleans the historical/user tables
+// that hold the lcId as a string FK. User accounts are preserved (praxisId
+// nulled), admin accounts are preserved (lcId removed from associatedPraxisIds).
+// Audit log is kept. Refuses on production.
+//
+// Per-table action map — extend when new praxis-scoped tables are added.
+const CLEANUP_NON_CONFIG_TABLES = {
+  // numeric praxisId (FK to praxis_config.id) — DELETE rows for this praxis
+  'app_user_appointment_reminder':       { mode: 'delete-by-numid' },
+  'cockpit_person_duration_exception':   { mode: 'delete-by-numid' },
+  'praxis_hours_sync_target':            { mode: 'delete-by-numid' },
+  // string lcId — DELETE rows for this praxis
+  'app_user_appointment':                { mode: 'delete-by-lcid' },
+  'app_user_open_consultation':          { mode: 'delete-by-lcid' },
+  'app_user_document_request':           { mode: 'delete-by-lcid' },
+  'app_user_reserved_appointment':       { mode: 'delete-by-lcid' },
+  'app_user_nps_sent':                   { mode: 'delete-by-lcid' },
+  'guest_appointment':                   { mode: 'delete-by-lcid' },
+  'questionnaire_reservation':           { mode: 'delete-by-lcid' },
+  'fhir_nps':                            { mode: 'delete-by-lcid' },
+  'app_user_pms_invitation':             { mode: 'delete-by-lcid' },
+  // preserve account, drop the praxis link
+  'app_user_info':                       { mode: 'null-by-lcid' },
+  // preserve account, drop the lcId from the JSON array (handled in code)
+  'admin_user_info':                     { mode: 'remove-from-json-array' },
+  // historical record — keep as-is
+  'admin_audit_log':                     { mode: 'keep' },
+};
+
+// Returns a Set of table names that exist on the env addressed by `req`.
+// Used by cleanup endpoints so a missing table (envs at different migration
+// levels) doesn't abort the whole transaction with "relation does not exist".
+async function existingPublicTables(req) {
+  const rows = await query(req, `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'`);
+  return new Set(rows.map(r => r.table_name));
+}
+
+// ── POST /api/praxis/cleanup-preview ─────────────────────────────────────────
+// Body: { lcId: string }. Read-only. Returns per-table row counts that would
+// be DELETEd, NULLed, or filtered for this lcId. Missing tables are flagged
+// as `{ missing: true }` rather than blowing up.
+app.post('/api/praxis/cleanup-preview', async (req, res) => {
+  try {
+    const { lcId } = req.body || {};
+    if (!lcId) return res.status(400).json({ error: 'lcId is required' });
+    const found = await query(req, `SELECT id, name FROM praxis_config WHERE "lcId" = $1`, [lcId]);
+    if (!found.length) return res.status(404).json({ error: `lcId '${lcId}' not found` });
+    const numId = found[0].id;
+    const present = await existingPublicTables(req);
+    const counts = { lcId, name: found[0].name, praxisDbId: numId, configTables: {}, nonConfigTables: {} };
+    // Root praxis_config row always counts as 1 here (we already located it).
+    counts.configTables['praxis_config'] = 1;
+    for (const t of PRAXIS_CONFIG_TABLES.slice(1)) {
+      if (!present.has(t)) { counts.configTables[t] = { missing: true }; continue; }
+      try {
+        const r = await query(req, `SELECT count(*)::int AS n FROM ${quoteIdent(t)} WHERE "praxisId" = $1`, [numId]);
+        counts.configTables[t] = r[0].n;
+      } catch (e) { counts.configTables[t] = { error: e.message }; }
+    }
+
+    for (const [t, spec] of Object.entries(CLEANUP_NON_CONFIG_TABLES)) {
+      if (!present.has(t)) { counts.nonConfigTables[t] = { mode: spec.mode, missing: true }; continue; }
+      try {
+        if (spec.mode === 'delete-by-numid') {
+          const r = await query(req, `SELECT count(*)::int AS n FROM ${quoteIdent(t)} WHERE "praxisId" = $1`, [numId]);
+          counts.nonConfigTables[t] = { mode: spec.mode, rows: r[0].n };
+        } else if (spec.mode === 'delete-by-lcid' || spec.mode === 'null-by-lcid') {
+          const r = await query(req, `SELECT count(*)::int AS n FROM ${quoteIdent(t)} WHERE "praxisId" = $1`, [lcId]);
+          counts.nonConfigTables[t] = { mode: spec.mode, rows: r[0].n };
+        } else if (spec.mode === 'remove-from-json-array') {
+          const r = await query(req, `SELECT count(*)::int AS n FROM ${quoteIdent(t)} WHERE "associatedPraxisIds"::text LIKE $1`, [`%${lcId}%`]);
+          counts.nonConfigTables[t] = { mode: spec.mode, rows: r[0].n };
+        } else {
+          counts.nonConfigTables[t] = { mode: spec.mode, rows: 0 };
+        }
+      } catch (e) { counts.nonConfigTables[t] = { mode: spec.mode, error: e.message }; }
+    }
+    res.json({ ok: true, ...counts });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── POST /api/praxis/cleanup ─────────────────────────────────────────────────
+// Body: { lcId: string, confirmation: string }. confirmation must equal lcId.
+// Headers: standard x-db-* + `x-allow-destructive: yes`. Refuses on production.
+// Performs the full cleanup in a single transaction. Returns per-table action
+// counts; rolls back the whole batch on any error.
+app.post('/api/praxis/cleanup', async (req, res) => {
+  try {
+    const envLabel = (req.headers['x-env-label'] || req.headers['x-env'] || '').toString().toLowerCase();
+    if (envLabel === 'production' || envLabel === 'prod') {
+      return res.status(400).json({ error: 'Refusing to delete praxis on production.' });
+    }
+    if (req.headers['x-allow-destructive'] !== 'yes') {
+      return res.status(400).json({ error: `x-allow-destructive: yes required.` });
+    }
+    const { lcId, confirmation } = req.body || {};
+    if (!lcId) return res.status(400).json({ error: 'lcId is required' });
+    if (confirmation !== lcId) return res.status(400).json({ error: `body.confirmation must equal the lcId ('${lcId}').` });
+
+    const found = await query(req, `SELECT id, name FROM praxis_config WHERE "lcId" = $1`, [lcId]);
+    if (!found.length) return res.status(404).json({ error: `lcId '${lcId}' not found` });
+    const numId = found[0].id;
+    const present = await existingPublicTables(req);
+
+    const { pool } = poolFromHeaders(req);
+    const client = await pool.connect();
+    const result = {
+      lcId,
+      name: found[0].name,
+      praxisDbId: numId,
+      configDeletedRows: {},
+      nonConfigActions: {},
+      skippedMissing: [],
+    };
+    try {
+      await client.query('BEGIN');
+
+      // 1) Child praxis-config tables in reverse FK order. praxis_config (root)
+      //    is at index 0 and gets deleted last, by `id` not `praxisId`.
+      const childTablesReverse = PRAXIS_CONFIG_TABLES.slice(1).reverse();
+      for (const t of childTablesReverse) {
+        if (!present.has(t)) { result.configDeletedRows[t] = { missing: true }; result.skippedMissing.push(t); continue; }
+        const r = await client.query(`DELETE FROM ${quoteIdent(t)} WHERE "praxisId" = $1`, [numId]);
+        result.configDeletedRows[t] = r.rowCount;
+      }
+
+      // 2) Non-config tables — DELETE / NULL / filter as configured.
+      for (const [t, spec] of Object.entries(CLEANUP_NON_CONFIG_TABLES)) {
+        if (spec.mode === 'keep') {
+          result.nonConfigActions[t] = { mode: spec.mode, rows: 0 };
+          continue;
+        }
+        if (!present.has(t)) {
+          result.nonConfigActions[t] = { mode: spec.mode, missing: true };
+          result.skippedMissing.push(t);
+          continue;
+        }
+        if (spec.mode === 'delete-by-numid') {
+          const r = await client.query(`DELETE FROM ${quoteIdent(t)} WHERE "praxisId" = $1`, [numId]);
+          result.nonConfigActions[t] = { mode: spec.mode, rows: r.rowCount };
+        } else if (spec.mode === 'delete-by-lcid') {
+          const r = await client.query(`DELETE FROM ${quoteIdent(t)} WHERE "praxisId" = $1`, [lcId]);
+          result.nonConfigActions[t] = { mode: spec.mode, rows: r.rowCount };
+        } else if (spec.mode === 'null-by-lcid') {
+          const r = await client.query(`UPDATE ${quoteIdent(t)} SET "praxisId" = NULL WHERE "praxisId" = $1`, [lcId]);
+          result.nonConfigActions[t] = { mode: spec.mode, rows: r.rowCount };
+        } else if (spec.mode === 'remove-from-json-array') {
+          // admin_user_info.associatedPraxisIds is JSON of array<string>. Pull
+          // affected rows, filter the array in JS, write back.
+          const rows = await client.query(
+            `SELECT id, "associatedPraxisIds" FROM ${quoteIdent(t)} WHERE "associatedPraxisIds"::text LIKE $1`,
+            [`%${lcId}%`],
+          );
+          let updated = 0;
+          for (const row of rows.rows) {
+            const arr = Array.isArray(row.associatedPraxisIds)
+              ? row.associatedPraxisIds
+              : (typeof row.associatedPraxisIds === 'string' ? JSON.parse(row.associatedPraxisIds) : []);
+            const filtered = arr.filter(x => x !== lcId);
+            if (filtered.length !== arr.length) {
+              await client.query(`UPDATE ${quoteIdent(t)} SET "associatedPraxisIds" = $1::json WHERE id = $2`, [JSON.stringify(filtered), row.id]);
+              updated++;
+            }
+          }
+          result.nonConfigActions[t] = { mode: spec.mode, rows: updated };
+        }
+      }
+
+      // 3) Finally, delete the praxis_config root by id.
+      const rootDel = await client.query(`DELETE FROM praxis_config WHERE id = $1`, [numId]);
+      result.configDeletedRows['praxis_config'] = rootDel.rowCount;
+
+      await client.query('COMMIT');
+    } catch (e) {
+      try { await client.query('ROLLBACK'); } catch {}
+      throw new Error(`Cleanup rolled back: ${e.message}`);
+    } finally {
+      client.release();
+    }
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Routes: cockpit cross-env sync (export from one env, import to another) ──
+//
+// Copies the 5 cockpit-relevant tables for selected praxes between two envs.
+// Praxes are matched by `lcId` (numeric `id` differs across envs); the numeric
+// `praxisId` FK is remapped on insert. Personio `employeeId`s inside the JSON
+// blobs are global IDs and cross envs unchanged. Refuses on production target.
+
+const COCKPIT_SYNC_TABLES = [
+  'praxis_hours_config',
+  'cockpit_standard_week_version',
+  'cockpit_appointment_type_matrix',
+  'cockpit_week_override',
+  'cockpit_person_duration_exception',
+];
+
+// ── POST /api/cockpit/source-summary ──────────────────────────────────────────
+// Headers: x-src-db-* (single env). Body: { lcIds?: string[] }
+// Returns per-praxis row counts across the 5 cockpit tables, so the UI can
+// preview what would be copied before committing.
+app.post('/api/cockpit/source-summary', async (req, res) => {
+  try {
+    const { lcIds } = req.body || {};
+    const src = poolFromHeaders(req, 'x-src-db-');
+    const praxRows = lcIds && lcIds.length
+      ? await poolQuery(src.pool, `SELECT id, "lcId", name FROM praxis_config WHERE "lcId" = ANY($1::text[]) ORDER BY "lcId"`, [lcIds])
+      : await poolQuery(src.pool, `SELECT id, "lcId", name FROM praxis_config ORDER BY "lcId"`);
+    const out = [];
+    for (const p of praxRows) {
+      const counts = {};
+      for (const t of COCKPIT_SYNC_TABLES) {
+        try {
+          const r = await poolQuery(src.pool, `SELECT count(*)::int AS n FROM ${quoteIdent(t)} WHERE "praxisId" = $1`, [p.id]);
+          counts[t] = r[0].n;
+        } catch (e) {
+          counts[t] = { error: e.message };
+        }
+      }
+      out.push({ lcId: p.lcId, name: p.name, counts });
+    }
+    res.json({ ok: true, rows: out });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── POST /api/cockpit/cross-env-copy ──────────────────────────────────────────
+// Headers: x-src-db-* AND x-tgt-db-*. Body: { lcIds?: string[], replace?: bool }
+// Defaults to all praxes on source, replace=true.
+// For each src praxis, looks up tgt praxis by lcId. If src has no match on tgt,
+// the praxis is skipped (logged). For each cockpit table:
+//   - replace mode: DELETE rows on tgt where praxisId = tgt's mapped id
+//   - then INSERT every src row with praxisId remapped to tgt
+// Refuses if target env-label is production.
+app.post('/api/cockpit/cross-env-copy', async (req, res) => {
+  try {
+    const tgtEnvLabel = (req.headers['x-tgt-env-label'] || '').toString().toLowerCase();
+    if (tgtEnvLabel === 'production' || tgtEnvLabel === 'prod') {
+      return res.status(400).json({ error: 'Refusing to write cockpit data on production target.' });
+    }
+
+    const { lcIds, replace = true } = req.body || {};
+    const src = poolFromHeaders(req, 'x-src-db-');
+    const tgt = poolFromHeaders(req, 'x-tgt-db-');
+    if (`${src.host}:${src.port}/${src.database}` === `${tgt.host}:${tgt.port}/${tgt.database}`) {
+      return res.status(400).json({ error: 'Source and target databases must be different.' });
+    }
+
+    const srcPraxes = lcIds && lcIds.length
+      ? await poolQuery(src.pool, `SELECT id, "lcId", name FROM praxis_config WHERE "lcId" = ANY($1::text[]) ORDER BY "lcId"`, [lcIds])
+      : await poolQuery(src.pool, `SELECT id, "lcId", name FROM praxis_config ORDER BY "lcId"`);
+    if (!srcPraxes.length) return res.json({ ok: true, results: [], message: 'No source praxes.' });
+
+    // Look up target praxis ids by lcId in one query.
+    const tgtMap = {};
+    {
+      const rows = await poolQuery(tgt.pool, `SELECT id, "lcId" FROM praxis_config WHERE "lcId" = ANY($1::text[])`, [srcPraxes.map(p => p.lcId)]);
+      for (const r of rows) tgtMap[r.lcId] = r.id;
+    }
+
+    // Cache target column metadata (json/jsonb columns need bindValue serialization).
+    const colsByTable = {};
+    for (const t of COCKPIT_SYNC_TABLES) {
+      colsByTable[t] = await tableColumns(tgt.pool, t);
+    }
+
+    const tgtClient = await tgt.pool.connect();
+    const results = [];
+    try {
+      await tgtClient.query('BEGIN');
+      for (const srcPraxis of srcPraxes) {
+        const tgtPraxisId = tgtMap[srcPraxis.lcId];
+        if (!tgtPraxisId) {
+          results.push({ lcId: srcPraxis.lcId, status: 'skipped', reason: 'praxis not on target' });
+          continue;
+        }
+
+        const perTable = {};
+        for (const t of COCKPIT_SYNC_TABLES) {
+          if (replace) {
+            await tgtClient.query(`DELETE FROM ${quoteIdent(t)} WHERE "praxisId" = $1`, [tgtPraxisId]);
+          }
+          let srcRows;
+          try {
+            srcRows = await poolQuery(src.pool, `SELECT * FROM ${quoteIdent(t)} WHERE "praxisId" = $1`, [srcPraxis.id]);
+          } catch (e) {
+            // Source may not have the table (cross-version envs).
+            perTable[t] = { skipped: e.message };
+            continue;
+          }
+          if (!srcRows.length) { perTable[t] = 0; continue; }
+          const cols = colsByTable[t].filter(c => c.column_name !== 'id');
+          const colList = cols.map(c => quoteIdent(c.column_name)).join(',');
+          const placeholders = cols.map((_, i) => `$${i + 1}`).join(',');
+          for (const row of srcRows) {
+            const values = cols.map(c =>
+              c.column_name === 'praxisId' ? tgtPraxisId : bindValue(c, row[c.column_name])
+            );
+            await tgtClient.query(`INSERT INTO ${quoteIdent(t)} (${colList}) VALUES (${placeholders})`, values);
+          }
+          perTable[t] = srcRows.length;
+        }
+        results.push({ lcId: srcPraxis.lcId, name: srcPraxis.name, tgtPraxisId, status: 'ok', perTable });
+      }
+      await tgtClient.query('COMMIT');
+    } catch (e) {
+      await tgtClient.query('ROLLBACK');
+      throw new Error(`Cockpit sync rolled back: ${e.message}`);
+    } finally {
+      tgtClient.release();
+    }
+    res.json({ ok: true, replace, results });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// RDS RESTORE wizard (`/api/rds-restore/*`, view `#rds-restore`)
+// Single-table restore from a snapshot or PITR. Each endpoint maps to one card
+// in the UI. Destructive endpoints require an explicit body confirmation.
+// ═════════════════════════════════════════════════════════════════════════════
+
+function rdsClientFor(region) {
+  return region && region !== AWS_REGION ? new RDSClient({ region }) : rdsClient;
+}
+
+// ── POST /api/rds-restore/aws/describe-cluster ────────────────────────────────
+// Body: { region, clusterId }. Returns cluster + first-instance config so the
+// UI can auto-fill engine, subnet, security group, instance class.
+app.post('/api/rds-restore/aws/describe-cluster', async (req, res) => {
+  try {
+    const { region, clusterId } = req.body || {};
+    if (!clusterId) return res.status(400).json({ error: 'clusterId required' });
+    const client = rdsClientFor(region);
+
+    // Try Aurora cluster first.
+    let clusterFound = null;
+    try {
+      const clusters = await client.send(new DescribeDBClustersCommand({ DBClusterIdentifier: clusterId }));
+      clusterFound = clusters.DBClusters && clusters.DBClusters[0];
+    } catch (e) {
+      if (!/not found/i.test(e.message) && e.name !== 'DBClusterNotFoundFault') throw e;
+    }
+
+    if (clusterFound) {
+      const c = clusterFound;
+      const instances = await client.send(new DescribeDBInstancesCommand({
+        Filters: [{ Name: 'db-cluster-id', Values: [clusterId] }],
+      }));
+      const i = instances.DBInstances && instances.DBInstances[0];
+      return res.json({
+        kind: 'cluster',
+        cluster: {
+          engine: c.Engine,
+          engineVersion: c.EngineVersion,
+          endpoint: c.Endpoint,
+          port: c.Port,
+          masterUser: c.MasterUsername,
+          subnetGroup: c.DBSubnetGroup,
+          securityGroups: (c.VpcSecurityGroups || []).map(s => s.VpcSecurityGroupId),
+          earliestRestorableTime: c.EarliestRestorableTime,
+          latestRestorableTime: c.LatestRestorableTime,
+          status: c.Status,
+        },
+        instance: i ? {
+          instanceClass: i.DBInstanceClass,
+          publiclyAccessible: i.PubliclyAccessible,
+          availabilityZone: i.AvailabilityZone,
+        } : null,
+      });
+    }
+
+    // Fall back to regular RDS instance.
+    const instOut = await client.send(new DescribeDBInstancesCommand({ DBInstanceIdentifier: clusterId }));
+    const i = instOut.DBInstances && instOut.DBInstances[0];
+    if (!i) return res.status(404).json({ error: `Neither cluster nor instance found for "${clusterId}"` });
+    return res.json({
+      kind: 'instance',
+      cluster: {
+        engine: i.Engine,
+        engineVersion: i.EngineVersion,
+        endpoint: i.Endpoint?.Address || null,
+        port: i.Endpoint?.Port || null,
+        masterUser: i.MasterUsername,
+        subnetGroup: i.DBSubnetGroup?.DBSubnetGroupName,
+        securityGroups: (i.VpcSecurityGroups || []).map(s => s.VpcSecurityGroupId),
+        earliestRestorableTime: i.EarliestRestorableTime,
+        latestRestorableTime: i.LatestRestorableTime,
+        status: i.DBInstanceStatus,
+      },
+      instance: {
+        instanceClass: i.DBInstanceClass,
+        publiclyAccessible: i.PubliclyAccessible,
+        availabilityZone: i.AvailabilityZone,
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── POST /api/rds-restore/aws/restore-cluster ─────────────────────────────────
+// Body: {
+//   region, mode: 'snapshot' | 'pitr',
+//   tempClusterId, engine, engineVersion, subnetGroup, securityGroups: [],
+//   // mode=snapshot:
+//   snapshotId,
+//   // mode=pitr:
+//   srcClusterId, pitrTime (ISO),
+//   confirm: 'YES'
+// }
+app.post('/api/rds-restore/aws/restore-cluster', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.confirm !== 'YES') return res.status(400).json({ error: 'Body confirm must be "YES" (creates a new billable resource)' });
+    if (!b.subnetGroup) return res.status(400).json({ error: 'subnetGroup required' });
+    if (!b.securityGroups || !b.securityGroups.length) return res.status(400).json({ error: 'securityGroups required' });
+    const client = rdsClientFor(b.region);
+    const kind = b.kind === 'instance' ? 'instance' : 'cluster';
+
+    if (kind === 'cluster') {
+      if (!b.tempClusterId) return res.status(400).json({ error: 'tempClusterId required' });
+      if (b.mode === 'pitr') {
+        if (!b.srcClusterId) return res.status(400).json({ error: 'srcClusterId required for PITR' });
+        if (!b.pitrTime) return res.status(400).json({ error: 'pitrTime required for PITR' });
+        const out = await client.send(new RestoreDBClusterToPointInTimeCommand({
+          DBClusterIdentifier: b.tempClusterId,
+          SourceDBClusterIdentifier: b.srcClusterId,
+          RestoreToTime: new Date(b.pitrTime),
+          DBSubnetGroupName: b.subnetGroup,
+          VpcSecurityGroupIds: b.securityGroups,
+        }));
+        return res.json({ kind, identifier: b.tempClusterId, arn: out.DBCluster?.DBClusterArn, status: out.DBCluster?.Status });
+      }
+      if (!b.snapshotId) return res.status(400).json({ error: 'snapshotId required for snapshot mode' });
+      const out = await client.send(new RestoreDBClusterFromSnapshotCommand({
+        DBClusterIdentifier: b.tempClusterId,
+        SnapshotIdentifier: b.snapshotId,
+        Engine: b.engine || 'aurora-postgresql',
+        EngineVersion: b.engineVersion || undefined,
+        DBSubnetGroupName: b.subnetGroup,
+        VpcSecurityGroupIds: b.securityGroups,
+      }));
+      return res.json({ kind, identifier: b.tempClusterId, arn: out.DBCluster?.DBClusterArn, status: out.DBCluster?.Status });
+    }
+
+    // kind === 'instance' — regular RDS. The restore call creates the new
+    // instance directly; there is no separate cluster + create-instance step.
+    if (!b.tempInstanceId) return res.status(400).json({ error: 'tempInstanceId required for instance mode' });
+    if (b.mode === 'pitr') {
+      if (!b.srcClusterId) return res.status(400).json({ error: 'srcClusterId required for PITR (source instance id)' });
+      if (!b.pitrTime) return res.status(400).json({ error: 'pitrTime required for PITR' });
+      const out = await client.send(new RestoreDBInstanceToPointInTimeCommand({
+        SourceDBInstanceIdentifier: b.srcClusterId,
+        TargetDBInstanceIdentifier: b.tempInstanceId,
+        RestoreTime: new Date(b.pitrTime),
+        DBSubnetGroupName: b.subnetGroup,
+        VpcSecurityGroupIds: b.securityGroups,
+        DBInstanceClass: b.instanceClass || undefined,
+        PubliclyAccessible: !!b.publiclyAccessible,
+      }));
+      return res.json({ kind, identifier: b.tempInstanceId, arn: out.DBInstance?.DBInstanceArn, status: out.DBInstance?.DBInstanceStatus });
+    }
+    if (!b.snapshotId) return res.status(400).json({ error: 'snapshotId required for snapshot mode' });
+    const out = await client.send(new RestoreDBInstanceFromDBSnapshotCommand({
+      DBInstanceIdentifier: b.tempInstanceId,
+      DBSnapshotIdentifier: b.snapshotId,
+      DBSubnetGroupName: b.subnetGroup,
+      VpcSecurityGroupIds: b.securityGroups,
+      DBInstanceClass: b.instanceClass || undefined,
+      Engine: b.engine || 'postgres',
+      PubliclyAccessible: !!b.publiclyAccessible,
+    }));
+    return res.json({ kind, identifier: b.tempInstanceId, arn: out.DBInstance?.DBInstanceArn, status: out.DBInstance?.DBInstanceStatus });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── POST /api/rds-restore/aws/create-instance ─────────────────────────────────
+// Body: { region, tempClusterId, tempInstanceId, instanceClass, engine, publiclyAccessible, confirm: 'YES' }
+app.post('/api/rds-restore/aws/create-instance', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.confirm !== 'YES') return res.status(400).json({ error: 'Body confirm must be "YES" (creates a billable instance)' });
+    if (!b.tempClusterId || !b.tempInstanceId) return res.status(400).json({ error: 'tempClusterId and tempInstanceId required' });
+    const client = rdsClientFor(b.region);
+    const out = await client.send(new CreateDBInstanceCommand({
+      DBInstanceIdentifier: b.tempInstanceId,
+      DBClusterIdentifier: b.tempClusterId,
+      DBInstanceClass: b.instanceClass || 'db.t3.medium',
+      Engine: b.engine || 'aurora-postgresql',
+      PubliclyAccessible: !!b.publiclyAccessible,
+    }));
+    res.json({ instanceArn: out.DBInstance?.DBInstanceArn, status: out.DBInstance?.DBInstanceStatus });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── POST /api/rds-restore/aws/instance-status ─────────────────────────────────
+// Body: { region, tempInstanceId }. Returns { status, endpoint }. Frontend
+// polls this in a loop until status === 'available'.
+app.post('/api/rds-restore/aws/instance-status', async (req, res) => {
+  try {
+    const { region, tempInstanceId, tempClusterId } = req.body || {};
+    if (!tempInstanceId) return res.status(400).json({ error: 'tempInstanceId required' });
+    const client = rdsClientFor(region);
+    const inst = await client.send(new DescribeDBInstancesCommand({ DBInstanceIdentifier: tempInstanceId }));
+    const i = inst.DBInstances && inst.DBInstances[0];
+    let endpoint = null;
+    if (tempClusterId) {
+      try {
+        const cl = await client.send(new DescribeDBClustersCommand({ DBClusterIdentifier: tempClusterId }));
+        endpoint = cl.DBClusters?.[0]?.Endpoint || null;
+      } catch (_) { /* cluster might not exist (instance mode) */ }
+    }
+    if (!endpoint) endpoint = i?.Endpoint?.Address || null;
+    res.json({
+      status: i?.DBInstanceStatus || 'unknown',
+      endpoint,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── POST /api/rds-restore/aws/delete-instance ─────────────────────────────────
+app.post('/api/rds-restore/aws/delete-instance', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.confirm !== 'YES') return res.status(400).json({ error: 'Body confirm must be "YES" (destroys the temp instance)' });
+    if (!b.tempInstanceId) return res.status(400).json({ error: 'tempInstanceId required' });
+    const client = rdsClientFor(b.region);
+    const out = await client.send(new DeleteDBInstanceCommand({
+      DBInstanceIdentifier: b.tempInstanceId,
+      SkipFinalSnapshot: true,
+      DeleteAutomatedBackups: true,
+    }));
+    res.json({ status: out.DBInstance?.DBInstanceStatus });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── POST /api/rds-restore/aws/delete-cluster ──────────────────────────────────
+app.post('/api/rds-restore/aws/delete-cluster', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.confirm !== 'YES') return res.status(400).json({ error: 'Body confirm must be "YES" (destroys the temp cluster)' });
+    if (!b.tempClusterId) return res.status(400).json({ error: 'tempClusterId required' });
+    const client = rdsClientFor(b.region);
+    const out = await client.send(new DeleteDBClusterCommand({
+      DBClusterIdentifier: b.tempClusterId,
+      SkipFinalSnapshot: true,
+    }));
+    res.json({ status: out.DBCluster?.Status });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── POST /api/rds-restore/pg/connect-test ─────────────────────────────────────
+// Uses `x-rdsr-<side>-db-*` headers (side: 'temp' or 'prod'). Just runs a
+// SELECT 1 against the targeted connection so the UI can show green/red.
+app.post('/api/rds-restore/pg/connect-test', async (req, res) => {
+  try {
+    const side = (req.body?.side === 'prod') ? 'prod' : 'temp';
+    const { pool, host, database, user } = poolFromHeaders(req, `x-rdsr-${side}-db-`);
+    const rows = await poolQuery(pool, 'SELECT current_database() AS db, current_user AS u, version()');
+    res.json({ ok: true, host, database, user, info: rows[0] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── POST /api/rds-restore/pg/preview ──────────────────────────────────────────
+// Body: { table }, headers: x-rdsr-temp-db-*. Read-only summary of the table.
+app.post('/api/rds-restore/pg/preview', async (req, res) => {
+  try {
+    const { table } = req.body || {};
+    if (!table || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(table)) return res.status(400).json({ error: 'Invalid table name' });
+    const { pool } = poolFromHeaders(req, 'x-rdsr-temp-db-');
+    const cols = await tableColumns(pool, table);
+    if (!cols.length) return res.status(404).json({ error: `Table ${table} not found on temp` });
+    const colList = cols.map(c => quoteIdent(c.column_name)).join(', ');
+    const [{ count }] = await poolQuery(pool, `SELECT COUNT(*)::bigint AS count FROM ${quoteIdent(table)}`);
+    const sample = await poolQuery(pool, `SELECT ${colList} FROM ${quoteIdent(table)} ORDER BY ${cols.some(c => c.column_name === 'id') ? '"id" DESC' : '1'} LIMIT 5`);
+    res.json({ count: Number(count), columns: cols, sample });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── POST /api/rds-restore/pg/schema-diff ──────────────────────────────────────
+// Body: { table }. Headers: BOTH x-rdsr-temp-db-* and x-rdsr-prod-db-*.
+app.post('/api/rds-restore/pg/schema-diff', async (req, res) => {
+  try {
+    const { table } = req.body || {};
+    if (!table || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(table)) return res.status(400).json({ error: 'Invalid table name' });
+    const { pool: tempPool } = poolFromHeaders(req, 'x-rdsr-temp-db-');
+    const { pool: prodPool } = poolFromHeaders(req, 'x-rdsr-prod-db-');
+    const [tempCols, prodCols] = await Promise.all([
+      tableColumns(tempPool, table),
+      tableColumns(prodPool, table),
+    ]);
+    if (!tempCols.length) return res.status(404).json({ error: `Table ${table} not found on temp` });
+    if (!prodCols.length) return res.status(404).json({ error: `Table ${table} not found on prod` });
+
+    const tempByName = Object.fromEntries(tempCols.map(c => [c.column_name, c]));
+    const prodByName = Object.fromEntries(prodCols.map(c => [c.column_name, c]));
+    const matched = [];
+    const typeMismatch = [];
+    const tempOnly = [];
+    const prodOnly = [];
+    for (const t of tempCols) {
+      const p = prodByName[t.column_name];
+      if (!p) { tempOnly.push(t); continue; }
+      if (t.data_type !== p.data_type || t.udt_name !== p.udt_name) {
+        typeMismatch.push({ name: t.column_name, temp: t, prod: p });
+      } else {
+        matched.push({ name: t.column_name, temp: t, prod: p });
+      }
+    }
+    for (const p of prodCols) {
+      if (!tempByName[p.column_name]) prodOnly.push(p);
+    }
+    res.json({ tempCols, prodCols, matched, typeMismatch, tempOnly, prodOnly });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── POST /api/rds-restore/pg/restore-table ────────────────────────────────────
+// Body: { table, mapping: { prodCol: tempCol }, confirmTable: '<table>' }.
+// Headers: BOTH x-rdsr-temp-db-* and x-rdsr-prod-db-*.
+// Refuses if prod table has any rows. Wraps entire copy in a transaction.
+app.post('/api/rds-restore/pg/restore-table', async (req, res) => {
+  try {
+    const { table, mapping, confirmTable } = req.body || {};
+    if (!table || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(table)) return res.status(400).json({ error: 'Invalid table name' });
+    if (confirmTable !== table) return res.status(400).json({ error: 'confirmTable must exactly equal the table name' });
+    if (!mapping || typeof mapping !== 'object' || !Object.keys(mapping).length) return res.status(400).json({ error: 'mapping required' });
+    const { pool: tempPool } = poolFromHeaders(req, 'x-rdsr-temp-db-');
+    const { pool: prodPool } = poolFromHeaders(req, 'x-rdsr-prod-db-');
+
+    // 1. Validate both tables exist.
+    const [tempCols, prodCols] = await Promise.all([
+      tableColumns(tempPool, table),
+      tableColumns(prodPool, table),
+    ]);
+    if (!tempCols.length) return res.status(404).json({ error: `Table ${table} not found on temp` });
+    if (!prodCols.length) return res.status(404).json({ error: `Table ${table} not found on prod` });
+    const tempByName = Object.fromEntries(tempCols.map(c => [c.column_name, c]));
+    const prodByName = Object.fromEntries(prodCols.map(c => [c.column_name, c]));
+    const prodColNames = Object.keys(mapping);
+    const tempColNames = prodColNames.map(p => mapping[p]);
+    for (const p of prodColNames) {
+      if (!prodByName[p]) return res.status(400).json({ error: `mapping target column "${p}" not on prod` });
+    }
+    for (const t of tempColNames) {
+      if (!tempByName[t]) return res.status(400).json({ error: `mapping source column "${t}" not on temp` });
+    }
+
+    // 2. Refuse if prod table is non-empty.
+    const [{ count: prodCount }] = await poolQuery(prodPool, `SELECT COUNT(*)::bigint AS count FROM ${quoteIdent(table)}`);
+    if (BigInt(prodCount) > 0n) return res.status(409).json({ error: `Refusing: prod table has ${prodCount} rows`, prodCount: Number(prodCount) });
+
+    // 3. Stream rows from temp via cursor, insert in batches into prod inside a transaction.
+    const BATCH = 500;
+    const selectSql = `SELECT ${tempColNames.map(quoteIdent).join(', ')} FROM ${quoteIdent(table)}` +
+      (tempByName['id'] ? ` ORDER BY "id"` : '');
+    const insertSql = `INSERT INTO ${quoteIdent(table)} (${prodColNames.map(quoteIdent).join(', ')}) VALUES (${prodColNames.map((_, i) => '$' + (i + 1)).join(', ')})`;
+
+    const tempClient = await tempPool.connect();
+    const prodClient = await prodPool.connect();
+    let copied = 0;
+    const start = Date.now();
+    try {
+      await tempClient.query('BEGIN');
+      await tempClient.query(`DECLARE rdsr_cur NO SCROLL CURSOR FOR ${selectSql}`);
+      await prodClient.query('BEGIN');
+      while (true) {
+        const batch = await tempClient.query(`FETCH ${BATCH} FROM rdsr_cur`);
+        if (!batch.rows.length) break;
+        for (const row of batch.rows) {
+          const values = prodColNames.map(p => bindValue(prodByName[p], row[mapping[p]]));
+          await prodClient.query(insertSql, values);
+        }
+        copied += batch.rows.length;
+      }
+      await tempClient.query('COMMIT');
+      await prodClient.query('COMMIT');
+    } catch (e) {
+      await prodClient.query('ROLLBACK').catch(() => {});
+      await tempClient.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally {
+      tempClient.release();
+      prodClient.release();
+    }
+
+    res.json({ copied, durationMs: Date.now() - start });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── POST /api/rds-restore/pg/setval ───────────────────────────────────────────
+// Body: { table, idColumn = 'id' }. Headers: x-rdsr-prod-db-*.
+app.post('/api/rds-restore/pg/setval', async (req, res) => {
+  try {
+    const { table, idColumn } = req.body || {};
+    const col = idColumn || 'id';
+    if (!table || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(table)) return res.status(400).json({ error: 'Invalid table name' });
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(col)) return res.status(400).json({ error: 'Invalid id column' });
+    const { pool } = poolFromHeaders(req, 'x-rdsr-prod-db-');
+    const rows = await poolQuery(pool,
+      `SELECT setval(
+         pg_get_serial_sequence($1, $2),
+         GREATEST(COALESCE((SELECT MAX(${quoteIdent(col)}) FROM ${quoteIdent(table)}), 0), 1),
+         TRUE
+       ) AS newval`, [table, col]);
+    res.json({ newval: rows[0]?.newval });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ═══ DB Refresh ════════════════════════════════════════════════════════════════
+// Wipe a target env's database and copy the full public schema from any other
+// env. Sources: dev/test/staging/production. Targets: dev/test/staging only —
+// production can NEVER be a target (its hosts are hard-refused regardless of
+// labels). The target label must match the env its host belongs to, so a label
+// cannot be spoofed onto another host; the source session is physically
+// read-only; the copy is one transaction on the target.
+
+// Tables truncated on the target but NOT refilled from source (log/telemetry
+// noise — huge on prod and useless elsewhere).
+const DB_REFRESH_SKIP_TABLES = [
+  'serverpod_log',
+  'serverpod_session_log',
+  'serverpod_query_log',
+  'serverpod_message_log',
+  'serverpod_health_connection_info',
+  'serverpod_health_metric',
+  'serverpod_readwrite_test',
+];
+
+// Env → the only hosts that env may resolve to (friendly CNAME + raw RDS endpoint).
+const DB_REFRESH_ENV_HOSTS = {
+  dev:        ['localhost', '127.0.0.1'],
+  test:       ['database-test.lillian.care', 'lc-core-test.clyg4y6ua706.eu-central-1.rds.amazonaws.com'],
+  staging:    ['database-staging.lillian.care', 'lc-core-staging.clyg4y6ua706.eu-central-1.rds.amazonaws.com'],
+  production: ['database.lillian.care', 'lc-core.clyg4y6ua706.eu-central-1.rds.amazonaws.com'],
+};
+
+// Envs that may be overwritten. Production is deliberately absent.
+const DB_REFRESH_TARGET_ENVS = ['dev', 'test', 'staging'];
+
+// Hosts that must NEVER be a target, regardless of labels.
+const DB_REFRESH_PROTECTED_HOSTS = DB_REFRESH_ENV_HOSTS.production;
+
+function drEnvForHost(host) {
+  const h = (host || '').toLowerCase();
+  return Object.keys(DB_REFRESH_ENV_HOSTS).find((env) => DB_REFRESH_ENV_HOSTS[env].includes(h)) || null;
+}
+
+// Typed confirmation the run endpoint expects for a target env.
+function drConfirmationFor(env) {
+  return `REFRESH ${env.toUpperCase()}`;
+}
+
+// Connection spec from prefixed headers — like poolFromHeaders, but returns the
+// raw spec (incl. password) so we can build dedicated Clients instead of shared
+// pools. This feature sets session GUCs (default_transaction_read_only,
+// session_replication_role) that must never leak into pooled connections.
+function trSpecFromHeaders(req, prefix) {
+  return {
+    host: (req.headers[`${prefix}host`] || 'localhost').toString().trim(),
+    port: parseInt(req.headers[`${prefix}port`] || '8090'),
+    database: req.headers[`${prefix}name`] || 'lillian_care_core',
+    user: req.headers[`${prefix}user`] || 'postgres',
+    password: req.headers[`${prefix}password`] || '',
+  };
+}
+
+function trClientFor(spec) {
+  return new Client({
+    ...spec,
+    connectionTimeoutMillis: 5000,
+    ssl: spec.host !== 'localhost' && spec.host !== '127.0.0.1' ? { rejectUnauthorized: false } : false,
+  });
+}
+
+// Single source of truth for target safety. Returns an error string or null.
+function drAssertSafeTarget(req, srcSpec, tgtSpec, { destructive }) {
+  const label = (req.headers['x-tgt-env-label'] || '').toString().toLowerCase();
+  if (!DB_REFRESH_TARGET_ENVS.includes(label))
+    return `x-tgt-env-label must be one of ${DB_REFRESH_TARGET_ENVS.join('/')} (got '${label || 'missing'}')`;
+  const host = (tgtSpec.host || '').toLowerCase();
+  if (DB_REFRESH_PROTECTED_HOSTS.includes(host)) return `target host '${host}' is production — refusing`;
+  if (drEnvForHost(host) !== label) return `target host '${host}' is not a known '${label}' host — refusing`;
+  const srcEnv = drEnvForHost(srcSpec.host);
+  if (!srcEnv) return `source host '${srcSpec.host}' is not a known environment`;
+  if (srcEnv === label) return 'source and target must be different environments';
+  if (destructive) {
+    if (req.headers['x-allow-destructive'] !== 'yes') return `x-allow-destructive header must be 'yes'`;
+    const expected = drConfirmationFor(label);
+    if (((req.body || {}).confirmation) !== expected) return `body.confirmation must be the literal string '${expected}'`;
+  }
+  return null;
+}
+
+// All public BASE TABLEs, alphabetical.
+async function trListBaseTables(client) {
+  const r = await client.query(
+    `SELECT table_name FROM information_schema.tables
+     WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+     ORDER BY table_name`);
+  return r.rows.map((x) => x.table_name);
+}
+
+// One round-trip: all columns of the public schema grouped by table.
+async function trColumnsByTable(client) {
+  const r = await client.query(
+    `SELECT table_name, column_name, data_type, udt_name
+     FROM information_schema.columns
+     WHERE table_schema = 'public'
+     ORDER BY table_name, ordinal_position`);
+  const byTable = {};
+  for (const row of r.rows) {
+    (byTable[row.table_name] = byTable[row.table_name] || []).push(row);
+  }
+  return byTable;
+}
+
+// Row-count estimates for every public table in one query (never COUNT(*) —
+// prod log tables are huge). reltuples can be stale; UI labels it an estimate.
+async function trRowEstimates(client) {
+  const r = await client.query(
+    `SELECT c.relname AS table_name, GREATEST(c.reltuples, 0)::bigint AS rows
+     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public' AND c.relkind = 'r'`);
+  const map = {};
+  for (const row of r.rows) map[row.table_name] = parseInt(row.rows);
+  return map;
+}
+
+// Source → target type changes that can never lose data. Older envs (staging,
+// prod) were created by a Serverpod version with int4 ids; freshly-created DBs
+// (dev) use int8 — migrations never change id types, so this drift is normal.
+const DB_REFRESH_SAFE_WIDENINGS = new Set([
+  'int2>int4', 'int2>int8', 'int4>int8',
+  'float4>float8',
+  'varchar>text', 'bpchar>text',
+  'json>jsonb',
+]);
+
+// Schema comparison. Column drift on shared tables is a hard fail. Tables that
+// exist on only one side are reported but not blocking: source-only tables are
+// not copied (the target's code doesn't know them — e.g. a hand-made table on
+// staging), target-only tables are emptied by the TRUNCATE and left empty.
+// Skip tables are excluded — they aren't copied, so drift there is irrelevant.
+function trSchemaDiff(srcTables, tgtTables, srcCols, tgtCols) {
+  const skip = new Set(DB_REFRESH_SKIP_TABLES);
+  const src = srcTables.filter((t) => !skip.has(t));
+  const tgt = tgtTables.filter((t) => !skip.has(t));
+  const srcSet = new Set(src), tgtSet = new Set(tgt);
+  const srcOnlyTables = src.filter((t) => !tgtSet.has(t));
+  const tgtOnlyTables = tgt.filter((t) => !srcSet.has(t));
+  const columnDiffs = [];
+  const widenings = []; // safe type changes — reported, not blocking
+  for (const t of src.filter((x) => tgtSet.has(x))) {
+    const sCols = srcCols[t] || [], tCols = tgtCols[t] || [];
+    const sByName = new Map(sCols.map((c) => [c.column_name, c]));
+    const tByName = new Map(tCols.map((c) => [c.column_name, c]));
+    const srcOnly = sCols.filter((c) => !tByName.has(c.column_name)).map((c) => c.column_name);
+    const tgtOnly = tCols.filter((c) => !sByName.has(c.column_name)).map((c) => c.column_name);
+    const typeChanges = sCols
+      .filter((c) => tByName.has(c.column_name) && tByName.get(c.column_name).udt_name !== c.udt_name)
+      .map((c) => ({ column: c.column_name, src: c.udt_name, tgt: tByName.get(c.column_name).udt_name }));
+    const typeMismatch = typeChanges.filter((m) => !DB_REFRESH_SAFE_WIDENINGS.has(`${m.src}>${m.tgt}`));
+    const widened = typeChanges.filter((m) => DB_REFRESH_SAFE_WIDENINGS.has(`${m.src}>${m.tgt}`));
+    if (srcOnly.length || tgtOnly.length || typeMismatch.length) {
+      columnDiffs.push({ table: t, srcOnly, tgtOnly, typeMismatch });
+    }
+    if (widened.length) widenings.push({ table: t, columns: widened });
+  }
+  return {
+    ok: !columnDiffs.length,
+    srcOnlyTables, tgtOnlyTables, columnDiffs, widenings,
+  };
+}
+
+// ── POST /api/db-refresh/preflight ───────────────────────────────────────────
+// Headers: x-src-db-*, x-tgt-db-*, x-tgt-env-label: dev|test|staging. Read-only.
+// Returns schema diff, row estimates and the replica-role capability probe.
+app.post('/api/db-refresh/preflight', async (req, res) => {
+  const srcSpec = trSpecFromHeaders(req, 'x-src-db-');
+  const tgtSpec = trSpecFromHeaders(req, 'x-tgt-db-');
+  const guardErr = drAssertSafeTarget(req, srcSpec, tgtSpec, { destructive: false });
+  if (guardErr) return res.status(400).json({ error: guardErr });
+
+  const srcClient = trClientFor(srcSpec);
+  const tgtClient = trClientFor(tgtSpec);
+  try {
+    await srcClient.connect();
+    await srcClient.query('SET default_transaction_read_only = on');
+    await tgtClient.connect();
+
+    const [srcTables, tgtTables, srcCols, tgtCols, srcRows, tgtRows] = await Promise.all([
+      trListBaseTables(srcClient), trListBaseTables(tgtClient),
+      trColumnsByTable(srcClient), trColumnsByTable(tgtClient),
+      trRowEstimates(srcClient), trRowEstimates(tgtClient),
+    ]);
+    const diff = trSchemaDiff(srcTables, tgtTables, srcCols, tgtCols);
+
+    // Capability probe: can the target session enter replica mode (needed to
+    // bypass FK triggers during the copy)? Touches no data.
+    let replicaRoleOk = false, replicaRoleError = null;
+    try {
+      await tgtClient.query('BEGIN');
+      await tgtClient.query('SET LOCAL session_replication_role = replica');
+      const show = await tgtClient.query('SHOW session_replication_role');
+      replicaRoleOk = show.rows[0]?.session_replication_role === 'replica';
+      if (!replicaRoleOk) replicaRoleError = `SHOW returned '${show.rows[0]?.session_replication_role}'`;
+    } catch (e) {
+      replicaRoleError = e.message;
+    } finally {
+      await tgtClient.query('ROLLBACK').catch(() => {});
+    }
+
+    const skipSet = new Set(DB_REFRESH_SKIP_TABLES);
+    const srcSet = new Set(srcTables), tgtSet = new Set(tgtTables);
+    const allTables = [...new Set([...srcTables, ...tgtTables])].sort();
+    res.json({
+      ok: true,
+      schemaOk: diff.ok,
+      replicaRoleOk,
+      replicaRoleError,
+      diff,
+      tables: allTables.map((t) => ({
+        table: t,
+        srcRows: srcRows[t] ?? null,
+        tgtRows: tgtRows[t] ?? null,
+        skipped: skipSet.has(t),
+        srcOnly: !tgtSet.has(t),
+        tgtOnly: !srcSet.has(t),
+      })),
+      skipTables: DB_REFRESH_SKIP_TABLES,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  } finally {
+    await srcClient.end().catch(() => {});
+    await tgtClient.end().catch(() => {});
+  }
+});
+
+// ── POST /api/db-refresh/run ──────────────────────────────────────────────────
+// Wipe target + full copy. Headers: x-src-db-*, x-tgt-db-*,
+// x-tgt-env-label: dev|test|staging, x-allow-destructive: yes.
+// Body: { confirmation: 'REFRESH <TARGET ENV>' }.
+// Streams NDJSON progress events: start / table / done / error. The client must
+// treat a stream that ends without a 'done' event as a failure (HTTP 200 is
+// already committed when errors surface mid-copy; the tx still rolls back).
+app.post('/api/db-refresh/run', async (req, res) => {
+  const srcSpec = trSpecFromHeaders(req, 'x-src-db-');
+  const tgtSpec = trSpecFromHeaders(req, 'x-tgt-db-');
+  const guardErr = drAssertSafeTarget(req, srcSpec, tgtSpec, { destructive: true });
+  if (guardErr) return res.status(400).json({ error: guardErr });
+
+  res.setHeader('Content-Type', 'application/x-ndjson');
+  res.setHeader('X-Accel-Buffering', 'no');
+  const emit = (evt) => res.write(JSON.stringify(evt) + '\n');
+
+  const srcClient = trClientFor(srcSpec);
+  const tgtClient = trClientFor(tgtSpec);
+  let aborted = false;
+  // res 'close' with writableEnded=false means the client went away mid-stream
+  // (req 'close' fires on normal body completion in modern Node — wrong signal).
+  res.on('close', () => { if (!res.writableEnded) aborted = true; });
+  const startedAt = Date.now();
+
+  try {
+    await srcClient.connect();
+    // Source is physically read-only for the whole session: even a code bug
+    // cannot write to the source env. REPEATABLE READ gives one consistent
+    // snapshot across all tables for the duration of the copy.
+    await srcClient.query('SET default_transaction_read_only = on');
+    await srcClient.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    await tgtClient.connect();
+
+    // Server-side re-verification — never trust the client's preflight.
+    const [srcTables, tgtTables, srcCols, tgtCols] = await Promise.all([
+      trListBaseTables(srcClient), trListBaseTables(tgtClient),
+      trColumnsByTable(srcClient), trColumnsByTable(tgtClient),
+    ]);
+    const diff = trSchemaDiff(srcTables, tgtTables, srcCols, tgtCols);
+    if (!diff.ok) {
+      emit({ type: 'error', message: 'Column drift between source and target — refusing to copy. Migrate the target first.', diff });
+      return;
+    }
+
+    await tgtClient.query('BEGIN');
+    // SET LOCAL dies with the transaction — cannot leak into later sessions.
+    await tgtClient.query('SET LOCAL session_replication_role = replica');
+    const show = await tgtClient.query('SHOW session_replication_role');
+    if (show.rows[0]?.session_replication_role !== 'replica') {
+      emit({ type: 'error', message: `Target user cannot enter replica mode (needed to bypass FK order). Nothing was changed.` });
+      await tgtClient.query('ROLLBACK');
+      return;
+    }
+
+    const skipSet = new Set(DB_REFRESH_SKIP_TABLES);
+    // Only tables present on both sides; one-sided tables are reported by preflight.
+    const tgtSet = new Set(tgtTables);
+    const copyTables = srcTables.filter((t) => !skipSet.has(t) && tgtSet.has(t));
+    emit({ type: 'start', tables: copyTables, truncating: tgtTables.length });
+
+    // Wipe: every target table in ONE statement — transactional, FK-order
+    // irrelevant. Skip tables are truncated too, just not refilled.
+    await tgtClient.query(
+      `TRUNCATE ${tgtTables.map(quoteIdent).join(', ')} RESTART IDENTITY CASCADE`);
+
+    let totalRows = 0;
+    for (let i = 0; i < copyTables.length; i++) {
+      const t = copyTables[i];
+      if (aborted) throw new Error('Client disconnected — rolling back');
+      const t0 = Date.now();
+      const cols = srcCols[t];
+      const colList = cols.map((c) => quoteIdent(c.column_name)).join(', ');
+      // Chunk inserts to stay under pg's 65535 bind-param limit.
+      const rowsPerInsert = Math.max(1, Math.floor(30000 / cols.length));
+
+      await srcClient.query(`DECLARE tr_cur NO SCROLL CURSOR FOR SELECT ${colList} FROM ${quoteIdent(t)}`);
+      let copied = 0;
+      try {
+        for (;;) {
+          if (aborted) throw new Error('Client disconnected — rolling back');
+          const batch = await srcClient.query(`FETCH 1000 FROM tr_cur`);
+          if (!batch.rows.length) break;
+          for (let off = 0; off < batch.rows.length; off += rowsPerInsert) {
+            const chunk = batch.rows.slice(off, off + rowsPerInsert);
+            const params = [];
+            const valueTuples = chunk.map((row) => {
+              const ph = cols.map((c) => {
+                params.push(bindValue(c, row[c.column_name]));
+                return `$${params.length}`;
+              });
+              return `(${ph.join(',')})`;
+            });
+            await tgtClient.query(
+              `INSERT INTO ${quoteIdent(t)} (${colList}) VALUES ${valueTuples.join(',')}`, params);
+            copied += chunk.length;
+          }
+        }
+      } finally {
+        await srcClient.query('CLOSE tr_cur').catch(() => {});
+      }
+      totalRows += copied;
+      emit({ type: 'table', table: t, rows: copied, ms: Date.now() - t0, i: i + 1, n: copyTables.length });
+    }
+
+    // Advance sequences past the preserved ids, inside the same transaction.
+    for (const t of copyTables) {
+      if (!srcCols[t].some((c) => c.column_name === 'id')) continue;
+      const seq = await tgtClient.query(`SELECT pg_get_serial_sequence($1, 'id') AS seq`, [t]);
+      if (!seq.rows[0]?.seq) continue;
+      await tgtClient.query(
+        `SELECT setval($1, GREATEST(COALESCE((SELECT MAX("id") FROM ${quoteIdent(t)}), 0), 1), TRUE)`,
+        [seq.rows[0].seq]);
+    }
+
+    await tgtClient.query('COMMIT');
+    await srcClient.query('COMMIT').catch(() => {});
+    emit({
+      type: 'done',
+      summary: {
+        tablesCopied: copyTables.length,
+        totalRows,
+        skipped: DB_REFRESH_SKIP_TABLES,
+        durationMs: Date.now() - startedAt,
+      },
+    });
+  } catch (e) {
+    await tgtClient.query('ROLLBACK').catch(() => {});
+    if (!aborted) emit({ type: 'error', message: e.message });
+  } finally {
+    await srcClient.end().catch(() => {});
+    await tgtClient.end().catch(() => {});
+    res.end();
+  }
+});
+
+// ─── Routes: SSH tunnels via SSM port-forwarding ─────────────────────────────
+// One-click `aws ssm start-session --document AWS-StartPortForwardingSession`
+// per environment, so a private (no public IP) app instance can be reached over
+// a local port — Termius/ssh point at 127.0.0.1:<localPort>. The instance id is
+// resolved automatically from the ASG Name tag; no manual lookup needed.
+const { spawn } = require('child_process');
+
+// A GUI-launched node often lacks Homebrew's bin dir on PATH, which is where
+// session-manager-plugin lives. Prepend the common install locations.
+const SSM_PATH = ['/opt/homebrew/bin', '/usr/local/bin', process.env.PATH || ''].join(':');
+
+const SSM_ENVS = {
+  test:       { tag: 'lc-core-serverpod-test',    localPort: 2201 },
+  staging:    { tag: 'lc-core-serverpod-staging', localPort: 2202 },
+  production: { tag: 'lc-core-serverpod',         localPort: 2203 },
+};
+const SSM_REMOTE_PORT = 22;
+
+// env → live session record. status: 'starting' | 'connected' | 'error' | 'stopped'
+const ssmSessions = new Map();
+
+function ssmPublicState(env) {
+  const s = ssmSessions.get(env);
+  const cfg = SSM_ENVS[env];
+  return {
+    env,
+    localPort: cfg.localPort,
+    remotePort: SSM_REMOTE_PORT,
+    tag: cfg.tag,
+    status: s ? s.status : 'stopped',
+    instanceId: s ? s.instanceId : null,
+    sessionId: s ? s.sessionId : null,
+    startedAt: s ? s.startedAt : null,
+    error: s ? s.lastError : null,
+  };
+}
+
+async function ssmResolveInstanceId(tag) {
+  const out = await ec2Client.send(new DescribeInstancesCommand({
+    Filters: [
+      { Name: 'tag:Name', Values: [tag] },
+      { Name: 'instance-state-name', Values: ['running'] },
+    ],
+  }));
+  const instances = (out.Reservations || []).flatMap(r => r.Instances || []);
+  if (!instances.length) throw new Error(`No running instance tagged Name=${tag}`);
+  instances.sort((a, b) => new Date(b.LaunchTime) - new Date(a.LaunchTime));
+  return instances[0].InstanceId;
+}
+
+app.get('/api/ssm/status', (req, res) => {
+  res.json({ envs: Object.keys(SSM_ENVS).map(ssmPublicState) });
+});
+
+app.post('/api/ssm/connect', async (req, res) => {
+  const env = (req.body && req.body.env) || '';
+  const cfg = SSM_ENVS[env];
+  if (!cfg) return res.status(400).json({ error: `Unknown env "${env}"` });
+
+  const existing = ssmSessions.get(env);
+  if (existing && (existing.status === 'connected' || existing.status === 'starting')) {
+    return res.json(ssmPublicState(env));
+  }
+
+  try {
+    const instanceId = await ssmResolveInstanceId(cfg.tag);
+    const params = JSON.stringify({
+      portNumber: [String(SSM_REMOTE_PORT)],
+      localPortNumber: [String(cfg.localPort)],
+    });
+    const child = spawn('aws', [
+      'ssm', 'start-session',
+      '--target', instanceId,
+      '--document-name', 'AWS-StartPortForwardingSession',
+      '--parameters', params,
+      '--region', AWS_REGION,
+    ], { env: { ...process.env, PATH: SSM_PATH } });
+
+    const record = { child, instanceId, status: 'starting', startedAt: Date.now(), lastError: null, sessionId: null };
+    ssmSessions.set(env, record);
+
+    let settled = false;
+    const finish = (state) => {
+      if (settled) return;
+      settled = true;
+      res.json({ ...ssmPublicState(env), status: state });
+    };
+
+    child.stdout.on('data', (buf) => {
+      const text = buf.toString();
+      const sid = /SessionId:\s*(\S+)/.exec(text);
+      if (sid) record.sessionId = sid[1];
+      if (/Waiting for connections/i.test(text)) {
+        record.status = 'connected';
+        finish('connected');
+      }
+    });
+    child.stderr.on('data', (buf) => {
+      record.lastError = buf.toString().trim().slice(0, 500);
+    });
+    child.on('error', (err) => {
+      record.status = 'error';
+      record.lastError = err.message;
+      finish('error');
+    });
+    child.on('exit', (code) => {
+      if (record.status !== 'connected' && !record.lastError) {
+        record.lastError = `aws ssm exited (code ${code})`;
+      }
+      record.status = 'stopped';
+      if (ssmSessions.get(env) === record) ssmSessions.delete(env);
+      finish(code === 0 ? 'stopped' : 'error');
+    });
+
+    setTimeout(() => finish(record.status), 6000);
+  } catch (e) {
+    ssmSessions.delete(env);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/ssm/disconnect', (req, res) => {
+  const env = (req.body && req.body.env) || '';
+  if (!SSM_ENVS[env]) return res.status(400).json({ error: `Unknown env "${env}"` });
+  const s = ssmSessions.get(env);
+  if (s && s.child) {
+    try { s.child.kill('SIGTERM'); } catch (_) {}
+  }
+  ssmSessions.delete(env);
+  res.json(ssmPublicState(env));
+});
+
+// Best-effort cleanup so we don't leak SSM sessions when the debugger stops.
+function ssmKillAll() {
+  for (const s of ssmSessions.values()) {
+    if (s && s.child) { try { s.child.kill('SIGTERM'); } catch (_) {} }
+  }
+}
+process.on('SIGINT', () => { ssmKillAll(); process.exit(0); });
+process.on('SIGTERM', () => { ssmKillAll(); process.exit(0); });
+
+// ─── Local stack (Serverpod dev server + Docker Postgres/Redis) ─────────────
+// Keeps the local backend (LillianCare-Core) running so the `dev` preset works.
+// Serverpod is spawned detached in its own process group and tracked via a PID
+// file, so restarting the helper (launchd kickstart) does not kill it. Docker
+// Desktop's CLI is not on PATH for GUI/launchd processes, so we point at it.
+const net = require('net');
+const { execFile } = require('child_process');
+
+const LS_DIR = path.join(__dirname, '.local-stack');
+const LS_PID_FILE = path.join(LS_DIR, 'serverpod.pid');
+const LS_LOG_FILE = path.join(LS_DIR, 'serverpod.log');
+const LS_CONFIG_FILE = path.join(LS_DIR, 'config.json');
+const LS_HELPER_LOG = path.join(process.env.HOME || '', 'Library', 'Logs', 'LCHelper', 'server.log');
+const LS_SERVERPOD_DIR = process.env.LC_SERVERPOD_DIR
+  || path.resolve(__dirname, '..', 'LillianCare-Core', 'lillian_care_core_server');
+const LS_API_PORT = 8080;
+const LS_PATH = [
+  '/Applications/Docker.app/Contents/Resources/bin',
+  path.join(process.env.HOME || '', 'Dev', 'flutter', 'bin'),
+  '/opt/homebrew/bin', '/usr/local/bin', process.env.PATH || '',
+].join(':');
+const LS_ENV = { ...process.env, PATH: LS_PATH };
+const LS_DEFAULT_CONFIG = { autostart: true, applyMigrations: false };
+
+fs.mkdirSync(LS_DIR, { recursive: true });
+
+// Transient state only this process knows about (in-flight actions, exit codes
+// of children we spawned ourselves).
+const lsState = { action: null, actionError: null, lastExit: null, child: null, stopRequested: false };
+
+function lsReadConfig() {
+  try { return { ...LS_DEFAULT_CONFIG, ...JSON.parse(fs.readFileSync(LS_CONFIG_FILE, 'utf8')) }; }
+  catch (_) { return { ...LS_DEFAULT_CONFIG }; }
+}
+
+function lsWriteConfig(cfg) {
+  fs.writeFileSync(LS_CONFIG_FILE, JSON.stringify(cfg, null, 2));
+}
+
+function lsExec(cmd, args, opts = {}) {
+  return new Promise((resolve) => {
+    execFile(cmd, args, { env: LS_ENV, timeout: opts.timeout || 20000, cwd: opts.cwd, maxBuffer: 4 * 1024 * 1024 },
+      (err, stdout, stderr) => resolve({ ok: !err, stdout: String(stdout || ''), stderr: String(stderr || ''), err }));
+  });
+}
+
+function lsPortOpen(port, host = '127.0.0.1') {
+  return new Promise((resolve) => {
+    const sock = net.connect({ port, host });
+    const done = (v) => { sock.destroy(); resolve(v); };
+    sock.setTimeout(600, () => done(false));
+    sock.once('connect', () => done(true));
+    sock.once('error', () => done(false));
+  });
+}
+
+function lsPidAlive(pid) {
+  if (!pid) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
+
+function lsReadPid() {
+  try {
+    const rec = JSON.parse(fs.readFileSync(LS_PID_FILE, 'utf8'));
+    return lsPidAlive(rec.pid) ? rec : null;
+  } catch (_) { return null; }
+}
+
+async function lsDockerStatus() {
+  const info = await lsExec('docker', ['info', '--format', '{{.ServerVersion}}'], { timeout: 8000 });
+  // While Docker Desktop boots, `docker info` can succeed with an empty engine version.
+  if (!info.ok || !info.stdout.trim()) {
+    const cli = fs.existsSync('/Applications/Docker.app');
+    return { state: cli ? 'stopped' : 'unavailable', detail: cli ? 'Docker Desktop is not running' : 'Docker Desktop not installed', containers: [] };
+  }
+  const ps = await lsExec('docker', ['compose', 'ps', '--all', '--format', 'json'], { cwd: LS_SERVERPOD_DIR, timeout: 10000 });
+  let containers = [];
+  if (ps.ok) {
+    // `docker compose ps --format json` prints either a JSON array or NDJSON depending on version.
+    const text = ps.stdout.trim();
+    const rows = text.startsWith('[') ? JSON.parse(text) : text.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    containers = rows.map((r) => ({ service: r.Service, state: r.State, status: r.Status, ports: r.Publishers
+      ? r.Publishers.filter((p) => p.PublishedPort).map((p) => p.PublishedPort) : [] }));
+  }
+  return { state: 'running', detail: `Engine ${info.stdout.trim()}`, containers };
+}
+
+async function lsServerpodStatus() {
+  const rec = lsReadPid();
+  const listening = await lsPortOpen(LS_API_PORT);
+  if (lsState.action === 'stopping') return { state: 'stopping', pid: rec && rec.pid };
+  if (rec) {
+    return {
+      state: listening ? 'running' : 'starting',
+      pid: rec.pid, since: rec.startedAt, applyMigrations: !!rec.applyMigrations,
+      detail: listening ? `API on :${LS_API_PORT}` : 'Compiling / booting…',
+    };
+  }
+  if (listening) return { state: 'running', external: true, detail: `Something is listening on :${LS_API_PORT} (started outside LC Helper)` };
+  if (lsState.action === 'starting') return { state: 'starting', detail: 'Waiting for Docker…' };
+  if (lsState.lastExit && !lsState.stopRequested) {
+    return { state: 'crashed', detail: `Exited with code ${lsState.lastExit.code}`, exitCode: lsState.lastExit.code, exitedAt: lsState.lastExit.at };
+  }
+  return { state: 'stopped' };
+}
+
+async function lsStatus() {
+  const [docker, serverpod] = await Promise.all([lsDockerStatus(), lsServerpodStatus()]);
+  return {
+    docker, serverpod,
+    config: lsReadConfig(),
+    action: lsState.action, actionError: lsState.actionError,
+    serverpodDir: LS_SERVERPOD_DIR, serverpodDirExists: fs.existsSync(LS_SERVERPOD_DIR),
+  };
+}
+
+async function lsEnsureDocker() {
+  let st = await lsDockerStatus();
+  if (st.state === 'unavailable') throw new Error(st.detail);
+  if (st.state !== 'running') {
+    await lsExec('open', ['-g', '-a', 'Docker']);
+    const deadline = Date.now() + 120000;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 2000));
+      st = await lsDockerStatus();
+      if (st.state === 'running') break;
+    }
+    if (st.state !== 'running') throw new Error('Docker Desktop did not become ready within 2 minutes');
+  }
+  let up = await lsExec('docker', ['compose', 'up', '--detach'], { cwd: LS_SERVERPOD_DIR, timeout: 180000 });
+  for (let i = 0; !up.ok && i < 3; i++) { // the engine may still be settling right after launch
+    await new Promise((r) => setTimeout(r, 5000));
+    up = await lsExec('docker', ['compose', 'up', '--detach'], { cwd: LS_SERVERPOD_DIR, timeout: 180000 });
+  }
+  if (!up.ok) throw new Error(`docker compose up failed: ${(up.stderr || up.stdout).trim().slice(-600)}`);
+}
+
+async function lsStartServerpod() {
+  if (lsReadPid() || await lsPortOpen(LS_API_PORT)) return; // already running (ours or external)
+  if (!fs.existsSync(LS_SERVERPOD_DIR)) throw new Error(`Serverpod directory not found: ${LS_SERVERPOD_DIR}`);
+  await lsEnsureDocker();
+
+  // Keep the log bounded: rotate once it passes 10 MB.
+  try { if (fs.statSync(LS_LOG_FILE).size > 10 * 1024 * 1024) fs.renameSync(LS_LOG_FILE, LS_LOG_FILE + '.1'); } catch (_) {}
+  const cfg = lsReadConfig();
+  const args = ['run', 'bin/main.dart', '--mode', 'development'];
+  if (cfg.applyMigrations) args.push('--apply-migrations');
+  const fd = fs.openSync(LS_LOG_FILE, 'a');
+  fs.writeSync(fd, `\n──── ${new Date().toISOString()} · LC Helper starting: dart ${args.join(' ')} ────\n`);
+  const child = spawn('dart', args, { cwd: LS_SERVERPOD_DIR, env: LS_ENV, detached: true, stdio: ['ignore', fd, fd] });
+  fs.closeSync(fd);
+  await new Promise((resolve, reject) => {
+    child.once('spawn', resolve);
+    child.once('error', (e) => reject(new Error(`Could not start dart: ${e.message}`)));
+  });
+  fs.writeFileSync(LS_PID_FILE, JSON.stringify({ pid: child.pid, startedAt: Date.now(), applyMigrations: cfg.applyMigrations }));
+  lsState.child = child;
+  lsState.stopRequested = false;
+  lsState.lastExit = null;
+  child.on('exit', (code, signal) => {
+    lsState.child = null;
+    lsState.lastExit = { code: code == null ? signal : code, at: Date.now() };
+    try { fs.unlinkSync(LS_PID_FILE); } catch (_) {}
+  });
+  child.unref();
+}
+
+async function lsStopServerpod() {
+  lsState.stopRequested = true;
+  const rec = lsReadPid();
+  if (!rec) return;
+  // `dart run` forks the VM, so signal the whole process group.
+  const kill = (sig) => { try { process.kill(-rec.pid, sig); } catch (_) { try { process.kill(rec.pid, sig); } catch (_) {} } };
+  kill('SIGTERM');
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline && lsPidAlive(rec.pid)) await new Promise((r) => setTimeout(r, 300));
+  if (lsPidAlive(rec.pid)) kill('SIGKILL');
+  try { fs.unlinkSync(LS_PID_FILE); } catch (_) {}
+}
+
+// Runs one lifecycle action at a time; the HTTP call returns immediately and the
+// UI polls /status to follow progress.
+function lsRun(action, fn) {
+  if (lsState.action) return false;
+  lsState.action = action;
+  lsState.actionError = null;
+  fn().catch((e) => { lsState.actionError = e.message; console.error(`[local-stack] ${action} failed:`, e.message); })
+    .finally(() => { lsState.action = null; });
+  return true;
+}
+
+function lsTail(file, maxLines) {
+  try {
+    const size = fs.statSync(file).size;
+    const len = Math.min(size, 512 * 1024);
+    const buf = Buffer.alloc(len);
+    const fd = fs.openSync(file, 'r');
+    fs.readSync(fd, buf, 0, len, size - len);
+    fs.closeSync(fd);
+    const lines = buf.toString('utf8').split('\n');
+    if (len < size) lines.shift(); // first line is probably partial
+    return lines.slice(-maxLines);
+  } catch (_) { return []; }
+}
+
+app.get('/api/local-stack/status', async (req, res) => {
+  try { res.json(await lsStatus()); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/local-stack/start', async (req, res) => {
+  lsRun('starting', lsStartServerpod);
+  res.json(await lsStatus());
+});
+
+app.post('/api/local-stack/stop', async (req, res) => {
+  const includeDocker = !!(req.body && req.body.includeDocker);
+  lsRun('stopping', async () => {
+    await lsStopServerpod();
+    if (includeDocker) await lsExec('docker', ['compose', 'stop'], { cwd: LS_SERVERPOD_DIR, timeout: 60000 });
+  });
+  res.json(await lsStatus());
+});
+
+app.post('/api/local-stack/restart', async (req, res) => {
+  lsRun('restarting', async () => { await lsStopServerpod(); await lsStartServerpod(); });
+  res.json(await lsStatus());
+});
+
+app.post('/api/local-stack/config', (req, res) => {
+  const cfg = lsReadConfig();
+  const body = req.body || {};
+  if (typeof body.autostart === 'boolean') cfg.autostart = body.autostart;
+  if (typeof body.applyMigrations === 'boolean') cfg.applyMigrations = body.applyMigrations;
+  lsWriteConfig(cfg);
+  res.json({ config: cfg });
+});
+
+app.get('/api/local-stack/logs', (req, res) => {
+  const tail = Math.min(parseInt(req.query.tail || '500', 10) || 500, 5000);
+  const file = req.query.service === 'helper' ? LS_HELPER_LOG : LS_LOG_FILE;
+  res.json({ file, lines: lsTail(file, tail) });
+});
+
+// ─── Routes: Build & Release (Flutter apps) ──────────────────────────────────
+// Builds the two Flutter apps (web / Android / iOS, test or prod) and deploys
+// web builds to S3 + CloudFront. One job at a time: every build starts with
+// `flutter clean`, and both apps share one pub workspace, so parallel jobs
+// would trample each other. Mobile artifacts are revealed in Finder.
+const RL_APPS_DIR = process.env.LC_APPS_DIR
+  || path.resolve(__dirname, '..', 'apps-frontend', 'apps');
+const RL_APPS = {
+  praxis: {
+    label: 'Praxis app', dir: 'lillian_care_praxis_app',
+    web: {
+      test: { bucket: 'lillian-care-praxis-test', distribution: 'E212FAFCAG5Y7B', url: 'https://praxis-test.lillian-care.de' },
+      prod: { bucket: 'lillian-care-praxis-prod', distribution: 'E2HT4R4XMWOKKS', url: 'https://praxis-app.lillian-care.de' },
+    },
+  },
+  app: {
+    label: 'LillianCare app', dir: 'lillian_care_app',
+    web: {
+      test: { bucket: 'lillian-care-app-test', distribution: 'E1CDAZB8YO8U4C', url: 'https://app-test.lillian-care.de' },
+      prod: { bucket: 'lillian-care-app-prod', distribution: 'EOIX3XODFOSC1', url: 'https://app.lillian-care.de' },
+    },
+  },
+};
+const RL_ENVS = {
+  test: { flavor: 'atest', target: 'lib/main_atest.dart' },
+  prod: { flavor: 'prod', target: 'lib/main_prod.dart' },
+};
+const RL_ANDROID_FORMATS = ['apk', 'aab'];
+// Both apps are members of ONE pub workspace (apps-frontend/pubspec.yaml), so
+// every build uses the workspace root's fvm pin — not an app folder's own
+// .fvmrc (praxis pins an older SDK that can't resolve the shared workspace).
+const RL_WORKSPACE_DIR = path.resolve(RL_APPS_DIR, '..');
+const RL_FVM_VERSIONS_DIR = path.join(process.env.FVM_CACHE_PATH || path.join(process.env.HOME || '', 'fvm'), 'versions');
+
+// Returns { version, bin } for the workspace's pinned SDK, or { error }.
+function rlSdk() {
+  let version;
+  try { version = JSON.parse(fs.readFileSync(path.join(RL_WORKSPACE_DIR, '.fvmrc'), 'utf8')).flutter; }
+  catch (e) { return { error: `cannot read ${path.join(RL_WORKSPACE_DIR, '.fvmrc')}: ${e.message}` }; }
+  const bin = path.join(RL_FVM_VERSIONS_DIR, version, 'bin');
+  if (!fs.existsSync(path.join(bin, 'flutter'))) return { version, error: `Flutter ${version} is not installed in fvm — run: fvm install ${version}` };
+  return { version, bin };
+}
+const RL_DIR = path.join(__dirname, '.release');
+const RL_STATE_FILE = path.join(RL_DIR, 'state.json');
+// CocoaPods refuses to run without a UTF-8 locale, which launchd doesn't set.
+const RL_ENV = { ...process.env, PATH: LS_PATH, LANG: process.env.LANG || 'en_US.UTF-8' };
+const RL_LOG_MAX = 20000;
+
+fs.mkdirSync(RL_DIR, { recursive: true });
+
+// Persisted: last successful build per app/platform. The web entry records
+// which env build/web was built for, so a test build can't be deployed to prod.
+function rlReadState() {
+  try { return { lastBuilds: {}, ...JSON.parse(fs.readFileSync(RL_STATE_FILE, 'utf8')) }; }
+  catch (_) { return { lastBuilds: {} }; }
+}
+function rlWriteState(st) { fs.writeFileSync(RL_STATE_FILE, JSON.stringify(st, null, 2)); }
+
+let rlJob = null;      // current or last job (in memory only)
+let rlChild = null;    // running child process
+
+function rlAppDir(appKey) { return path.join(RL_APPS_DIR, RL_APPS[appKey].dir); }
+
+// Steps are [label, cmd, args]; args are passed without a shell.
+function rlBuildSteps(appKey, env, platform, androidFormat, sdk) {
+  const { flavor, target } = RL_ENVS[env];
+  const flutter = path.join(sdk.bin, 'flutter');
+  const build = platform === 'web'
+    ? ['build', 'web', '--release', '-t', target]
+    : platform === 'android'
+      ? ['build', androidFormat === 'aab' ? 'appbundle' : 'apk', '--release', '--flavor', flavor, '-t', target]
+      : ['build', 'ipa', '--flavor', flavor, '-t', target];
+  return [
+    ['Clean', flutter, ['clean']],
+    ['Pub get', flutter, ['pub', 'get']],
+    [`Build ${platform === 'android' ? androidFormat.toUpperCase() : platform === 'ios' ? 'IPA' : 'web'}`, flutter, build],
+  ];
+}
+
+function rlDeploySteps(appKey, env) {
+  const { bucket, distribution } = RL_APPS[appKey].web[env];
+  return [
+    ['S3 sync', 'aws', ['s3', 'sync', 'build/web/', `s3://${bucket}`, '--delete', '--exclude', 'index.html']],
+    ['CloudFront invalidation', 'aws', ['cloudfront', 'create-invalidation', '--distribution-id', distribution, '--paths', '/*']],
+  ];
+}
+
+function rlDeployConfirmation(appKey) { return `DEPLOY ${appKey.toUpperCase()} PROD`; }
+
+// Newest file with `ext` under `dir` (recursive), optionally containing `hint`.
+function rlFindArtifact(dir, ext, hint) {
+  let best = null;
+  const walk = (d) => {
+    let entries; try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch (_) { return; }
+    for (const e of entries) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name.endsWith(ext) && (!hint || e.name.includes(hint))) {
+        const m = fs.statSync(p).mtimeMs;
+        if (!best || m > best.m) best = { p, m };
+      }
+    }
+  };
+  walk(dir);
+  return best && best.p;
+}
+
+function rlArtifactFor(job) {
+  const dir = rlAppDir(job.app);
+  const { flavor } = RL_ENVS[job.env];
+  if (job.platform === 'web') return path.join(dir, 'build', 'web');
+  if (job.platform === 'ios') return rlFindArtifact(path.join(dir, 'build', 'ios', 'ipa'), '.ipa');
+  return job.androidFormat === 'aab'
+    ? rlFindArtifact(path.join(dir, 'build', 'app', 'outputs', 'bundle'), '.aab', flavor)
+    : rlFindArtifact(path.join(dir, 'build', 'app', 'outputs', 'flutter-apk'), '.apk', flavor);
+}
+
+function rlLog(line) {
+  rlJob.log.push(line);
+  if (rlJob.log.length > RL_LOG_MAX) {
+    const drop = rlJob.log.length - RL_LOG_MAX;
+    rlJob.log.splice(0, drop);
+    rlJob.logBase += drop;
+  }
+}
+
+function rlRunStep(step, cwd) {
+  return new Promise((resolve) => {
+    const [, cmd, args] = step;
+    rlLog(`──── $ ${cmd} ${args.map((a) => (/[\s*"]/.test(a) ? JSON.stringify(a) : a)).join(' ')}`);
+    // detached → own process group, so Cancel can kill flutter's children too.
+    const child = spawn(cmd, args, { cwd, env: RL_ENV, detached: true });
+    rlChild = child;
+    const pipe = (stream) => {
+      let buf = '';
+      stream.on('data', (d) => {
+        buf += d.toString();
+        const lines = buf.split(/\r?\n/);
+        buf = lines.pop();
+        lines.forEach(rlLog);
+      });
+      stream.on('end', () => { if (buf) rlLog(buf); });
+    };
+    pipe(child.stdout); pipe(child.stderr);
+    child.on('error', (e) => { rlLog(`${cmd}: ${e.message}`); });
+    child.on('close', (code, signal) => { rlChild = null; resolve(signal ? -1 : code); });
+  });
+}
+
+async function rlRunJob(job, steps) {
+  const cwd = rlAppDir(job.app);
+  for (let i = 0; i < steps.length; i++) {
+    if (job.cancelRequested) break;
+    job.step = i;
+    job.steps[i].status = 'running';
+    job.steps[i].startedAt = Date.now();
+    const code = await rlRunStep(steps[i], cwd);
+    job.steps[i].endedAt = Date.now();
+    job.steps[i].code = code;
+    if (job.cancelRequested) { job.steps[i].status = 'cancelled'; break; }
+    if (code !== 0) {
+      job.steps[i].status = 'failed';
+      job.status = 'failed';
+      job.error = `${steps[i][0]} exited with code ${code}`;
+      break;
+    }
+    job.steps[i].status = 'done';
+  }
+  if (job.cancelRequested) { job.status = 'cancelled'; job.error = 'Cancelled'; }
+  if (job.status === 'running') job.status = 'success';
+
+  if (job.kind === 'build' && job.status === 'success') {
+    const artifact = rlArtifactFor(job);
+    const st = rlReadState();
+    st.lastBuilds[job.app] = st.lastBuilds[job.app] || {};
+    st.lastBuilds[job.app][job.platform] = {
+      env: job.env, at: Date.now(), artifact: artifact || null,
+      androidFormat: job.platform === 'android' ? job.androidFormat : undefined,
+    };
+    rlWriteState(st);
+    job.artifact = artifact || null;
+    if (job.platform !== 'web') {
+      if (artifact) { execFile('open', ['-R', artifact]); rlLog(`──── Revealed ${artifact} in Finder`); }
+      else { job.status = 'failed'; job.error = 'Build succeeded but the output file was not found'; }
+    }
+  }
+  if (job.kind === 'deploy' && job.status === 'success') {
+    const st = rlReadState();
+    const wb = st.lastBuilds[job.app] && st.lastBuilds[job.app].web;
+    if (wb) { wb.deployedAt = Date.now(); rlWriteState(st); }
+  }
+  job.endedAt = Date.now();
+  rlLog(`──── ${job.status.toUpperCase()}${job.error ? ' — ' + job.error : ''}`);
+}
+
+function rlStartJob(fields, steps) {
+  rlJob = {
+    id: Date.now().toString(36), status: 'running', startedAt: Date.now(), endedAt: null,
+    step: 0, steps: steps.map(([label]) => ({ label, status: 'pending' })),
+    log: [], logBase: 0, error: null, artifact: null, cancelRequested: false, ...fields,
+  };
+  rlRunJob(rlJob, steps).catch((e) => {
+    rlJob.status = 'failed'; rlJob.error = e.message; rlJob.endedAt = Date.now();
+  });
+  return rlJob;
+}
+
+function rlJobSummary(job, since) {
+  if (!job) return null;
+  const { log, logBase, cancelRequested, ...rest } = job;
+  const from = Math.max(0, (since || 0) - logBase);
+  return { ...rest, logEnd: logBase + log.length, lines: log.slice(from), logTruncated: (since || 0) < logBase };
+}
+
+function rlValidate(body, { needPlatform }) {
+  const { app: appKey, env, platform, androidFormat } = body || {};
+  if (!RL_APPS[appKey]) return `unknown app '${appKey}'`;
+  if (!RL_ENVS[env]) return `unknown env '${env}'`;
+  if (needPlatform) {
+    if (!['web', 'android', 'ios'].includes(platform)) return `unknown platform '${platform}'`;
+    if (platform === 'android' && !RL_ANDROID_FORMATS.includes(androidFormat)) return `androidFormat must be apk or aab`;
+  }
+  if (!fs.existsSync(rlAppDir(appKey))) return `app folder not found: ${rlAppDir(appKey)}`;
+  if (rlJob && rlJob.status === 'running') return 'another build/deploy is still running';
+  return null;
+}
+
+app.get('/api/release/config', (req, res) => {
+  res.json({
+    appsDir: RL_APPS_DIR,
+    sdk: rlSdk(),
+    apps: Object.fromEntries(Object.entries(RL_APPS).map(([k, a]) => [k, { ...a, path: rlAppDir(k), exists: fs.existsSync(rlAppDir(k)) }])),
+    envs: RL_ENVS,
+    confirmations: Object.fromEntries(Object.keys(RL_APPS).map((k) => [k, rlDeployConfirmation(k)])),
+    lastBuilds: rlReadState().lastBuilds,
+  });
+});
+
+app.get('/api/release/status', (req, res) => {
+  res.json({ job: rlJobSummary(rlJob, parseInt(req.query.since || '0')), lastBuilds: rlReadState().lastBuilds });
+});
+
+// Body: { app, env, platform: web|android|ios, androidFormat?: apk|aab }
+app.post('/api/release/build', (req, res) => {
+  const err = rlValidate(req.body, { needPlatform: true });
+  if (err) return res.status(400).json({ error: err });
+  const { app: appKey, env, platform } = req.body;
+  const androidFormat = platform === 'android' ? req.body.androidFormat : undefined;
+  const sdk = rlSdk();
+  if (sdk.error) return res.status(400).json({ error: sdk.error });
+  // `flutter clean` wipes build/, so every earlier artifact of this app is gone.
+  const st = rlReadState();
+  delete st.lastBuilds[appKey];
+  rlWriteState(st);
+  const job = rlStartJob({ kind: 'build', app: appKey, env, platform, androidFormat, flutterVersion: sdk.version },
+    rlBuildSteps(appKey, env, platform, androidFormat, sdk));
+  res.json({ job: rlJobSummary(job, 0) });
+});
+
+// Body: { app, env, confirmation? } — prod requires confirmation 'DEPLOY <APP> PROD'.
+// Only deploys a build/web that this helper built for the same env.
+app.post('/api/release/deploy', (req, res) => {
+  const err = rlValidate(req.body, { needPlatform: false });
+  if (err) return res.status(400).json({ error: err });
+  const { app: appKey, env } = req.body;
+  if (env === 'prod' && req.body.confirmation !== rlDeployConfirmation(appKey))
+    return res.status(400).json({ error: `body.confirmation must be the literal string '${rlDeployConfirmation(appKey)}'` });
+  const wb = (rlReadState().lastBuilds[appKey] || {}).web;
+  if (!wb) return res.status(400).json({ error: 'no successful web build of this app yet — build web first' });
+  if (wb.env !== env) return res.status(400).json({ error: `the current web build is for '${wb.env}', not '${env}' — rebuild for ${env} first` });
+  if (!fs.existsSync(path.join(rlAppDir(appKey), 'build', 'web', 'main.dart.js')))
+    return res.status(400).json({ error: 'build/web is missing — rebuild first' });
+  const job = rlStartJob({ kind: 'deploy', app: appKey, env, platform: 'web', target: RL_APPS[appKey].web[env] },
+    rlDeploySteps(appKey, env));
+  res.json({ job: rlJobSummary(job, 0) });
+});
+
+app.post('/api/release/cancel', (req, res) => {
+  if (!rlJob || rlJob.status !== 'running') return res.status(400).json({ error: 'nothing is running' });
+  rlJob.cancelRequested = true;
+  if (rlChild) { try { process.kill(-rlChild.pid, 'SIGTERM'); } catch (_) { try { rlChild.kill('SIGTERM'); } catch (_) {} } }
+  res.json({ ok: true });
+});
+
+// Body: { app, platform } — reveals only artifacts recorded by a build here.
+app.post('/api/release/reveal', (req, res) => {
+  const { app: appKey, platform } = req.body || {};
+  const b = ((rlReadState().lastBuilds[appKey] || {})[platform]) || null;
+  if (!b || !b.artifact || !fs.existsSync(b.artifact)) return res.status(404).json({ error: 'artifact not found — rebuild' });
+  execFile('open', ['-R', b.artifact]);
+  res.json({ ok: true });
+});
+
+// ─── Routes: Investigations (/api/investigations/*, view #investigations) ────
+// Investigation notes live as markdown in the shared folder next to this repo
+// (also read by Claude Code sessions). Everything the AI sees — notes, pasted
+// logs, query results — is scrubbed first; the placeholder→original mapping and
+// the scrubbed AI conversation stay in INV_STATE_DIR (gitignored, local only).
+// The AI only proposes SQL; a query runs when the user clicks Run, inside a
+// READ ONLY transaction with a statement timeout and a row cap.
+const INV_DIR = process.env.LC_INVESTIGATIONS_DIR || path.join(__dirname, '..', 'investigations');
+const INV_PLAYBOOK_DIR = path.join(INV_DIR, 'playbooks');
+const INV_SCRUBBER_FILE = path.join(INV_DIR, 'tools', 'principa-log-scrubber.html');
+const INV_STATE_DIR = path.join(__dirname, '.investigations-state');
+const INV_FILE_RE = /^\d{4}-\d{2}-\d{2}-[a-z0-9-]+\.md$/;
+const INV_PLAYBOOK_RE = /^[a-z0-9-]+\.md$/;
+const INV_MODEL = process.env.LC_INVESTIGATION_MODEL || 'eu.anthropic.claude-sonnet-4-5-20250929-v1:0';
+const INV_MAX_ROWS = 200;
+const INV_TIMEOUT_MS = 20000;
+const INV_AI_RESULT_CHARS = 30000;
+
+// The scrubber's single source is the standalone offline tool; its core sits
+// between CORE-START/CORE-END markers. Reloaded when the file changes.
+let invScrubberCache = { mtimeMs: 0, factory: null };
+function invCreateScrubber(options) {
+  const stat = fs.statSync(INV_SCRUBBER_FILE);
+  if (!invScrubberCache.factory || invScrubberCache.mtimeMs !== stat.mtimeMs) {
+    const html = fs.readFileSync(INV_SCRUBBER_FILE, 'utf8');
+    const start = html.indexOf('// CORE-START');
+    const end = html.indexOf('// CORE-END');
+    if (start < 0 || end < 0) throw new Error(`Scrubber core markers missing in ${INV_SCRUBBER_FILE}`);
+    const core = html.slice(start, end);
+    invScrubberCache = { mtimeMs: stat.mtimeMs, factory: new Function(`${core}; return createScrubber;`)() };
+  }
+  return invScrubberCache.factory(options);
+}
+
+function invPath(file) {
+  if (!INV_FILE_RE.test(file || '')) throw Object.assign(new Error('Invalid investigation file name'), { status: 400 });
+  return path.join(INV_DIR, file);
+}
+
+function invParse(md) {
+  const title = (md.match(/^#\s+(.+)$/m) || [])[1] || '';
+  const status = ((md.match(/^\*\*Status:\*\*\s*(.+)$/m) || [])[1] || '').trim();
+  return { title, status };
+}
+
+function invStatePath(file) { return path.join(INV_STATE_DIR, `${file}.json`); }
+
+function invReadState(file) {
+  try { return JSON.parse(fs.readFileSync(invStatePath(file), 'utf8')); }
+  catch { return { mapping: [], terms: [], chat: [] }; }
+}
+
+function invWriteState(file, state) {
+  fs.mkdirSync(INV_STATE_DIR, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(invStatePath(file), JSON.stringify(state, null, 2), { mode: 0o600 });
+}
+
+// One scrubber per call, seeded with the investigation's saved mapping so
+// placeholders stay stable across queries and pasted logs.
+function invScrub(state, fn) {
+  const scrubber = invCreateScrubber({ state: { mapping: state.mapping }, terms: state.terms || [] });
+  const result = fn(scrubber);
+  state.mapping = scrubber.exportState().mapping;
+  return result;
+}
+
+function invSlug(title) {
+  return title.toLowerCase()
+    .replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss')
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'investigation';
+}
+
+function invToday() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin' }).format(new Date());
+}
+
+function invAppendLog(md, entry) {
+  const line = `- ${invToday()}: ${entry.replace(/\s*\n\s*/g, ' ').trim()}`;
+  const m = md.match(/^## Log\s*$/m);
+  if (!m) return `${md.replace(/\s*$/, '')}\n\n## Log\n\n${line}\n`;
+  const after = md.slice(m.index + m[0].length);
+  const next = after.search(/^## /m);
+  const sectionEnd = next < 0 ? md.length : m.index + m[0].length + next;
+  const head = md.slice(0, sectionEnd).replace(/\s*$/, '');
+  const tail = md.slice(sectionEnd);
+  return `${head}\n${line}\n${tail ? `\n${tail}` : ''}`;
+}
+
+// Read-only by construction: wrapped in SELECT * FROM (...) (single statement,
+// no COMMIT escape), extended protocol (Postgres rejects multiple commands),
+// READ ONLY transaction (rejects writes incl. data-modifying CTEs), timeout.
+async function invReadOnlyQuery(req, sql) {
+  const text = String(sql || '').trim().replace(/;\s*$/, '');
+  if (!text) throw Object.assign(new Error('No SQL provided'), { status: 400 });
+  const client = await getPool(req).connect();
+  try {
+    await client.query('BEGIN TRANSACTION READ ONLY');
+    await client.query(`SET LOCAL statement_timeout = ${INV_TIMEOUT_MS}`);
+    const result = await client.query({
+      text: `SELECT * FROM (\n${text}\n) AS inv_q LIMIT ${INV_MAX_ROWS + 1}`,
+      values: [],
+      queryMode: 'extended',
+    });
+    const truncated = result.rows.length > INV_MAX_ROWS;
+    return { rows: truncated ? result.rows.slice(0, INV_MAX_ROWS) : result.rows, truncated };
+  } finally {
+    await client.query('ROLLBACK').catch(() => {});
+    client.release();
+  }
+}
+
+// The AI writes SQL with placeholders (e.g. ILIKE '%[EMAIL_1]%'); swap in the
+// real values locally just before running. Quotes are doubled because the
+// placeholders sit inside string literals.
+function invUnscrubSql(state, sql) {
+  let filled = 0;
+  let out = sql;
+  for (const [t, original] of [...state.mapping].sort((a, b) => b[0].length - a[0].length)) {
+    if (!out.includes(t)) continue;
+    out = out.split(t).join(String(original).replace(/'/g, "''"));
+    filled++;
+  }
+  return { sql: out, filled };
+}
+
+function invClip(value, max) {
+  return value.length > max ? `${value.slice(0, max)}… [truncated ${value.length - max} chars]` : value;
+}
+
+const INV_EXTRA_SCHEMA = `
+MORE TABLES USED IN INVESTIGATIONS:
+
+core_message_outbox (id uuid, channel [0=email 1=sms], payload [text JSON: to, templateId, params], status [0=pending 1=sending 2=sent 3=failed 4=dead], "attemptCount", "lastHttpStatus", "lastErrorBody", "createdAt", "sentAt", "correlationId", "idempotencyKey")
+
+core_fhir_message_inbox (id uuid, payload [text JSON FHIR Bundle from Principa: entry[0]=MessageHeader (id = "<principaApptId>_<version>", eventCoding.code = appointment-create|update|cancel), entry[1]=Appointment (id = "<principaPatientId>_<principaApptId>", identifier[0].value = apkNr, status, start, participant)], status [0=pending 1=processing 2=processed 3=failed], "correlationId", "lastError", "createdAt", "processedAt", "failedAt")
+  Extract with payload::jsonb #>> '{entry,1,resource,status}' etc.
+
+ID CONVENTION: app_user_appointment."appointmentId" / guest_appointment."appointmentId" = Principa apkNr (e.g. BB126000026); "pmsAppointmentId" = "<principaPatientId>_<principaApptId>" (e.g. 210922_8783033) = FHIR Appointment.id. notification_log."activityId" = apkNr.
+
+app_user_reserved_appointment ("reservationId", "slotId", category, "praxisId", "startTime", "createdAt", "validTill")
+app_user_appointment_request ("appointmentId", ...) — exists when the app modified an appointment; FHIR handler then skips it
+app_user_appointment_cancellation_reason (id, "userId", reason [json array], "createdAt")
+`;
+
+const INV_REPLY_TOOL = {
+  toolSpec: {
+    name: 'reply',
+    description: 'Reply to the engineer investigating a production issue.',
+    inputSchema: {
+      json: {
+        type: 'object',
+        properties: {
+          message: { type: 'string', description: 'Your analysis in concise markdown: what the evidence shows, what is still unknown, what to check next.' },
+          proposed_sql: { type: 'string', description: 'ONE read-only PostgreSQL SELECT to run next, or omit when no query is needed. It runs inside SELECT * FROM (...) LIMIT 200, so no trailing semicolon.' },
+          purpose: { type: 'string', description: 'One sentence: what the proposed query will confirm or rule out.' },
+          log_entry: { type: 'string', description: 'Optional one-line finding worth recording in the investigation log. Only when something was established.' },
+        },
+        required: ['message'],
+      },
+    },
+  },
+};
+
+function invSystemPrompt(env, scrubbedNotes, playbooks) {
+  return `You are helping an engineer investigate a production issue in the LillianCare healthcare platform (Serverpod backend, Postgres, Principa PMS via FHIR).
+
+HOW THIS WORKS
+- You cannot run anything. Propose at most ONE read-only SELECT at a time via proposed_sql; the engineer reviews, may edit, and runs it. You then receive the result.
+- All data you see has been scrubbed. Placeholders like [PERSON_1], [EMAIL_2], [DOB], [FREE_TEXT 20 chars] stand for redacted values; the same placeholder always means the same value. Never ask for the real values — reason with the placeholders and IDs.
+- Numbered placeholders ([EMAIL_1], [PERSON_2], [TERM_1], …) can be used inside SQL string literals, e.g. WHERE lower(email) = lower('[EMAIL_1]'); they are replaced with the real values locally before the query runs. Prefer internal IDs when you have them.
+- Connected environment: ${env}. DB timestamps are UTC; Principa payload times are Europe/Berlin local time.
+- Be precise and evidence-driven: cite IDs and timestamps from results. Say clearly when something is a hypothesis.
+- Keep queries narrow (filter by IDs and time windows, select only needed columns). Avoid full scans on huge log tables.
+- When the evidence establishes something, put a one-line finding in log_entry.
+- The notes may contain a "## Code analysis" section (a code-level briefing produced by reading the backend source) and a "## Correspondence" section (replies from Principa/Siegele or the practice). Treat them as evidence; cite code paths from the briefing when explaining behaviour.
+
+${DB_SCHEMA_CONTEXT}
+${INV_EXTRA_SCHEMA}
+
+PLAYBOOKS (known flows and proven queries):
+${playbooks || '(none)'}
+
+CURRENT INVESTIGATION NOTES (scrubbed):
+${scrubbedNotes}`;
+}
+
+// Bedrock Converse needs alternating roles starting with 'user'.
+function invToConverseMessages(chat) {
+  const out = [];
+  for (const turn of chat) {
+    let text = turn.text || '';
+    if (turn.role === 'assistant' && turn.proposedSql) {
+      text += `\n\nProposed query (${turn.purpose || 'no purpose given'}):\n${turn.proposedSql}`;
+    }
+    const last = out[out.length - 1];
+    if (last && last.role === turn.role) last.content[0].text += `\n\n${text}`;
+    else out.push({ role: turn.role, content: [{ text }] });
+  }
+  while (out.length && out[0].role !== 'user') out.shift();
+  return out;
+}
+
+function invReadPlaybooks() {
+  try {
+    return fs.readdirSync(INV_PLAYBOOK_DIR).filter(f => INV_PLAYBOOK_RE.test(f)).sort()
+      .map(f => ({ file: f, content: fs.readFileSync(path.join(INV_PLAYBOOK_DIR, f), 'utf8') }));
+  } catch { return []; }
+}
+
+function invSend(res, e) {
+  res.status(e.status || 500).json({ error: e.message });
+}
+
+app.get('/api/investigations', (req, res) => {
+  try {
+    fs.mkdirSync(INV_DIR, { recursive: true });
+    const items = fs.readdirSync(INV_DIR).filter(f => INV_FILE_RE.test(f)).map(file => {
+      const md = fs.readFileSync(path.join(INV_DIR, file), 'utf8');
+      return { file, date: file.slice(0, 10), ...invParse(md), modifiedAt: fs.statSync(path.join(INV_DIR, file)).mtime };
+    }).sort((a, b) => b.file.localeCompare(a.file));
+    const playbooks = invReadPlaybooks().map(p => ({ file: p.file, title: invParse(p.content).title || p.file }));
+    res.json({ dir: INV_DIR, items, playbooks, model: INV_MODEL });
+  } catch (e) { invSend(res, e); }
+});
+
+app.post('/api/investigations', (req, res) => {
+  try {
+    const title = String((req.body || {}).title || '').trim();
+    if (!title) return res.status(400).json({ error: 'Title required' });
+    const today = invToday();
+    let file = `${today}-${invSlug(title)}.md`;
+    for (let i = 2; fs.existsSync(path.join(INV_DIR, file)); i++) file = `${today}-${invSlug(title)}-${i}.md`;
+    const md = `# ${title}\n\n**Status:** OPEN\n\n## Summary\n\n_TBD_\n\n## Open questions\n\n## Follow-ups\n\n## Log\n\n- ${today}: Investigation opened.\n`;
+    fs.mkdirSync(INV_DIR, { recursive: true });
+    fs.writeFileSync(invPath(file), md);
+    res.json({ file });
+  } catch (e) { invSend(res, e); }
+});
+
+app.get('/api/investigations/playbooks/:file', (req, res) => {
+  try {
+    if (!INV_PLAYBOOK_RE.test(req.params.file)) return res.status(400).json({ error: 'Invalid playbook name' });
+    res.json({ file: req.params.file, content: fs.readFileSync(path.join(INV_PLAYBOOK_DIR, req.params.file), 'utf8') });
+  } catch (e) { invSend(res, e); }
+});
+
+app.get('/api/investigations/:file', (req, res) => {
+  try {
+    const content = fs.readFileSync(invPath(req.params.file), 'utf8');
+    const state = invReadState(req.params.file);
+    res.json({ file: req.params.file, content, ...invParse(content), chat: state.chat, terms: state.terms || [], mappingCount: state.mapping.length });
+  } catch (e) { invSend(res, e); }
+});
+
+app.put('/api/investigations/:file', (req, res) => {
+  try {
+    const content = String((req.body || {}).content || '');
+    if (!content.trim()) return res.status(400).json({ error: 'Refusing to save empty notes' });
+    fs.writeFileSync(invPath(req.params.file), content);
+    res.json({ ok: true, ...invParse(content) });
+  } catch (e) { invSend(res, e); }
+});
+
+app.post('/api/investigations/:file/log', (req, res) => {
+  try {
+    const entry = String((req.body || {}).entry || '').trim();
+    if (!entry) return res.status(400).json({ error: 'Empty log entry' });
+    const p = invPath(req.params.file);
+    const content = invAppendLog(fs.readFileSync(p, 'utf8'), entry);
+    fs.writeFileSync(p, content);
+    res.json({ ok: true, content });
+  } catch (e) { invSend(res, e); }
+});
+
+// Extra redaction terms (names etc.) — PII, so kept in the local state only.
+app.put('/api/investigations/:file/terms', (req, res) => {
+  try {
+    invPath(req.params.file);
+    const state = invReadState(req.params.file);
+    state.terms = (Array.isArray(req.body.terms) ? req.body.terms : []).map(t => String(t).trim()).filter(t => t.length >= 2);
+    invWriteState(req.params.file, state);
+    res.json({ ok: true, terms: state.terms });
+  } catch (e) { invSend(res, e); }
+});
+
+app.get('/api/investigations/:file/mapping', (req, res) => {
+  try {
+    invPath(req.params.file);
+    res.json({ mapping: invReadState(req.params.file).mapping });
+  } catch (e) { invSend(res, e); }
+});
+
+app.delete('/api/investigations/:file/chat', (req, res) => {
+  try {
+    invPath(req.params.file);
+    const state = invReadState(req.params.file);
+    state.chat = [];
+    invWriteState(req.params.file, state);
+    res.json({ ok: true });
+  } catch (e) { invSend(res, e); }
+});
+
+// Runs an (AI-proposed or hand-written) query read-only. Raw rows go back to
+// this local UI only; the scrubbed rows are what gets added to the AI chat.
+app.post('/api/investigations/:file/query', async (req, res) => {
+  try {
+    invPath(req.params.file);
+    const sql = String((req.body || {}).sql || '');
+    const env = String(req.headers['x-env'] || 'unknown');
+    const state = invReadState(req.params.file);
+    let turnText;
+    let payload;
+    try {
+      const unscrubbed = invUnscrubSql(state, sql);
+      const { rows, truncated } = await invReadOnlyQuery(req, unscrubbed.sql);
+      const scrubbed = invScrub(state, s => s.scrubData(rows));
+      const json = JSON.stringify(scrubbed.data, (k, v) => (typeof v === 'string' ? invClip(v, 4000) : v), 1);
+      turnText = `I ran this query on ${env}:\n${sql.trim()}\n\nResult: ${rows.length} row(s)${truncated ? ` (capped at ${INV_MAX_ROWS})` : ''}, scrubbed:\n${invClip(json, INV_AI_RESULT_CHARS)}`;
+      payload = { rows, scrubbedRows: scrubbed.data, counts: scrubbed.counts, count: rows.length, truncated, filledPlaceholders: unscrubbed.filled };
+    } catch (e) {
+      turnText = `I ran this query on ${env}:\n${sql.trim()}\n\nIt failed: ${e.message}`;
+      payload = { error: e.message };
+    }
+    state.chat.push({ role: 'user', kind: 'query', text: turnText, sql: sql.trim(), env, at: new Date().toISOString() });
+    invWriteState(req.params.file, state);
+    res.json(payload);
+  } catch (e) { invSend(res, e); }
+});
+
+// Adds the user's (scrubbed) message, if any, and asks the model for the next step.
+app.post('/api/investigations/:file/ai', async (req, res) => {
+  try {
+    const p = invPath(req.params.file);
+    const env = String(req.headers['x-env'] || 'unknown');
+    const state = invReadState(req.params.file);
+    const text = String((req.body || {}).text || '').trim();
+    let counts = {};
+    if (text) {
+      const scrubbed = invScrub(state, s => s.run(text));
+      counts = scrubbed.counts;
+      state.chat.push({ role: 'user', kind: 'message', text: scrubbed.output, at: new Date().toISOString() });
+    }
+    const messages = invToConverseMessages(state.chat);
+    if (!messages.length) return res.status(400).json({ error: 'Nothing to send yet — write a message first.' });
+
+    const notes = invScrub(state, s => s.run(fs.readFileSync(p, 'utf8'))).output;
+    const playbooks = invReadPlaybooks().map(pb => `### ${pb.file}\n${pb.content}`).join('\n\n');
+    const response = await bedrockClient.send(new ConverseCommand({
+      modelId: INV_MODEL,
+      system: [{ text: invSystemPrompt(env, notes, playbooks) }],
+      messages,
+      toolConfig: { tools: [INV_REPLY_TOOL], toolChoice: { tool: { name: 'reply' } } },
+      inferenceConfig: { maxTokens: 4000, temperature: 0.2 },
+    }));
+    const content = response.output.message.content || [];
+    const toolUse = (content.find(c => c.toolUse) || {}).toolUse;
+    const reply = toolUse ? toolUse.input : { message: (content.find(c => c.text) || {}).text || '(empty reply)' };
+    const turn = {
+      role: 'assistant',
+      text: reply.message || '',
+      proposedSql: reply.proposed_sql ? reply.proposed_sql.trim().replace(/;\s*$/, '') : null,
+      purpose: reply.purpose || null,
+      logEntry: reply.log_entry || null,
+      at: new Date().toISOString(),
+    };
+    state.chat.push(turn);
+    invWriteState(req.params.file, state);
+    res.json({ turn, counts, userText: text ? state.chat[state.chat.length - 2].text : null });
+  } catch (e) { invSend(res, e); }
+});
+
+// ─── Investigations: code analysis + correspondence ─────────────────────────
+// Code analysis runs a headless Claude Code session on LillianCare-Core with
+// read-only file tools only (--restricted, --tools Read,Grep,Glob) and a deny
+// list for secrets. Its prompt contains the scrubbed notes + scrubbed question;
+// the briefing is appended to the note's "## Code analysis" section, where the
+// Bedrock chat picks it up as context. One job per investigation, in memory.
+const INV_CORE_DIR = process.env.LC_CORE_DIR || path.join(__dirname, '..', 'LillianCare-Core');
+const INV_SHARED_MODELS_DIR = path.join(__dirname, '..', 'LillianCare-Shared-Models');
+const INV_CLAUDE_BIN = process.env.LC_CLAUDE_BIN || path.join(process.env.HOME || '', '.local', 'bin', 'claude');
+const INV_CODE_TIMEOUT_MS = 10 * 60 * 1000;
+const INV_CODE_SETTINGS = JSON.stringify({
+  permissions: { deny: ['Read(**/passwords.yaml)', 'Read(**/.env)', 'Read(**/.env.*)', 'Read(**/.fcm_service_account.json)', 'Read(**/*.pem)', 'Read(**/*.p8)'] },
+});
+const invCodeJobs = {};
+
+// Inserts `block` at the end of `heading`'s section, creating the section right
+// before "## Log" (which stays last) when it does not exist yet.
+function invAppendToSection(md, heading, block) {
+  const m = md.match(new RegExp(`^${heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'm'));
+  if (m) {
+    const after = md.slice(m.index + m[0].length);
+    const next = after.search(/^## /m);
+    const end = next < 0 ? md.length : m.index + m[0].length + next;
+    return `${md.slice(0, end).replace(/\s*$/, '')}\n\n${block.trim()}\n${end < md.length ? `\n${md.slice(end)}` : ''}`;
+  }
+  const log = md.search(/^## Log\s*$/m);
+  const section = `${heading}\n\n${block.trim()}\n`;
+  if (log < 0) return `${md.replace(/\s*$/, '')}\n\n${section}`;
+  return `${md.slice(0, log)}${section}\n${md.slice(log)}`;
+}
+
+function invCodePrompt(notes, question) {
+  return `You are analysing the LillianCare backend codebase (this directory) to support a production investigation. You can only read code. Never open config/passwords.yaml, .env files or other secrets.
+
+INVESTIGATION NOTES (scrubbed — placeholders like [PERSON_1] are redacted values):
+${notes}
+
+QUESTION:
+${question}
+
+Trace the relevant flows in the code the way a senior engineer would: find the entry points, follow the calls, and note guards, deduplication, status mappings and the exact conditions under which side effects (emails, pushes, DB writes, PMS calls) happen.
+
+Reply with a concise markdown briefing (max ~700 words), using exactly these sections:
+#### Relevant code paths
+file:line references and what each does for this problem.
+#### How the symptom can arise
+Ranked hypotheses; for each, the evidence in the data that would confirm or rule it out.
+#### Tables and fields to check
+Table names, columns, enum values (with their integer values).
+#### Suggested first queries
+One to three narrow PostgreSQL SELECTs ("camelCase" columns quoted, timestamps are UTC). Placeholders like [EMAIL_1] may be used in string literals.
+#### Open questions
+What the code alone cannot answer.
+
+Do not include patient data.`;
+}
+
+function invCodeProgress(event) {
+  if (event.type !== 'assistant') return [];
+  return (event.message.content || []).filter(c => c.type === 'tool_use').map(c => {
+    const i = c.input || {};
+    const target = i.file_path || i.pattern || i.path || '';
+    return `${c.name} ${String(target).replace(INV_CORE_DIR + '/', '')}`.trim();
+  });
+}
+
+app.post('/api/investigations/:file/code', (req, res) => {
+  try {
+    const p = invPath(req.params.file);
+    const running = invCodeJobs[req.params.file];
+    if (running && running.status === 'running') return res.status(409).json({ error: 'A code analysis is already running for this investigation' });
+    if (!fs.existsSync(INV_CLAUDE_BIN)) return res.status(500).json({ error: `Claude Code not found at ${INV_CLAUDE_BIN} (set LC_CLAUDE_BIN)` });
+    if (!fs.existsSync(INV_CORE_DIR)) return res.status(500).json({ error: `LillianCare-Core not found at ${INV_CORE_DIR} (set LC_CORE_DIR)` });
+
+    const state = invReadState(req.params.file);
+    const rawQuestion = String((req.body || {}).question || '').trim()
+      || 'Which code paths could produce the problem described in the notes, and how should it be investigated?';
+    const question = invScrub(state, s => s.run(rawQuestion)).output;
+    const notes = invScrub(state, s => s.run(fs.readFileSync(p, 'utf8'))).output;
+    invWriteState(req.params.file, state);
+
+    const args = ['-p', invCodePrompt(notes, question), '--output-format', 'stream-json', '--verbose',
+      '--tools', 'Read,Grep,Glob', '--restricted', '--strict-mcp-config', '--permission-mode', 'dontAsk',
+      '--no-session-persistence', '--settings', INV_CODE_SETTINGS];
+    if (fs.existsSync(INV_SHARED_MODELS_DIR)) args.push('--add-dir', INV_SHARED_MODELS_DIR);
+
+    const job = { status: 'running', question, log: [], startedAt: new Date().toISOString(), finishedAt: null, error: null, costUsd: null };
+    const child = spawn(INV_CLAUDE_BIN, args, {
+      cwd: INV_CORE_DIR, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, PATH: `${path.dirname(INV_CLAUDE_BIN)}:${process.env.PATH || ''}` },
+    });
+    job.child = child;
+    invCodeJobs[req.params.file] = job;
+
+    let buf = '';
+    let stderr = '';
+    let result = null;
+    child.stdout.on('data', chunk => {
+      buf += chunk.toString();
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        let event;
+        try { event = JSON.parse(line); } catch { continue; }
+        job.log.push(...invCodeProgress(event));
+        if (job.log.length > 200) job.log.splice(0, job.log.length - 200);
+        if (event.type === 'result') result = event;
+      }
+    });
+    child.stderr.on('data', chunk => { stderr = (stderr + chunk.toString()).slice(-4000); });
+    const timer = setTimeout(() => { try { process.kill(-child.pid, 'SIGTERM'); } catch {} }, INV_CODE_TIMEOUT_MS);
+
+    child.on('close', code => {
+      clearTimeout(timer);
+      delete job.child;
+      job.finishedAt = new Date().toISOString();
+      if (job.status === 'cancelled') return;
+      if (result && result.subtype === 'success' && !result.is_error && result.result) {
+        job.costUsd = result.total_cost_usd ?? null;
+        try {
+          const md = fs.readFileSync(p, 'utf8');
+          const shortQ = question.replace(/\s+/g, ' ').slice(0, 120);
+          const block = `### ${invToday()}: ${shortQ}${question.length > 120 ? '…' : ''}\n\n${result.result.trim()}`;
+          fs.writeFileSync(p, invAppendToSection(md, '## Code analysis', block));
+          job.status = 'done';
+        } catch (e) { job.status = 'failed'; job.error = e.message; }
+      } else {
+        job.status = 'failed';
+        job.error = (result && (result.result || result.subtype)) || `Claude Code exited with code ${code}. ${stderr.trim().slice(-600)}`;
+      }
+    });
+    child.on('error', e => { job.status = 'failed'; job.error = e.message; job.finishedAt = new Date().toISOString(); });
+
+    res.json({ ok: true, question });
+  } catch (e) { invSend(res, e); }
+});
+
+app.get('/api/investigations/:file/code', (req, res) => {
+  try {
+    invPath(req.params.file);
+    const job = invCodeJobs[req.params.file];
+    if (!job) return res.json({ job: null });
+    const { child, ...rest } = job;
+    res.json({ job: rest });
+  } catch (e) { invSend(res, e); }
+});
+
+app.delete('/api/investigations/:file/code', (req, res) => {
+  try {
+    invPath(req.params.file);
+    const job = invCodeJobs[req.params.file];
+    if (!job || job.status !== 'running' || !job.child) return res.json({ ok: true });
+    job.status = 'cancelled';
+    try { process.kill(-job.child.pid, 'SIGTERM'); } catch {}
+    res.json({ ok: true });
+  } catch (e) { invSend(res, e); }
+});
+
+// Shows exactly what would be sent, without saving the mapping — free-text
+// names the scrubber does not know can be spotted and added as terms first.
+app.post('/api/investigations/:file/scrub-preview', (req, res) => {
+  try {
+    invPath(req.params.file);
+    const state = invReadState(req.params.file);
+    const scrubbed = invScrub(state, s => s.run(String((req.body || {}).text || '')));
+    res.json({ output: scrubbed.output, counts: scrubbed.counts });
+  } catch (e) { invSend(res, e); }
+});
+
+// Replies from Principa/Siegele (or what we sent them): scrubbed, filed under
+// "## Correspondence" in the note, and added to the AI chat as evidence.
+app.post('/api/investigations/:file/correspondence', (req, res) => {
+  try {
+    const p = invPath(req.params.file);
+    const { direction, party, text } = req.body || {};
+    if (!String(text || '').trim()) return res.status(400).json({ error: 'Empty correspondence' });
+    const who = String(party || 'vendor').trim().slice(0, 60);
+    const label = direction === 'sent' ? `Sent to ${who}` : `Received from ${who}`;
+    const state = invReadState(req.params.file);
+    const scrubbed = invScrub(state, s => s.run(String(text)));
+    const quoted = scrubbed.output.trim().split('\n').map(l => `> ${l}`).join('\n');
+    fs.writeFileSync(p, invAppendToSection(fs.readFileSync(p, 'utf8'), '## Correspondence', `### ${invToday()}: ${label}\n\n${quoted}`));
+    state.chat.push({ role: 'user', kind: 'correspondence', text: `${label} (scrubbed):\n\n${scrubbed.output.trim()}`, at: new Date().toISOString() });
+    invWriteState(req.params.file, state);
+    res.json({ ok: true, counts: scrubbed.counts });
+  } catch (e) { invSend(res, e); }
+});
+
+// ─── Routes: Lilli staging (/api/lilli/*, view #lilli) ───────────────────────
+// Thin wrapper over scripts/lilli.js (also the CLI Claude Code sessions use), so scrubbing
+// and the read-only DB guard live in one place. Deploy/rollback run as one in-memory job at a
+// time (lost on restart), polled like the Release view.
+const lilli = require('./scripts/lilli');
+const LILLI_JOB_MAX_LINES = 5000;
+let lilliJob = null;
+
+function lilliSend(res, e) {
+  res.status(e.status || 500).json({ error: e.message });
+}
+
+app.get('/api/lilli/status', async (req, res) => {
+  try { res.json(await lilli.statusData()); } catch (e) { lilliSend(res, e); }
+});
+
+app.get('/api/lilli/calls', async (req, res) => {
+  try {
+    const { since, status, outcome, errors, limit } = req.query;
+    res.json({ rows: await lilli.callsData({ since: since || undefined, status: status || undefined, outcome: outcome || undefined, errors: errors === '1', limit }) });
+  } catch (e) { lilliSend(res, e); }
+});
+
+app.get('/api/lilli/calls/:id', async (req, res) => {
+  try { res.json(await lilli.callData(req.params.id)); } catch (e) { lilliSend(res, e); }
+});
+
+app.get('/api/lilli/logs', async (req, res) => {
+  try {
+    const { proc, errors, lines, grep } = req.query;
+    res.json({ lines: await lilli.logsData({ proc, errors: errors === '1', lines, grep: grep || undefined }) });
+  } catch (e) { lilliSend(res, e); }
+});
+
+app.get('/api/lilli/releases', async (req, res) => {
+  try { res.json({ releases: await lilli.releasesData() }); } catch (e) { lilliSend(res, e); }
+});
+
+app.get('/api/lilli/deploy/plan', async (req, res) => {
+  try { res.json(await lilli.deployPlan(req.query.ref || undefined)); } catch (e) { lilliSend(res, e); }
+});
+
+function lilliStartJob(kind, args, meta) {
+  const job = { id: Date.now(), kind, status: 'running', startedAt: Date.now(), endedAt: null, lines: [], dropped: 0, error: null, ...meta };
+  const run = lilli.runRemote(args, (line) => {
+    job.lines.push(line);
+    if (job.lines.length > LILLI_JOB_MAX_LINES) { job.lines.shift(); job.dropped++; }
+  });
+  job.cancel = run.cancel;
+  run.promise
+    .then(() => { job.status = 'success'; })
+    .catch((e) => { job.status = job.status === 'cancelled' ? 'cancelled' : 'failed'; job.error = e.message; })
+    .finally(() => { job.endedAt = Date.now(); job.cancel = null; });
+  lilliJob = job;
+  return job;
+}
+
+// Deploys take the full sha from the plan the user just reviewed, so what ships is what was shown.
+app.post('/api/lilli/deploy', async (req, res) => {
+  try {
+    if (lilliJob && lilliJob.status === 'running') return res.status(409).json({ error: 'A deploy or rollback is already running' });
+    const { sha, schemaOk } = req.body || {};
+    if (!/^[0-9a-f]{40}$/.test(sha || '')) return res.status(400).json({ error: 'Full commit sha required (from the plan)' });
+    const plan = await lilli.deployPlan(sha);
+    if (!plan.onOrigin) return res.status(400).json({ error: 'Commit is not on GitHub; push it first' });
+    if (plan.schemaChanged && !schemaOk) return res.status(400).json({ error: 'prisma/schema.prisma changed; apply the DB change first, then confirm the schema checkbox' });
+    const job = lilliStartJob('deploy', ['deploy', sha], { sha, subject: plan.targetSubject });
+    res.json({ ok: true, id: job.id });
+  } catch (e) { lilliSend(res, e); }
+});
+
+app.post('/api/lilli/rollback', (req, res) => {
+  if (lilliJob && lilliJob.status === 'running') return res.status(409).json({ error: 'A deploy or rollback is already running' });
+  const job = lilliStartJob('rollback', ['rollback'], {});
+  res.json({ ok: true, id: job.id });
+});
+
+app.post('/api/lilli/job/cancel', (req, res) => {
+  if (!lilliJob || !lilliJob.cancel) return res.status(400).json({ error: 'Nothing running' });
+  lilliJob.status = 'cancelled';
+  lilliJob.cancel();
+  res.json({ ok: true });
+});
+
+app.get('/api/lilli/job', (req, res) => {
+  if (!lilliJob) return res.json({ job: null });
+  const since = Math.max(0, Number(req.query.since || 0) - lilliJob.dropped);
+  const { cancel, lines, ...rest } = lilliJob;
+  res.json({ job: { ...rest, lines: lines.slice(since), logEnd: lilliJob.dropped + lines.length } });
+});
+
+// ─── Lilli investigations (/api/lilli/inv/*, Investigate tab in #lilli) ─────
+// Ask a question about Lilli staging; a headless Claude Code session in the Lilli repo answers it.
+// Its sandbox: --restricted (file tools confined to the Lilli repo, so helper/.env and the scrub
+// mappings are out of reach), Bash only for the read-only lilli.js commands and read-only git
+// (--permission-mode dontAsk refuses everything else, including deploy/rollback). lilli.js output
+// is already scrubbed. Each investigation is a note in ../investigations/ (YYYY-MM-DD-lilli-*.md),
+// so a Claude Code session can pick up the fix brief. Follow-ups resume the same session.
+const LILLI_REPO_DIR = process.env.LILLI_REPO || path.join(__dirname, '..', 'Lilli');
+const LILLI_CLI = path.join(__dirname, 'scripts', 'lilli.js');
+const LILLI_INV_TIMEOUT_MS = 15 * 60 * 1000;
+const LILLI_INV_READ_CMDS = ['status', 'logs', 'calls', 'call', 'sql', 'releases', 'help'];
+const LILLI_INV_SETTINGS = JSON.stringify({
+  permissions: {
+    allow: [
+      ...LILLI_INV_READ_CMDS.map(c => `Bash(node ${LILLI_CLI} ${c}:*)`),
+      'Bash(git log:*)', 'Bash(git show:*)', 'Bash(git diff:*)', 'Bash(git blame:*)', 'Bash(git status:*)',
+    ],
+    deny: [
+      `Bash(node ${LILLI_CLI} deploy:*)`, `Bash(node ${LILLI_CLI} rollback:*)`,
+      'Read(**/.env)', 'Read(**/.env.*)', 'Read(**/*.pem)', 'Read(**/*.key)',
+    ],
+  },
+});
+const lilliInvJobs = {};
+
+function lilliInvFile(file) {
+  if (!/^\d{4}-\d{2}-\d{2}-lilli-[a-z0-9-]+\.md$/.test(file || '')) throw Object.assign(new Error('Invalid Lilli investigation file'), { status: 400 });
+  return invPath(file);
+}
+
+function lilliInvPrompt(question, first) {
+  const cli = `node ${LILLI_CLI}`;
+  if (!first) {
+    return `Follow-up question from the user:\n\n${question}\n\nInvestigate further if needed, then answer in the same format. If the root cause or the fix changed, give the complete updated fix brief.`;
+  }
+  return `You are debugging Lilli, a voice survey platform (Next.js app in app/, voice/WebSocket server in app/server/ws-server.ts, Prisma schema in app/prisma/schema.prisma). The current directory is the Lilli repo. Read app/CLAUDE.md first if you need orientation.
+
+The live system is Lilli staging. You can observe it ONLY through these read-only commands (run them with Bash, exactly in this form, no pipes):
+  ${cli} status                                  PM2 processes, live commit, health
+  ${cli} logs --lines N [--ws|--web] [--errors] [--grep REGEX]
+  ${cli} calls [--since 6h] [--status S] [--outcome O] [--errors] [--limit N]
+  ${cli} call <id|externalId|callSid> [--logs]   one call: facts, event timeline, matching log lines
+  ${cli} sql "SELECT …"                          read-only Postgres ("Call", "Assistant", "Survey", "Workflow", "User", … camelCase columns in double quotes)
+  ${cli} releases
+You may also use read-only git (git log/show/diff/blame) and Read/Grep/Glob on the repo. You cannot change anything, deploy, or run other commands.
+
+All output from those commands is scrubbed: [REDACTED], [PHONE_1], [PERSON_1] etc. stand for removed patient data. Do not try to recover it. The live commit (from status) can differ from the checked-out code; check with git when line numbers matter. PM2 logs may lack timestamps and contain lines from older builds (stack-trace line numbers that don't match the current code are a hint).
+
+Work like a senior engineer on call: establish what happened (calls, logs, timeline), find the failing component, trace it in the code, and confirm the root cause with evidence rather than guessing. Keep going until you can point at the code, or you have ruled out the obvious causes.
+
+QUESTION:
+${question}
+
+Reply in markdown with exactly these sections:
+#### Summary
+Two or three sentences: what is wrong and why.
+#### Evidence
+The log lines, call ids, timestamps and query results that show it (scrubbed as received).
+#### Root cause
+file:line references, and your confidence (high / medium / low) with the reason.
+#### Fix brief
+Self-contained instructions for another Claude Code session that will make the fix: what to change and where, edge cases, how to test locally, and how to verify on staging afterwards with the ${cli} commands above. Name the evidence (call ids, log messages) to check against.
+#### Open questions
+What you could not determine, and what would settle it.`;
+}
+
+function lilliInvProgress(event) {
+  if (event.type !== 'assistant') return [];
+  return (event.message.content || []).filter(c => c.type === 'tool_use').map(c => {
+    const i = c.input || {};
+    if (c.name === 'Bash') return String(i.command || '').replace(`node ${LILLI_CLI}`, 'lilli');
+    const target = i.file_path || i.pattern || i.path || '';
+    return `${c.name} ${String(target).replace(LILLI_REPO_DIR + '/', '')}`.trim();
+  });
+}
+
+function lilliInvStart(file, question) {
+  const p = lilliInvFile(file);
+  const state = invReadState(file);
+  const first = !state.lilliSessionId;
+  const args = ['-p', lilliInvPrompt(question, first), '--output-format', 'stream-json', '--verbose',
+    '--tools', 'Read,Grep,Glob,Bash', '--restricted', '--strict-mcp-config', '--permission-mode', 'dontAsk',
+    '--settings', LILLI_INV_SETTINGS];
+  if (!first) args.push('--resume', state.lilliSessionId);
+
+  const job = { status: 'running', question, log: [], startedAt: new Date().toISOString(), finishedAt: null, error: null, costUsd: null };
+  const child = spawn(INV_CLAUDE_BIN, args, {
+    cwd: LILLI_REPO_DIR, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, PATH: `${path.dirname(INV_CLAUDE_BIN)}:${process.env.PATH || ''}` },
+  });
+  job.child = child;
+  lilliInvJobs[file] = job;
+
+  let buf = '';
+  let stderr = '';
+  let result = null;
+  let sessionId = null;
+  child.stdout.on('data', chunk => {
+    buf += chunk.toString();
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl);
+      buf = buf.slice(nl + 1);
+      let event;
+      try { event = JSON.parse(line); } catch { continue; }
+      if (event.session_id) sessionId = event.session_id;
+      job.log.push(...lilliInvProgress(event));
+      if (job.log.length > 300) job.log.splice(0, job.log.length - 300);
+      if (event.type === 'result') result = event;
+    }
+  });
+  child.stderr.on('data', chunk => { stderr = (stderr + chunk.toString()).slice(-4000); });
+  const timer = setTimeout(() => { try { process.kill(-child.pid, 'SIGTERM'); } catch {} }, LILLI_INV_TIMEOUT_MS);
+
+  child.on('close', code => {
+    clearTimeout(timer);
+    delete job.child;
+    job.finishedAt = new Date().toISOString();
+    if (job.status === 'cancelled') return;
+    if (result && result.subtype === 'success' && !result.is_error && result.result) {
+      job.costUsd = result.total_cost_usd ?? null;
+      try {
+        const s = invReadState(file);
+        if (sessionId) s.lilliSessionId = sessionId;
+        invWriteState(file, s);
+        const time = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit' }).format(new Date());
+        const shortQ = question.replace(/\s+/g, ' ').slice(0, 120);
+        // Keep the answer from its first section heading; drop any "writing it up now" preamble.
+        const answer = result.result.trim();
+        const start = answer.search(/^#### /m);
+        const block = `### ${invToday()} ${time}: ${shortQ}${question.length > 120 ? '…' : ''}\n\n${start > 0 ? answer.slice(start) : answer}`;
+        fs.writeFileSync(p, invAppendToSection(fs.readFileSync(p, 'utf8'), '## Findings', block));
+        job.status = 'done';
+      } catch (e) { job.status = 'failed'; job.error = e.message; }
+    } else {
+      job.status = 'failed';
+      job.error = (result && (result.result || result.subtype)) || `Claude Code exited with code ${code}. ${stderr.trim().slice(-600)}`;
+    }
+  });
+  child.on('error', e => { job.status = 'failed'; job.error = e.message; job.finishedAt = new Date().toISOString(); });
+  return job;
+}
+
+app.get('/api/lilli/inv', (req, res) => {
+  try {
+    const files = fs.existsSync(INV_DIR) ? fs.readdirSync(INV_DIR).filter(f => /^\d{4}-\d{2}-\d{2}-lilli-[a-z0-9-]+\.md$/.test(f)) : [];
+    const items = files.map(f => {
+      const md = fs.readFileSync(path.join(INV_DIR, f), 'utf8');
+      const job = lilliInvJobs[f];
+      return { file: f, ...invParse(md), mtime: fs.statSync(path.join(INV_DIR, f)).mtimeMs, running: !!(job && job.status === 'running') };
+    }).sort((a, b) => b.mtime - a.mtime);
+    res.json({ items });
+  } catch (e) { lilliSend(res, e); }
+});
+
+// Body: { question, file? }. Without file a new investigation note is created.
+app.post('/api/lilli/inv', (req, res) => {
+  try {
+    if (!fs.existsSync(INV_CLAUDE_BIN)) return res.status(500).json({ error: `Claude Code not found at ${INV_CLAUDE_BIN} (set LC_CLAUDE_BIN)` });
+    if (!fs.existsSync(LILLI_REPO_DIR)) return res.status(500).json({ error: `Lilli repo not found at ${LILLI_REPO_DIR} (set LILLI_REPO)` });
+    const raw = String((req.body || {}).question || '').trim();
+    if (!raw) return res.status(400).json({ error: 'Ask a question' });
+    let file = (req.body || {}).file;
+    if (file) {
+      lilliInvFile(file);
+      const running = lilliInvJobs[file];
+      if (running && running.status === 'running') return res.status(409).json({ error: 'This investigation is already running' });
+    }
+    // Questions can contain names or numbers: scrub before they reach the note or the model.
+    const state = file ? invReadState(file) : { mapping: [], terms: [], chat: [] };
+    const question = invScrub(state, s => s.run(raw)).output.trim();
+    if (!file) {
+      const flat = question.replace(/\s+/g, ' ');
+      const title = flat.length <= 80 ? flat : `${flat.slice(0, 80).replace(/\s+\S*$/, '')}…`;
+      file = `${invToday()}-lilli-${invSlug(title).slice(0, 50).replace(/-+$/, '')}.md`;
+      let n = 2;
+      while (fs.existsSync(path.join(INV_DIR, file))) file = `${invToday()}-lilli-${invSlug(title).slice(0, 46).replace(/-+$/, '')}-${n++}.md`;
+      fs.writeFileSync(path.join(INV_DIR, file), `# Lilli: ${title}\n\n**Status:** OPEN\n**System:** Lilli staging\n\n## Question\n\n${question}\n\n## Findings\n\n## Log\n\n- ${invToday()}: Opened from LC Helper (Lilli, Investigate tab).\n`);
+    }
+    invWriteState(file, state);
+    lilliInvStart(file, question);
+    res.json({ ok: true, file });
+  } catch (e) { lilliSend(res, e); }
+});
+
+app.get('/api/lilli/inv/:file', (req, res) => {
+  try {
+    const p = lilliInvFile(req.params.file);
+    const md = fs.readFileSync(p, 'utf8');
+    const job = lilliInvJobs[req.params.file];
+    const { child, ...rest } = job || {};
+    res.json({ file: req.params.file, md, ...invParse(md), job: job ? rest : null, canFollowUp: !!invReadState(req.params.file).lilliSessionId });
+  } catch (e) { lilliSend(res, e); }
+});
+
+app.delete('/api/lilli/inv/:file/job', (req, res) => {
+  try {
+    lilliInvFile(req.params.file);
+    const job = lilliInvJobs[req.params.file];
+    if (!job || !job.child) return res.status(400).json({ error: 'Nothing running' });
+    job.status = 'cancelled';
+    try { process.kill(-job.child.pid, 'SIGTERM'); } catch {}
+    res.json({ ok: true });
+  } catch (e) { lilliSend(res, e); }
+});
+
+app.post('/api/lilli/inv/:file/status', (req, res) => {
+  try {
+    const p = lilliInvFile(req.params.file);
+    const status = String((req.body || {}).status || '').toUpperCase();
+    if (!['OPEN', 'CLOSED'].includes(status)) return res.status(400).json({ error: 'status must be OPEN or CLOSED' });
+    const md = fs.readFileSync(p, 'utf8').replace(/^\*\*Status:\*\*.*$/m, `**Status:** ${status}`);
+    fs.writeFileSync(p, invAppendLog(md, `Marked ${status} in LC Helper.`));
+    res.json({ ok: true });
+  } catch (e) { lilliSend(res, e); }
+});
+
 // ─── Static files ─────────────────────────────────────────────────────────────
 app.use(express.static(path.join(__dirname, 'public'), { etag: false, maxAge: 0, setHeaders: (res) => { res.setHeader('Cache-Control', 'no-store'); } }));
 
 app.listen(3333, () => {
   console.log('LillianCare Debugger running at http://localhost:3333');
+  if (lsReadConfig().autostart) {
+    setTimeout(() => lsRun('starting', lsStartServerpod), 2000);
+  }
 });
