@@ -3,9 +3,10 @@
 
 const AC_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 
-function acRenderRequest() {
+function acRenderRequest(keepUrlFocus = false) {
   const el = document.getElementById('acReq');
   if (!el || !acState.req) return;
+  const caret = keepUrlFocus ? document.getElementById('acUrl')?.selectionStart : null;
   const r = acState.req;
   const tabs = [
     ['params', `Params${acQueryPairs(r.url).length ? ` <span class="pill">${acQueryPairs(r.url).length}</span>` : ''}`],
@@ -18,6 +19,7 @@ function acRenderRequest() {
     <div class="ac-req-head">
       ${r.kind === 'serverpod' ? '<span class="pill info">Serverpod</span>' : r.kind === 'external' ? '<span class="pill">External</span>' : '<span class="pill ghost">Custom</span>'}
       <input class="ac-name" value="${escHtml(r.name)}" oninput="acState.req.name=this.value;acSaveDraft()" spellcheck="false">
+      ${acUsesLcAccountId(r) ? `<button class="btn btn-sm" onclick="acOpenLcLookup()" title="Look up a patient's lcAccountId by email"><span class="material-symbols-outlined">person_search</span>lcAccountId</button>` : ''}
       <button class="btn btn-sm" onclick="acCopyCurl()" title="Copy as curl (secrets as $VARIABLES)"><span class="material-symbols-outlined">terminal</span>curl</button>
       <button class="btn btn-sm" onclick="acOpenSave()" title="Save to a collection"><span class="material-symbols-outlined">bookmark_add</span>Save</button>
       <button class="btn btn-sm" onclick="acNewRequest()" title="New blank request"><span class="material-symbols-outlined">add</span>New</button>
@@ -33,6 +35,7 @@ function acRenderRequest() {
     <div class="lc-tabs">${tabs.map(([k, l]) => `<button class="lc-tab ${acState.reqTab === k ? 'active' : ''}" onclick="acReqTab('${k}')">${l}</button>`).join('')}</div>
     <div class="ac-pane" id="acReqPane"></div>`;
   acRenderReqPane();
+  if (caret != null) { const u = document.getElementById('acUrl'); u.focus(); u.setSelectionRange(caret, caret); }
 }
 
 function acWarningHtml() {
@@ -68,6 +71,8 @@ function acSetUrl(v) {
   acState.req.url = v;
   acSaveDraft();
   if (acState.reqTab === 'params') acRenderReqPane();
+  const has = !!document.querySelector('.ac-req-head [onclick="acOpenLcLookup()"]');
+  if (has !== acUsesLcAccountId()) acRenderRequest(true);
 }
 
 function acAuthLabel(type) {

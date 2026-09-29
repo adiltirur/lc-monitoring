@@ -228,3 +228,70 @@ async function acDeleteSaved(ci, ii) {
   acState.collections[ci].items.splice(ii, 1);
   await acPersistCollections();
 }
+
+// ── find a patient's lcAccountId by email ──
+// Searches app_user_info on the console's env (same query as the Users view) and
+// writes the id into the open request in place of {{lcAccountId}}. The inserted
+// value is remembered, so picking another user replaces it again.
+function acUsesLcAccountId(r = acState.req) {
+  const text = [r.url, r.body, ...r.headers.map(h => h.value)].join(' ');
+  return /\{\{\s*lcAccountId\s*\}\}/.test(text) || (r.lcFilled && text.includes(r.lcFilled));
+}
+
+function acOpenLcLookup() {
+  acModal(`${acModalHead(`Find lcAccountId — ${escHtml(acState.env)}`)}
+    <div class="ac-modal-body">
+      <div class="ac-row" style="flex-wrap:nowrap">
+        <input class="lc-input" id="acLcQuery" autofocus placeholder="Email (or part of a name)" autocomplete="off"
+          onkeydown="if(event.key==='Enter')acLcSearch()">
+        ${btnPrimary('Search', 'acLcSearch()', { icon: 'search' })}
+      </div>
+      <div class="ac-hint">Searches <code>app_user_info</code> on ${escHtml(acState.env)}; the id replaces <code>{{lcAccountId}}</code> in the URL, headers and body.</div>
+      <div id="acLcResults"></div>
+    </div>`, { wide: true });
+}
+
+async function acLcSearch() {
+  const q = document.getElementById('acLcQuery').value.trim();
+  const box = document.getElementById('acLcResults');
+  if (!q) return;
+  box.innerHTML = loadingState('Searching…');
+  try {
+    await ensureEnvPasswords();
+    const res = await fetch(`/api/users?q=${encodeURIComponent(q)}&page=1&pageSize=10`, { headers: envHeadersFor(acState.env) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    const rows = data.rows || data.data || [];
+    if (!rows.length) { box.innerHTML = `<div class="ac-hint">No user matches “${escHtml(q)}” on ${escHtml(acState.env)}.</div>`; return; }
+    box.innerHTML = rows.map(u => `<div class="ac-acc">
+        <div class="grow"><div class="who">${escHtml(`${u.firstName || ''} ${u.lastName || ''}`.trim() || '—')} · ${escHtml(u.email || '')}</div>
+          <div class="sub mono">lcAccountId ${escHtml(u.lcAccountId || '—')}${u.praxisId ? ` · ${escHtml(praxisLabel(u.praxisId))}` : ''}${u.pmsPatientId ? ` · pmsPatientId ${escHtml(u.pmsPatientId)}` : ''}</div></div>
+        ${u.lcAccountId ? `<button class="btn btn-sm btn-primary" onclick="acUseLcAccountId('${escHtml(u.lcAccountId)}')">Use</button>` : '<span class="pill">no lcAccountId</span>'}
+      </div>`).join('') + (data.total > rows.length ? `<div class="ac-hint">${data.total - rows.length} more — refine the search.</div>` : '');
+  } catch (e) {
+    box.innerHTML = `<div class="ac-hint" style="color:var(--red)">${escHtml(e.message)}</div>`;
+  }
+}
+
+function acUseLcAccountId(id) {
+  const r = acState.req;
+  const replace = (s) => {
+    let out = String(s || '').replace(/\{\{\s*lcAccountId\s*\}\}/g, id);
+    if (r.lcFilled && r.lcFilled !== id) out = out.split(r.lcFilled).join(id);
+    return out;
+  };
+  const before = JSON.stringify([r.url, r.body, r.headers]);
+  r.url = replace(r.url);
+  r.body = replace(r.body);
+  r.headers = r.headers.map(h => ({ ...h, value: replace(h.value) }));
+  const changed = JSON.stringify([r.url, r.body, r.headers]) !== before;
+  acCloseModal();
+  if (changed) {
+    r.lcFilled = id;
+    acSaveDraft();
+    acRenderRequest();
+    showToast(`✅ lcAccountId ${id} inserted`);
+  } else {
+    copyText(id);
+  }
+}

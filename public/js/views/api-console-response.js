@@ -87,7 +87,9 @@ function acConsoleHtml(r) {
   if (r.networkError || r.failed) {
     html += `<div class="ac-neterr"><div class="band"><span class="material-symbols-outlined">error</span>${r.networkError ? 'Request failed' : 'Not sent'}</div>
       <div class="panel-body"><div class="mono">${escHtml(r.error || '')}</div>${r.hint ? `<div style="margin-top:6px;color:var(--ink-2)">${escHtml(r.hint)}</div>` : ''}
-      ${r.missing && r.missing.length ? `<div style="margin-top:8px"><button class="btn btn-sm" onclick="acOpenVars()">Open Variables</button></div>` : ''}</div></div>`;
+      ${r.missing && r.missing.length ? `<div class="ac-row" style="margin-top:8px">
+        ${r.missing.includes('lcAccountId') ? `<button class="btn btn-sm btn-primary" onclick="acOpenLcLookup()"><span class="material-symbols-outlined">person_search</span>Find lcAccountId by email</button>` : ''}
+        <button class="btn btn-sm" onclick="acOpenVars()">Open Variables</button></div>` : ''}</div></div>`;
   }
   if (r.timings) {
     const tm = r.timings;

@@ -579,4 +579,8 @@ helper server (`routes/api-console.js`), never the browser, so credentials stay 
   modals, Postman import/export + curl) and `public/css/api-console.css`. Postman v2.1 collections
   and environments import/export; the helper's own auth types are kept in an `lcHelper` field.
   "Copy as curl" puts credentials in as `$PLACEHOLDERS`.
+- **Find lcAccountId**: when a request mentions `lcAccountId`, the header shows a lookup that
+  searches `app_user_info` by email on the console's env (via `/api/users` + `envHeadersFor`) and
+  writes the id into the request in place of `{{lcAccountId}}` (remembered as `lcFilled`, so a
+  second pick replaces it).
 - `/api/console` has a 30 MB JSON body limit (Serverpod's `maxRequestSize`); other routes keep 100 kB.

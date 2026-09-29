@@ -35,14 +35,14 @@ function acBlankRequest() {
   return {
     name: 'Untitled request', kind: 'custom', ref: null,
     method: 'GET', url: '{{coreApi}}/', headers: [{ key: 'Accept', value: 'application/json', enabled: true }],
-    bodyMode: 'none', body: '', auth: { type: 'none' }, effect: null, example: null,
+    bodyMode: 'none', body: '', auth: { type: 'none' }, effect: null, example: null, lcFilled: null,
   };
 }
 
 // Only the fields that describe a request (what history/collections store).
 function acRequestPayload(r = acState.req) {
   return { name: r.name, kind: r.kind, ref: r.ref, method: r.method, url: r.url, headers: r.headers,
-    bodyMode: r.bodyMode, body: r.body, auth: r.auth, effect: r.effect || null };
+    bodyMode: r.bodyMode, body: r.body, auth: r.auth, effect: r.effect || null, lcFilled: r.lcFilled || null };
 }
 
 function acSaveDraft() {
