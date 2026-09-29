@@ -104,7 +104,7 @@ function acParamsHtml() {
       <td><button class="lc-icon-btn" onclick="acDelParam(${i})" title="Remove"><span class="material-symbols-outlined">close</span></button></td></tr>`).join('')}
     </table>
     <div class="ac-row" style="margin-top:8px"><button class="btn btn-sm" onclick="acAddParam()"><span class="material-symbols-outlined">add</span>Add param</button>
-    <span class="ac-hint">Values are sent as typed — encode special characters yourself (e.g. <code>%7C</code> for |). <code>{{variables}}</code> work everywhere.</span></div>`;
+    <span class="ac-hint">Characters not allowed in URLs (<code>|</code>, spaces, <code>{ }</code> …) are percent-encoded when sent; <code>&amp;</code>, <code>=</code> and <code>+</code> are sent as typed. <code>{{variables}}</code> work everywhere.</span></div>`;
 }
 
 function acWriteParams(pairs) {
