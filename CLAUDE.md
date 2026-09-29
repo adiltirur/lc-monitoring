@@ -17,8 +17,9 @@ LillianCare Helper is a **local-only** Node.js/Express developer tool for debugg
 
 ## Tech Stack
 
-- **Backend:** Node.js + Express (`server.js` — single file, all routes, ~850 lines)
-- **Frontend:** Vanilla HTML/CSS/JS SPA (`public/index.html` — single file, hash-based routing, ~1500 lines)
+- **Backend:** Node.js + Express (`server.js`, all API routes)
+- **Frontend:** Vanilla HTML/CSS/JS SPA with hash routing. `public/index.html` is only the
+  shell; styles live in `public/css/`, code in `public/js/` (one file per view)
 - **Monitoring:** Sci-fi dashboard (`public/monitoring.html` — loaded in iframe, SSE for real-time logs)
 - **Database:** PostgreSQL via `pg` package (connects to Serverpod's RDS per environment)
 - **AWS:** SDK v3 — EC2, RDS, CloudWatch, CloudWatch Logs, ALB, ElastiCache, S3, CloudFront, Bedrock
@@ -35,12 +36,36 @@ helper/
   .fcm_service_account.json   — 🔒 NEVER READ — Firebase private key
   .gitignore                  — Must always include .env and .fcm_service_account.json
   CLAUDE.md                   — This file
+  scripts/                    — lilli.js (Lilli ops CLI), gen-theme.js, lilli-deploy-remote.sh
   public/
-    index.html                — Main SPA (hash routing, sidebar navigation)
+    index.html                — App shell: top bar, sidebar nav, popovers, script tags
+    css/app.css               — Shell + component styles (tokens come from theme.css)
+    js/core/                  — Shared code, loaded before the views
+      constants.js            — PRESETS, status/pill maps, TITLE_BY_VIEW
+      format.js               — Dates (Europe/Berlin), escHtml, showToast, copyText
+      ui.js                   — pageHero, pageWrap, btn*/f* builders, empty/loading/error states, pagination
+      api.js                  — env-config, praxis names, getCfg/dbHeaders, apiFetch/apiPost/apiPatch,
+                                ensureEnvPasswords/envHeadersFor (two-env wizards)
+      connection.js           — Connection popover, presets, env plate + native setEnv
+      router.js               — navigate(view)
+      charts.js               — Inline-SVG chart primitives
+      crypto.js               — AES-256-CBC decrypt (bookings, users)
+      command-palette.js      — ⌘K palette (CMDK list)
+      shell.js                — Display settings (tweaks), clocks, uptime ticker
+      boot.js                 — Init: apply tweaks, load connection, first navigate, hashchange
+    js/views/<view>.js        — One file per view (renderXxx + its helpers and state)
     monitoring.html           — AWS monitoring dashboard (iframe, sci-fi theme)
-    tools/
-      decrypt_viewer.html     — CSV bulk decryptor (iframe)
+    tools/                    — decrypt_viewer.html, aws_rds_restore.html (iframes)
 ```
+
+**How the frontend scripts load:** plain classic `<script src>` tags at the end of
+`index.html`, in order: `core/` → `views/` → `command-palette.js`, `shell.js`, `boot.js`.
+They are not ES modules: all top-level functions and `let`/`const` share one global
+scope, which is what inline `onclick="fn()"` handlers rely on. Consequences:
+- Top-level names must be unique across all files (prefix view state, e.g. `invList`, `prState`).
+- Code that runs at load time (not inside a function) may only use things defined
+  in the same file or an earlier one. Calls inside functions are fine anywhere.
+- New files must be added to the script list in `index.html`.
 
 ## Mac app (`mac/`) and always-on server
 
@@ -98,7 +123,7 @@ Environment plates: 1 dev (white), 2 test (blue), 3 staging (amber), 4 productio
 - SSE endpoint (`/api/monitor/logs/stream`) uses query params instead (EventSource doesn't support custom headers)
 - Pool management: `getPool(req)` in `server.js` creates/caches PG connection pools keyed by connection string
 
-**Environment presets** (in `index.html` `PRESETS` constant):
+**Environment presets** (`PRESETS` in `public/js/core/constants.js`):
 - `dev` → `localhost:8090/lillian_care_core`
 - `test` → `database-test.lillian.care:5432/serverpod`
 - `staging` → `database-staging.lillian.care:5432/serverpod`
@@ -109,7 +134,7 @@ Environment plates: 1 dev (white), 2 test (blue), 3 staging (amber), 4 productio
 - `GET /api/env-config` serves `{ passwords: { dev, test, staging, production }, decryptKeys: { dev, staging, production } }` to the frontend
 - Frontend fetches this on load and uses it to auto-fill the password field when a preset is selected
 
-**Navigation:** Hash-based routing via `navigate(view)`. Each view has a `renderXxx(el)` function. Add new views by: nav item in sidebar → route in `navigate()` → `renderXxx()` function.
+**Navigation:** Hash-based routing via `navigate(view)` (`public/js/core/router.js`). Each view has a `renderXxx(el)` function in `public/js/views/`. See "Adding New Features".
 
 **Monitoring dashboard:** Lives in `monitoring.html` (separate file, own CSS). Tabs: Overview, Metrics, Live Logs, Errors, Alarms.
 
@@ -129,15 +154,21 @@ Environment plates: 1 dev (white), 2 test (blue), 3 staging (amber), 4 productio
 - SQL column names use camelCase with double quotes: `"firstName"`, `"createdAt"`
 - Error responses: `res.status(5xx).json({ error: e.message })`
 - No external frontend libraries (PapaParse CDN is the only exception, in decrypt_viewer.html)
-- Keep single-file architecture — do not split server.js or index.html into modules
+- Keep files focused and readable: one view per file in `public/js/views/`; shared
+  helpers go in `public/js/core/` only when more than one view uses them. Split a
+  view into several files (`views/<view>-<part>.js`) rather than letting one grow huge.
 
 ## Adding New Features
 
 1. Add API route to `server.js` before the `// ─── Static files ───` section
-2. Add sidebar nav item in `index.html` HTML under the relevant section
-3. Add `else if (view === 'xxx') renderXxx(content);` in the `navigate()` function
-4. Add `function renderXxx(el) { ... }` following existing patterns
-5. For monitoring features: add to `monitoring.html` instead
+2. Add sidebar nav item in `public/index.html` under the relevant section
+3. Add a title to `TITLE_BY_VIEW` (`js/core/constants.js`) and
+   `else if (view === 'xxx') renderXxx(content);` in `navigate()` (`js/core/router.js`)
+4. Create `public/js/views/xxx.js` with `function renderXxx(el) { ... }` following
+   existing patterns (`pageWrap`/`pageHero`, `apiFetch`, `loadingState`/`errorState`)
+5. Add `<script src="/js/views/xxx.js"></script>` to the views block in `index.html`
+6. Optionally add a ⌘K entry to `CMDK` (`js/core/command-palette.js`)
+7. For monitoring features: add to `monitoring.html` instead
 
 ## Praxis Refresh feature (`/api/praxis/*`, view `#praxis-refresh`)
 
