@@ -17,7 +17,8 @@ LillianCare Helper is a **local-only** Node.js/Express developer tool for debugg
 
 ## Tech Stack
 
-- **Backend:** Node.js + Express (`server.js`, all API routes)
+- **Backend:** Node.js + Express. `server.js` is only the bootstrap; routes live in
+  `routes/<feature>.js` (one Express Router each), shared helpers in `lib/`
 - **Frontend:** Vanilla HTML/CSS/JS SPA with hash routing. `public/index.html` is only the
   shell; styles live in `public/css/`, code in `public/js/` (one file per view)
 - **Monitoring:** Sci-fi dashboard (`public/monitoring.html` — loaded in iframe, SSE for real-time logs)
@@ -29,7 +30,12 @@ LillianCare Helper is a **local-only** Node.js/Express developer tool for debugg
 
 ```
 helper/
-  server.js                   — Express backend, all API routes
+  server.js                   — Bootstrap: dotenv, middleware, mounts routes/*, static, listen
+  routes/<feature>.js         — One Express Router per feature (core, pms, logs, users, monitor,
+                                praxis-refresh, cockpit-*, db-refresh, release, investigations, lilli…)
+  lib/                        — Helpers shared by several routes: db (pools, poolFromHeaders,
+                                quoteIdent, bindValue), aws (SDK clients), ai (Bedrock + schema prompt),
+                                praxis (table lists), analytics, personio, local-stack, investigations, lilli
   package.json                — Dependencies (includes dotenv)
   .env                        — 🔒 NEVER READ — DB passwords + decrypt key
   .env.example                — Template (safe to read)
@@ -76,7 +82,7 @@ scope, which is what inline `onclick="fn()"` handlers rely on. Consequences:
   Re-run `install.sh` after switching nvm Node versions (node path is baked in).
 - The app is a menu-bar item + a window on demand. Closing the window does not
   stop anything; quitting the app does not stop the server.
-- Web changes need no rebuild (⌘R in the app). `server.js` changes need
+- Web changes need no rebuild (⌘R in the app). server-side changes (`server.js`, `routes/`, `lib/`) need
   "Restart Helper Server" in the menu bar (`launchctl kickstart -k`).
 - The shell injects `data-shell="mac"` on `<html>` and `window.lcNative.post(type, payload)`
   (`drag`, `zoom`, `notify`, `setEnv`). Elements with `data-drag-region` drag the
@@ -94,7 +100,7 @@ Keeps the local backend running so the `dev` preset works: Docker Desktop →
 (API :8080). Serverpod is spawned **detached** with a PID file in `.local-stack/`
 (gitignored), so restarting the helper does not kill it. State/config/log live in
 `.local-stack/` (`config.json`: `autostart` default true, `applyMigrations` default
-false). Docker's CLI is not on launchd's PATH — `LS_PATH` in `server.js` adds it.
+false). Docker's CLI is not on launchd's PATH — `LS_PATH` in `lib/local-stack.js` adds it.
 Override the Serverpod dir with `LC_SERVERPOD_DIR`.
 
 ## Visual system
@@ -121,7 +127,7 @@ Environment plates: 1 dev (white), 2 test (blue), 3 staging (amber), 4 productio
 - Passwords auto-filled from `.env` via `GET /api/env-config` on page load
 - Credentials travel as HTTP request headers: `x-db-host`, `x-db-port`, `x-db-name`, `x-db-user`, `x-db-password`
 - SSE endpoint (`/api/monitor/logs/stream`) uses query params instead (EventSource doesn't support custom headers)
-- Pool management: `getPool(req)` in `server.js` creates/caches PG connection pools keyed by connection string
+- Pool management: `getPool(req)` in `lib/db.js` creates/caches PG connection pools keyed by connection string
 
 **Environment presets** (`PRESETS` in `public/js/core/constants.js`):
 - `dev` → `localhost:8090/lillian_care_core`
@@ -160,7 +166,12 @@ Environment plates: 1 dev (white), 2 test (blue), 3 staging (amber), 4 productio
 
 ## Adding New Features
 
-1. Add API route to `server.js` before the `// ─── Static files ───` section
+1. Add API routes in a new `routes/xxx.js` (`const router = require('express').Router();`
+   … `module.exports = router;`) and mount it in `server.js` with `app.use(require('./routes/xxx'));`
+   before the `// ─── Static files ───` section. Put helpers that more than one route file
+   needs in `lib/`; route files never require each other. Test a server change with a
+   second copy (`PORT=<free port> node server.js`; only port 3333 autostarts the local
+   stack) before restarting the LaunchAgent
 2. Add sidebar nav item in `public/index.html` under the relevant section
 3. Add a title to `TITLE_BY_VIEW` (`js/core/constants.js`) and
    `else if (view === 'xxx') renderXxx(content);` in `navigate()` (`js/core/router.js`)
@@ -176,7 +187,7 @@ Wizard for refreshing staging praxis data from prod:
 1. Schema-drift check → 2. Backup both envs → 3. Wipe staging → 4. Import prod → staging
 → 5. Scrub contacts → 6. Set default praxis on all users.
 
-**Hardcoded table list (`PRAXIS_CONFIG_TABLES` in `server.js`)** — when the
+**Hardcoded table list (`PRAXIS_CONFIG_TABLES` in `lib/praxis.js`)** — when the
 backend adds a new `praxis_*_config` or `cockpit_*` table that's praxis-scoped,
 add it to this constant. Step 0 (drift check) queries the live target schema
 for any column named `praxisId` and flags tables not in this list, so an
@@ -212,7 +223,7 @@ praxis-config tables have a NOT NULL FK to a non-praxis table (e.g.,
 prod would violate that FK on staging because prod's user ids don't exist
 there. These tables are still backed up and wiped, but skipped on import.
 If you add a new praxis-config table that references users/admins, add it
-to this set in `server.js`.
+to this set in `lib/praxis.js`.
 
 ## Cockpit Fill feature (`/api/cockpit/*`, view `#cockpit-fill`)
 
@@ -262,7 +273,7 @@ preset is Production. Staging/dev are unaffected.
 columns (`praxis_hours_config.start`/`"end"` and the three `*HoursJson` blobs
 in `cockpit_standard_week_version`) store `"HH:MM"` text only. The backend
 and praxis app pass these through as strings — never construct a `DateTime`
-from them. `cellToHHMM` in `server.js` reads `getHours/getMinutes` (NOT
+from them. `cellToHHMM` in `routes/cockpit-fill.js` reads `getHours/getMinutes` (NOT
 `getUTCHours`) because SheetJS with `cellDates: true` encodes Excel
 time-of-day into the **local** components of the Date object — e.g. cell
 `08:15` returns a Date `d` with `d.getHours()===8` regardless of host TZ;
@@ -275,7 +286,7 @@ machine).
 
 Cross-env copy of the cockpit-related tables for selected praxes. Same two
 header sets as Praxis Refresh import (`x-src-db-*` + `x-tgt-db-*`), but scoped
-to the cockpit subset (constant `COCKPIT_SYNC_TABLES` in `server.js`):
+to the cockpit subset (constant `COCKPIT_SYNC_TABLES` in `routes/cockpit-sync.js`):
 
 ```
 praxis_hours_config
@@ -314,7 +325,7 @@ unless all are satisfied:
 - `x-allow-destructive: yes` header
 - body `confirmation` exactly equals the `lcId`
 
-**Per-table action map (`CLEANUP_NON_CONFIG_TABLES` in `server.js`)**:
+**Per-table action map (`CLEANUP_NON_CONFIG_TABLES` in `routes/praxis-cleanup.js`)**:
 
 | Table | Action | Why |
 |---|---|---|
@@ -355,7 +366,7 @@ shared pools) because it sets session GUCs. (Replaces the old Test DB Refresh;
 - The source session is opened with `default_transaction_read_only = on` and
   the whole read happens inside a `REPEATABLE READ READ ONLY` transaction —
   even a code bug cannot write to the source env.
-- All guards live in `drAssertSafeTarget()` in `server.js`, called by both
+- All guards live in `drAssertSafeTarget()` in `routes/db-refresh.js`, called by both
   endpoints.
 
 **Skip list (`DB_REFRESH_SKIP_TABLES`)** — Serverpod log/telemetry tables
@@ -394,7 +405,7 @@ in `.env`.
 
 Builds the two Flutter apps in `../apps-frontend/apps` (override with
 `LC_APPS_DIR`) and ships web builds. Config lives in `RL_APPS` / `RL_ENVS` in
-`server.js`:
+`routes/release.js`:
 
 | App key | Folder | Web test bucket → CF dist | Web prod bucket → CF dist |
 |---|---|---|---|
@@ -509,7 +520,7 @@ served at voice-staging.lillian.care and tools.lillian.care under `/lilli-stagin
   changes first). The ref must be pushed to GitHub, because the box fetches from origin.
 - **One module, two front ends.** `scripts/lilli.js` exports the data functions (`statusData`,
   `callsData`, `callData`, `logsData`, `releasesData`, `deployPlan`, `runRemote`), and runs as a CLI when
-  executed directly. `server.js` wraps them in `/api/lilli/*`, and the `#lilli` view (Calls, Logs,
+  executed directly. `routes/lilli.js` wraps them in `/api/lilli/*`, and the `#lilli` view (Calls, Logs,
   Deploy tabs) renders them. Add new Lilli features to the module first, so the CLI and the UI stay in step.
   SSH calls are async and the tunnel/pool is reused across requests. PM2's process list is reduced to
   safe fields on the box, because `pm2 jlist` includes each process's environment (secrets).
