@@ -9,8 +9,34 @@ function acRenderSide() {
     <div class="lc-tabs">${tabs.map(([k, l]) => `<button class="lc-tab ${acState.sideTab === k ? 'active' : ''}" onclick="acSideTab('${k}')">${l}</button>`).join('')}</div>
     <div class="ac-side-search"><input class="lc-input" id="acSearch" placeholder="${acState.sideTab === 'catalog' ? `Search ${c.serverpod.counts.methods + c.externals.length} requests…` : 'Filter…'}"
       value="${escHtml(acState.search)}" oninput="acSearchInput(this.value)"></div>
+    ${acState.sideTab === 'catalog' ? `<div class="ac-catalog-info">
+      <span class="grow" title="Read from ${escHtml(c.serverpod.coreDir)}${c.serverpod.git ? ` — branch ${escHtml(c.serverpod.git.branch || 'detached')} @ ${escHtml(c.serverpod.git.commit || '?')}` : ''}">${c.serverpod.counts.methods} methods · built ${escHtml(deTime(c.serverpod.builtAt).slice(-8))}${c.serverpod.git ? ` · <span class="mono">${escHtml(c.serverpod.git.branch || 'detached')}${c.serverpod.git.commit ? '@' + escHtml(c.serverpod.git.commit) : ''}</span>` : ''}</span>
+      <button class="lc-icon-btn" onclick="acReloadCatalog()" title="Reload the catalog from LillianCare-Core"><span class="material-symbols-outlined" id="acReloadIcon">refresh</span></button>
+    </div>` : ''}
     <div class="ac-side-list" id="acSideList"></div>`;
   acRenderSideList();
+}
+
+// Forces a rebuild (normally automatic when Core's generated code, models or
+// endpoint sources change) and reports what changed.
+async function acReloadCatalog() {
+  const icon = document.getElementById('acReloadIcon');
+  if (icon) icon.classList.add('spin');
+  const key = (c) => new Set(c.serverpod.endpoints.flatMap(e => e.methods.map(m => `${e.name}.${m.name}`)));
+  const before = key(acState.catalog);
+  try {
+    acState.catalog = await acApi('/api/console/catalog?reload=1');
+    const after = key(acState.catalog);
+    const added = [...after].filter(k => !before.has(k));
+    const removed = [...before].filter(k => !after.has(k));
+    acRenderSide();
+    showToast(added.length || removed.length
+      ? `✅ Catalog reloaded: ${added.length ? `+${added.length} (${added.slice(0, 3).join(', ')}${added.length > 3 ? '…' : ''})` : ''}${added.length && removed.length ? ', ' : ''}${removed.length ? `−${removed.length}` : ''}`
+      : '✅ Catalog reloaded — no endpoint changes');
+  } catch (e) {
+    showToast(`❌ ${e.message}`);
+    if (icon) icon.classList.remove('spin');
+  }
 }
 
 function acSideTab(tab) {

@@ -28,7 +28,7 @@ function checkEnv(env) {
 
 // ── catalog + meta ──
 router.get('/api/console/catalog', (req, res) => {
-  try { res.json({ serverpod: getCatalog(), externals: EXTERNALS }); } catch (e) { fail(res, e); }
+  try { res.json({ serverpod: getCatalog({ force: req.query.reload === '1' }), externals: EXTERNALS }); } catch (e) { fail(res, e); }
 });
 
 router.get('/api/console/meta', async (req, res) => {

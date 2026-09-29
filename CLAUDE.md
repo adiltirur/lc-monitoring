@@ -543,7 +543,9 @@ backend calls, and the webhooks other systems call into the backend. Requests ar
 helper server (`routes/api-console.js`), never the browser, so credentials stay server-side.
 
 - **Catalog** (`lib/api-console/catalog.js`) is parsed live from LillianCare-Core and is
-  rebuilt when `endpoints.dart` or `client.dart` change: endpoints/methods/param types from
+  rebuilt automatically when any source changes (generated code, `*.spy.yaml`, `*_endpoint.dart`,
+  shared models, config — newest mtime + file count), or via the Reload button (`?reload=1`),
+  which also shows the Core branch/commit it was read from: endpoints/methods/param types from
   `lib/src/generated/endpoints.dart` (+ the `serverpod_auth*` modules in `~/.pub-cache`),
   `requireLogin` and `///` docs from the endpoint sources, return types from the generated
   client, model fields / enum serialization from `*.spy.yaml` and the freezed `Api*` classes
