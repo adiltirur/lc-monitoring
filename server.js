@@ -3,6 +3,9 @@ const express = require('express');
 const path = require('path');
 
 const app = express();
+// The API console relays request bodies (base64 documents, Postman exports) — allow up to
+// Serverpod's own maxRequestSize there; everything else keeps the 100 kB default.
+app.use('/api/console', express.json({ limit: '30mb' }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 const { lsReadConfig, lsRun, lsStartServerpod } = require('./lib/local-stack');
@@ -39,6 +42,7 @@ app.use(require('./routes/investigations'));
 app.use(require('./routes/investigations-code'));
 app.use(require('./routes/lilli'));
 app.use(require('./routes/lilli-inv'));
+app.use(require('./routes/api-console'));
 
 // ─── Static files ─────────────────────────────────────────────────────────────
 app.use(express.static(path.join(__dirname, 'public'), { etag: false, maxAge: 0, setHeaders: (res) => { res.setHeader('Cache-Control', 'no-store'); } }));

@@ -1,5 +1,5 @@
 const router = require('express').Router();
-const crypto = require('crypto');
+const { pmsJwt, pmsJwtInvalidate } = require('../lib/pms');
 
 // ─── PMS (principa FHIR) proxy ────────────────────────────────────────────────
 // Mirrors the backend's `FHIRApiCaller` + `JwtProvider` (Dart) so the helper
@@ -17,20 +17,6 @@ const PMS_CONFIG = {
   production: { baseUrl: process.env.PMS_BASE_URL_PROD,    secret: process.env.PMS_SECRET_PROD },
 };
 
-// HS256 JWT cache keyed by secret. Matches JwtProvider: 10-min TTL, refresh
-// 60 s before expiry, drop on 401.
-const jwtCache = new Map();
-function pmsJwt(secret) {
-  const now = Math.floor(Date.now() / 1000);
-  const cached = jwtCache.get(secret);
-  if (cached && now < cached.expiresAt - 60) return cached.token;
-  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
-  const body   = Buffer.from(JSON.stringify({ iat: now, exp: now + 600 })).toString('base64url');
-  const sig    = crypto.createHmac('sha256', secret).update(`${header}.${body}`).digest('base64url');
-  const token  = `${header}.${body}.${sig}`;
-  jwtCache.set(secret, { token, expiresAt: now + 600 });
-  return token;
-}
 
 function pmsConfigFromReq(req) {
   const env = req.headers['x-env'] || 'dev';
@@ -50,7 +36,7 @@ async function pmsFetch(req, path) {
     headers: { 'Accept': 'application/fhir+json', 'Authorization': `Bearer ${pmsJwt(cfg.secret)}` },
   });
   let res = await hit();
-  if (res.status === 401) { jwtCache.delete(cfg.secret); res = await hit(); }
+  if (res.status === 401) { pmsJwtInvalidate(cfg.secret); res = await hit(); }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     const hdrs = {};

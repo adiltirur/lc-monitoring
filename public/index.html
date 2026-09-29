@@ -10,6 +10,7 @@
   <script src="/vendor/tailwindcss.js"></script>
   <script>tailwind.config = window.LC_TAILWIND_CONFIG;</script>
   <link rel="stylesheet" href="/css/app.css">
+  <link rel="stylesheet" href="/css/api-console.css">
 </head>
 <body>
 
@@ -133,6 +134,9 @@
         </a>
         <a class="lc-nav-item" data-view="investigations" onclick="navigate('investigations');return false" href="#investigations">
           <span class="material-symbols-outlined">troubleshoot</span><span>Investigations</span>
+        </a>
+        <a class="lc-nav-item" data-view="api-console" onclick="navigate('api-console');return false" href="#api-console">
+          <span class="material-symbols-outlined">api</span><span>API Console</span>
         </a>
       </div>
 
@@ -293,6 +297,12 @@
 <script src="/js/views/local-stack.js"></script>
 <script src="/js/views/release.js"></script>
 <script src="/js/views/lilli.js"></script>
+<script src="/js/views/api-console.js"></script>
+<script src="/js/views/api-console-sidebar.js"></script>
+<script src="/js/views/api-console-request.js"></script>
+<script src="/js/views/api-console-response.js"></script>
+<script src="/js/views/api-console-panels.js"></script>
+<script src="/js/views/api-console-postman.js"></script>
 <script src="/js/core/command-palette.js"></script>
 <script src="/js/core/shell.js"></script>
 <script src="/js/core/boot.js"></script>

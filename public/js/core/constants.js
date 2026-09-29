@@ -51,6 +51,7 @@ const TITLE_BY_VIEW = {
   'query-runner': 'Query Runner',
   'ai-query': 'AI Assistant',
   'investigations': 'Investigations',
+  'api-console': 'API Console',
   'csv-decrypt': 'CSV Decryptor',
   'monitoring': 'Monitor',
   'praxis-refresh': 'Praxis Refresh',

@@ -22,6 +22,7 @@ function navigate(view) {
   else if (view === 'query-runner') renderQueryRunner(content);
   else if (view === 'ai-query') renderAIQuery(content);
   else if (view === 'investigations') renderInvestigations(content);
+  else if (view === 'api-console') renderApiConsole(content);
   else if (view === 'csv-decrypt') renderCsvDecrypt(content);
   else if (view === 'rds-restore') renderRdsRestore(content);
   else if (view === 'send-notification') renderSendNotification(content);

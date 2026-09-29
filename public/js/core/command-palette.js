@@ -10,6 +10,7 @@ const CMDK = [
   { sec:'Navigate', icon:'person',         label:'Users',            crumb:'',          kbd:'U', run: () => navigate('users') },
   { sec:'Navigate', icon:'calendar_today', label:'Bookings',         crumb:'',               run: () => navigate('bookings') },
   { sec:'Navigate', icon:'database',       label:'Query Runner',     crumb:'',          kbd:'Q', run: () => navigate('query-runner') },
+  { sec:'Navigate', icon:'api',            label:'API Console',      crumb:'',                   run: () => navigate('api-console') },
   { sec:'Navigate', icon:'neurology',      label:'AI Assistant',     crumb:'',                     run: () => navigate('ai-query') },
   { sec:'Navigate', icon:'campaign',       label:'Send Notification',crumb:'',                   run: () => navigate('send-notification') },
   { sec:'Navigate', icon:'schedule',       label:'Future Calls',     crumb:'',                  run: () => navigate('future-calls') },

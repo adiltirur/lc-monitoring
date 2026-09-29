@@ -535,3 +535,48 @@ served at voice-staging.lillian.care and tools.lillian.care under `/lilli-stagin
   question is scrubbed first. The answer (Summary / Evidence / Root cause / Fix brief / Open questions) is appended to
   `## Findings` in `../investigations/YYYY-MM-DD-lilli-*.md`. Follow-ups `--resume` the saved session id
   (`.investigations-state/<file>.json` → `lilliSessionId`). "Copy fix brief" hands the latest brief to a Claude Code session.
+
+## API Console (`/api/console/*`, view `#api-console`)
+
+Postman-like console for every Serverpod endpoint method, the external services the
+backend calls, and the webhooks other systems call into the backend. Requests are sent by the
+helper server (`routes/api-console.js`), never the browser, so credentials stay server-side.
+
+- **Catalog** (`lib/api-console/catalog.js`) is parsed live from LillianCare-Core and is
+  rebuilt when `endpoints.dart` or `client.dart` change: endpoints/methods/param types from
+  `lib/src/generated/endpoints.dart` (+ the `serverpod_auth*` modules in `~/.pub-cache`),
+  `requireLogin` and `///` docs from the endpoint sources, return types from the generated
+  client, model fields / enum serialization from `*.spy.yaml` and the freezed `Api*` classes
+  in `../LillianCare-Shared-Models`, and the public API/web URL per env from `config/<mode>.yaml`.
+  Body skeletons are generated from the param types (enums: index or name as serialized).
+  Wire format: `POST {{coreApi}}/<endpoint>/<method>`, JSON object keyed by param name.
+  The one streaming method (`questionnaire.listenForQuestionnaires`) is listed but disabled.
+- **External templates** (`lib/api-console/externals.js`) mirror each call site in Core
+  (Principa FHIR + REST, Personio, Brevo, FCM, Google Maps, feiertage-api) plus the inbound
+  webhooks (`/fhir/*`, `/aivo/*`, `/incoming/lilli/*`, Fonio, Unify, `/api/public/*`).
+  When the backend adds or changes an outbound call, update the template here. `effect`
+  (`read` / `write` / `sends`) drives the warnings in the UI.
+- **Auth** (`lib/api-console/auth.js`): LillianCare login (email/password accounts →
+  `/emailIdp/login` → Bearer session token, cached, re-login on 401), Principa JWT
+  (`lib/pms.js`, shared with `routes/pms.js`), Personio (token rotation via the `authorization`
+  response header, shared cache in `lib/personio.js`), Google service account (FCM), Brevo,
+  Maps key, `X-Lilli-Secret`, core `api-key`, plus generic bearer/basic/header. Secrets come from
+  `.env` (see `.env.example`: `BREVO_API_KEY`, `GOOGLE_MAPS_API_KEY`, `LILLI_SSO_SECRET_<ENV>`,
+  `LC_API_KEY_<ENV>`, optional `PMS_BASE_URL_TEST`). Every secret added is masked (‹label›) in
+  the trace and the echoed request. **A service's credentials are only attached when the URL
+  points at that service for the selected env** (`assertCredentialTarget`).
+- **Production guard**: on `production`, anything but GET/HEAD — and every Serverpod call —
+  returns 428 unless `body.confirm === 'production'`; the UI asks for it each time.
+- **Variables**: `{{name}}` in URL/headers/body. Precedence: dynamic (`{{$isoTimestamp}}`,
+  `{{$guid}}`, `{{$date}}`, `{{$datePlus7}}`, …) < built-in base URLs (`coreApi`, `coreWeb`,
+  `principaFhir`, `principaRest`, `personio`, `brevo`, `fcm`, `maps`, `holidays`) < global < env.
+  Unresolved variables refuse the send.
+- **State** in `.api-console/` (gitignored, 0700/0600): `accounts.json` (passwords never go back to
+  the browser), `history.json` (requests only — **responses are never persisted**, they can hold
+  patient data), `collections.json`, `vars.json`. Binary responses are kept in memory (last 20)
+  for `/api/console/download/:id`.
+- **Frontend**: `public/js/views/api-console*.js` (state/send, sidebar, request editor, response,
+  modals, Postman import/export + curl) and `public/css/api-console.css`. Postman v2.1 collections
+  and environments import/export; the helper's own auth types are kept in an `lcHelper` field.
+  "Copy as curl" puts credentials in as `$PLACEHOLDERS`.
+- `/api/console` has a 30 MB JSON body limit (Serverpod's `maxRequestSize`); other routes keep 100 kB.
