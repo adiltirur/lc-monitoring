@@ -44,8 +44,9 @@ Production presets).
 ## Capabilities and Constraints
 
 - Local-only; never exposed to the internet. Express on `localhost:3333`.
-- Single-file architecture: `server.js`, `public/index.html`,
-  `public/monitoring.html`, `public/tools/*.html`. No build step, no framework.
+- Plain files, no build step, no framework: `server.js`, `public/index.html`
+  (shell) + `public/css/`, `public/js/core/`, `public/js/views/` (one file per view),
+  `public/monitoring.html`, `public/tools/*.html`.
 - Secrets in `.env` / `.fcm_service_account.json` must never be read by tools.
 - Destructive endpoints have server-side typed-confirmation gates; the UI must
   keep surfacing them.

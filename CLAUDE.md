@@ -17,8 +17,10 @@ LillianCare Helper is a **local-only** Node.js/Express developer tool for debugg
 
 ## Tech Stack
 
-- **Backend:** Node.js + Express (`server.js` — single file, all routes, ~850 lines)
-- **Frontend:** Vanilla HTML/CSS/JS SPA (`public/index.html` — single file, hash-based routing, ~1500 lines)
+- **Backend:** Node.js + Express. `server.js` is only the bootstrap; routes live in
+  `routes/<feature>.js` (one Express Router each), shared helpers in `lib/`
+- **Frontend:** Vanilla HTML/CSS/JS SPA with hash routing. `public/index.html` is only the
+  shell; styles live in `public/css/`, code in `public/js/` (one file per view)
 - **Monitoring:** Sci-fi dashboard (`public/monitoring.html` — loaded in iframe, SSE for real-time logs)
 - **Database:** PostgreSQL via `pg` package (connects to Serverpod's RDS per environment)
 - **AWS:** SDK v3 — EC2, RDS, CloudWatch, CloudWatch Logs, ALB, ElastiCache, S3, CloudFront, Bedrock
@@ -28,19 +30,48 @@ LillianCare Helper is a **local-only** Node.js/Express developer tool for debugg
 
 ```
 helper/
-  server.js                   — Express backend, all API routes
+  server.js                   — Bootstrap: dotenv, middleware, mounts routes/*, static, listen
+  routes/<feature>.js         — One Express Router per feature (core, pms, logs, users, monitor,
+                                praxis-refresh, cockpit-*, db-refresh, release, investigations, lilli…)
+  lib/                        — Helpers shared by several routes: db (pools, poolFromHeaders,
+                                quoteIdent, bindValue), aws (SDK clients), ai (Bedrock + schema prompt),
+                                praxis (table lists), analytics, personio, local-stack, investigations, lilli
   package.json                — Dependencies (includes dotenv)
   .env                        — 🔒 NEVER READ — DB passwords + decrypt key
   .env.example                — Template (safe to read)
   .fcm_service_account.json   — 🔒 NEVER READ — Firebase private key
   .gitignore                  — Must always include .env and .fcm_service_account.json
   CLAUDE.md                   — This file
+  scripts/                    — lilli.js (Lilli ops CLI), gen-theme.js, lilli-deploy-remote.sh
   public/
-    index.html                — Main SPA (hash routing, sidebar navigation)
+    index.html                — App shell: top bar, sidebar nav, popovers, script tags
+    css/app.css               — Shell + component styles (tokens come from theme.css)
+    js/core/                  — Shared code, loaded before the views
+      constants.js            — PRESETS, status/pill maps, TITLE_BY_VIEW
+      format.js               — Dates (Europe/Berlin), escHtml, showToast, copyText
+      ui.js                   — pageHero, pageWrap, btn*/f* builders, empty/loading/error states, pagination
+      api.js                  — env-config, praxis names, getCfg/dbHeaders, apiFetch/apiPost/apiPatch,
+                                ensureEnvPasswords/envHeadersFor (two-env wizards)
+      connection.js           — Connection popover, presets, env plate + native setEnv
+      router.js               — navigate(view)
+      charts.js               — Inline-SVG chart primitives
+      crypto.js               — AES-256-CBC decrypt (bookings, users)
+      command-palette.js      — ⌘K palette (CMDK list)
+      shell.js                — Display settings (tweaks), clocks, uptime ticker
+      boot.js                 — Init: apply tweaks, load connection, first navigate, hashchange
+    js/views/<view>.js        — One file per view (renderXxx + its helpers and state)
     monitoring.html           — AWS monitoring dashboard (iframe, sci-fi theme)
-    tools/
-      decrypt_viewer.html     — CSV bulk decryptor (iframe)
+    tools/                    — decrypt_viewer.html, aws_rds_restore.html (iframes)
 ```
+
+**How the frontend scripts load:** plain classic `<script src>` tags at the end of
+`index.html`, in order: `core/` → `views/` → `command-palette.js`, `shell.js`, `boot.js`.
+They are not ES modules: all top-level functions and `let`/`const` share one global
+scope, which is what inline `onclick="fn()"` handlers rely on. Consequences:
+- Top-level names must be unique across all files (prefix view state, e.g. `invList`, `prState`).
+- Code that runs at load time (not inside a function) may only use things defined
+  in the same file or an earlier one. Calls inside functions are fine anywhere.
+- New files must be added to the script list in `index.html`.
 
 ## Mac app (`mac/`) and always-on server
 
@@ -51,7 +82,7 @@ helper/
   Re-run `install.sh` after switching nvm Node versions (node path is baked in).
 - The app is a menu-bar item + a window on demand. Closing the window does not
   stop anything; quitting the app does not stop the server.
-- Web changes need no rebuild (⌘R in the app). `server.js` changes need
+- Web changes need no rebuild (⌘R in the app). server-side changes (`server.js`, `routes/`, `lib/`) need
   "Restart Helper Server" in the menu bar (`launchctl kickstart -k`).
 - The shell injects `data-shell="mac"` on `<html>` and `window.lcNative.post(type, payload)`
   (`drag`, `zoom`, `notify`, `setEnv`). Elements with `data-drag-region` drag the
@@ -69,7 +100,7 @@ Keeps the local backend running so the `dev` preset works: Docker Desktop →
 (API :8080). Serverpod is spawned **detached** with a PID file in `.local-stack/`
 (gitignored), so restarting the helper does not kill it. State/config/log live in
 `.local-stack/` (`config.json`: `autostart` default true, `applyMigrations` default
-false). Docker's CLI is not on launchd's PATH — `LS_PATH` in `server.js` adds it.
+false). Docker's CLI is not on launchd's PATH — `LS_PATH` in `lib/local-stack.js` adds it.
 Override the Serverpod dir with `LC_SERVERPOD_DIR`.
 
 ## Visual system
@@ -96,9 +127,9 @@ Environment plates: 1 dev (white), 2 test (blue), 3 staging (amber), 4 productio
 - Passwords auto-filled from `.env` via `GET /api/env-config` on page load
 - Credentials travel as HTTP request headers: `x-db-host`, `x-db-port`, `x-db-name`, `x-db-user`, `x-db-password`
 - SSE endpoint (`/api/monitor/logs/stream`) uses query params instead (EventSource doesn't support custom headers)
-- Pool management: `getPool(req)` in `server.js` creates/caches PG connection pools keyed by connection string
+- Pool management: `getPool(req)` in `lib/db.js` creates/caches PG connection pools keyed by connection string
 
-**Environment presets** (in `index.html` `PRESETS` constant):
+**Environment presets** (`PRESETS` in `public/js/core/constants.js`):
 - `dev` → `localhost:8090/lillian_care_core`
 - `test` → `database-test.lillian.care:5432/serverpod`
 - `staging` → `database-staging.lillian.care:5432/serverpod`
@@ -109,7 +140,7 @@ Environment plates: 1 dev (white), 2 test (blue), 3 staging (amber), 4 productio
 - `GET /api/env-config` serves `{ passwords: { dev, test, staging, production }, decryptKeys: { dev, staging, production } }` to the frontend
 - Frontend fetches this on load and uses it to auto-fill the password field when a preset is selected
 
-**Navigation:** Hash-based routing via `navigate(view)`. Each view has a `renderXxx(el)` function. Add new views by: nav item in sidebar → route in `navigate()` → `renderXxx()` function.
+**Navigation:** Hash-based routing via `navigate(view)` (`public/js/core/router.js`). Each view has a `renderXxx(el)` function in `public/js/views/`. See "Adding New Features".
 
 **Monitoring dashboard:** Lives in `monitoring.html` (separate file, own CSS). Tabs: Overview, Metrics, Live Logs, Errors, Alarms.
 
@@ -129,15 +160,26 @@ Environment plates: 1 dev (white), 2 test (blue), 3 staging (amber), 4 productio
 - SQL column names use camelCase with double quotes: `"firstName"`, `"createdAt"`
 - Error responses: `res.status(5xx).json({ error: e.message })`
 - No external frontend libraries (PapaParse CDN is the only exception, in decrypt_viewer.html)
-- Keep single-file architecture — do not split server.js or index.html into modules
+- Keep files focused and readable: one view per file in `public/js/views/`; shared
+  helpers go in `public/js/core/` only when more than one view uses them. Split a
+  view into several files (`views/<view>-<part>.js`) rather than letting one grow huge.
 
 ## Adding New Features
 
-1. Add API route to `server.js` before the `// ─── Static files ───` section
-2. Add sidebar nav item in `index.html` HTML under the relevant section
-3. Add `else if (view === 'xxx') renderXxx(content);` in the `navigate()` function
-4. Add `function renderXxx(el) { ... }` following existing patterns
-5. For monitoring features: add to `monitoring.html` instead
+1. Add API routes in a new `routes/xxx.js` (`const router = require('express').Router();`
+   … `module.exports = router;`) and mount it in `server.js` with `app.use(require('./routes/xxx'));`
+   before the `// ─── Static files ───` section. Put helpers that more than one route file
+   needs in `lib/`; route files never require each other. Test a server change with a
+   second copy (`PORT=<free port> node server.js`; only port 3333 autostarts the local
+   stack) before restarting the LaunchAgent
+2. Add sidebar nav item in `public/index.html` under the relevant section
+3. Add a title to `TITLE_BY_VIEW` (`js/core/constants.js`) and
+   `else if (view === 'xxx') renderXxx(content);` in `navigate()` (`js/core/router.js`)
+4. Create `public/js/views/xxx.js` with `function renderXxx(el) { ... }` following
+   existing patterns (`pageWrap`/`pageHero`, `apiFetch`, `loadingState`/`errorState`)
+5. Add `<script src="/js/views/xxx.js"></script>` to the views block in `index.html`
+6. Optionally add a ⌘K entry to `CMDK` (`js/core/command-palette.js`)
+7. For monitoring features: add to `monitoring.html` instead
 
 ## Praxis Refresh feature (`/api/praxis/*`, view `#praxis-refresh`)
 
@@ -145,7 +187,7 @@ Wizard for refreshing staging praxis data from prod:
 1. Schema-drift check → 2. Backup both envs → 3. Wipe staging → 4. Import prod → staging
 → 5. Scrub contacts → 6. Set default praxis on all users.
 
-**Hardcoded table list (`PRAXIS_CONFIG_TABLES` in `server.js`)** — when the
+**Hardcoded table list (`PRAXIS_CONFIG_TABLES` in `lib/praxis.js`)** — when the
 backend adds a new `praxis_*_config` or `cockpit_*` table that's praxis-scoped,
 add it to this constant. Step 0 (drift check) queries the live target schema
 for any column named `praxisId` and flags tables not in this list, so an
@@ -181,7 +223,7 @@ praxis-config tables have a NOT NULL FK to a non-praxis table (e.g.,
 prod would violate that FK on staging because prod's user ids don't exist
 there. These tables are still backed up and wiped, but skipped on import.
 If you add a new praxis-config table that references users/admins, add it
-to this set in `server.js`.
+to this set in `lib/praxis.js`.
 
 ## Cockpit Fill feature (`/api/cockpit/*`, view `#cockpit-fill`)
 
@@ -231,7 +273,7 @@ preset is Production. Staging/dev are unaffected.
 columns (`praxis_hours_config.start`/`"end"` and the three `*HoursJson` blobs
 in `cockpit_standard_week_version`) store `"HH:MM"` text only. The backend
 and praxis app pass these through as strings — never construct a `DateTime`
-from them. `cellToHHMM` in `server.js` reads `getHours/getMinutes` (NOT
+from them. `cellToHHMM` in `routes/cockpit-fill.js` reads `getHours/getMinutes` (NOT
 `getUTCHours`) because SheetJS with `cellDates: true` encodes Excel
 time-of-day into the **local** components of the Date object — e.g. cell
 `08:15` returns a Date `d` with `d.getHours()===8` regardless of host TZ;
@@ -244,7 +286,7 @@ machine).
 
 Cross-env copy of the cockpit-related tables for selected praxes. Same two
 header sets as Praxis Refresh import (`x-src-db-*` + `x-tgt-db-*`), but scoped
-to the cockpit subset (constant `COCKPIT_SYNC_TABLES` in `server.js`):
+to the cockpit subset (constant `COCKPIT_SYNC_TABLES` in `routes/cockpit-sync.js`):
 
 ```
 praxis_hours_config
@@ -283,7 +325,7 @@ unless all are satisfied:
 - `x-allow-destructive: yes` header
 - body `confirmation` exactly equals the `lcId`
 
-**Per-table action map (`CLEANUP_NON_CONFIG_TABLES` in `server.js`)**:
+**Per-table action map (`CLEANUP_NON_CONFIG_TABLES` in `routes/praxis-cleanup.js`)**:
 
 | Table | Action | Why |
 |---|---|---|
@@ -324,7 +366,7 @@ shared pools) because it sets session GUCs. (Replaces the old Test DB Refresh;
 - The source session is opened with `default_transaction_read_only = on` and
   the whole read happens inside a `REPEATABLE READ READ ONLY` transaction —
   even a code bug cannot write to the source env.
-- All guards live in `drAssertSafeTarget()` in `server.js`, called by both
+- All guards live in `drAssertSafeTarget()` in `routes/db-refresh.js`, called by both
   endpoints.
 
 **Skip list (`DB_REFRESH_SKIP_TABLES`)** — Serverpod log/telemetry tables
@@ -363,7 +405,7 @@ in `.env`.
 
 Builds the two Flutter apps in `../apps-frontend/apps` (override with
 `LC_APPS_DIR`) and ships web builds. Config lives in `RL_APPS` / `RL_ENVS` in
-`server.js`:
+`routes/release.js`:
 
 | App key | Folder | Web test bucket → CF dist | Web prod bucket → CF dist |
 |---|---|---|---|
@@ -478,7 +520,7 @@ served at voice-staging.lillian.care and tools.lillian.care under `/lilli-stagin
   changes first). The ref must be pushed to GitHub, because the box fetches from origin.
 - **One module, two front ends.** `scripts/lilli.js` exports the data functions (`statusData`,
   `callsData`, `callData`, `logsData`, `releasesData`, `deployPlan`, `runRemote`), and runs as a CLI when
-  executed directly. `server.js` wraps them in `/api/lilli/*`, and the `#lilli` view (Calls, Logs,
+  executed directly. `routes/lilli.js` wraps them in `/api/lilli/*`, and the `#lilli` view (Calls, Logs,
   Deploy tabs) renders them. Add new Lilli features to the module first, so the CLI and the UI stay in step.
   SSH calls are async and the tunnel/pool is reused across requests. PM2's process list is reduced to
   safe fields on the box, because `pm2 jlist` includes each process's environment (secrets).
@@ -493,3 +535,48 @@ served at voice-staging.lillian.care and tools.lillian.care under `/lilli-stagin
   question is scrubbed first. The answer (Summary / Evidence / Root cause / Fix brief / Open questions) is appended to
   `## Findings` in `../investigations/YYYY-MM-DD-lilli-*.md`. Follow-ups `--resume` the saved session id
   (`.investigations-state/<file>.json` → `lilliSessionId`). "Copy fix brief" hands the latest brief to a Claude Code session.
+
+## API Console (`/api/console/*`, view `#api-console`)
+
+Postman-like console for every Serverpod endpoint method, the external services the
+backend calls, and the webhooks other systems call into the backend. Requests are sent by the
+helper server (`routes/api-console.js`), never the browser, so credentials stay server-side.
+
+- **Catalog** (`lib/api-console/catalog.js`) is parsed live from LillianCare-Core and is
+  rebuilt when `endpoints.dart` or `client.dart` change: endpoints/methods/param types from
+  `lib/src/generated/endpoints.dart` (+ the `serverpod_auth*` modules in `~/.pub-cache`),
+  `requireLogin` and `///` docs from the endpoint sources, return types from the generated
+  client, model fields / enum serialization from `*.spy.yaml` and the freezed `Api*` classes
+  in `../LillianCare-Shared-Models`, and the public API/web URL per env from `config/<mode>.yaml`.
+  Body skeletons are generated from the param types (enums: index or name as serialized).
+  Wire format: `POST {{coreApi}}/<endpoint>/<method>`, JSON object keyed by param name.
+  The one streaming method (`questionnaire.listenForQuestionnaires`) is listed but disabled.
+- **External templates** (`lib/api-console/externals.js`) mirror each call site in Core
+  (Principa FHIR + REST, Personio, Brevo, FCM, Google Maps, feiertage-api) plus the inbound
+  webhooks (`/fhir/*`, `/aivo/*`, `/incoming/lilli/*`, Fonio, Unify, `/api/public/*`).
+  When the backend adds or changes an outbound call, update the template here. `effect`
+  (`read` / `write` / `sends`) drives the warnings in the UI.
+- **Auth** (`lib/api-console/auth.js`): LillianCare login (email/password accounts →
+  `/emailIdp/login` → Bearer session token, cached, re-login on 401), Principa JWT
+  (`lib/pms.js`, shared with `routes/pms.js`), Personio (token rotation via the `authorization`
+  response header, shared cache in `lib/personio.js`), Google service account (FCM), Brevo,
+  Maps key, `X-Lilli-Secret`, core `api-key`, plus generic bearer/basic/header. Secrets come from
+  `.env` (see `.env.example`: `BREVO_API_KEY`, `GOOGLE_MAPS_API_KEY`, `LILLI_SSO_SECRET_<ENV>`,
+  `LC_API_KEY_<ENV>`, optional `PMS_BASE_URL_TEST`). Every secret added is masked (‹label›) in
+  the trace and the echoed request. **A service's credentials are only attached when the URL
+  points at that service for the selected env** (`assertCredentialTarget`).
+- **Production guard**: on `production`, anything but GET/HEAD — and every Serverpod call —
+  returns 428 unless `body.confirm === 'production'`; the UI asks for it each time.
+- **Variables**: `{{name}}` in URL/headers/body. Precedence: dynamic (`{{$isoTimestamp}}`,
+  `{{$guid}}`, `{{$date}}`, `{{$datePlus7}}`, …) < built-in base URLs (`coreApi`, `coreWeb`,
+  `principaFhir`, `principaRest`, `personio`, `brevo`, `fcm`, `maps`, `holidays`) < global < env.
+  Unresolved variables refuse the send.
+- **State** in `.api-console/` (gitignored, 0700/0600): `accounts.json` (passwords never go back to
+  the browser), `history.json` (requests only — **responses are never persisted**, they can hold
+  patient data), `collections.json`, `vars.json`. Binary responses are kept in memory (last 20)
+  for `/api/console/download/:id`.
+- **Frontend**: `public/js/views/api-console*.js` (state/send, sidebar, request editor, response,
+  modals, Postman import/export + curl) and `public/css/api-console.css`. Postman v2.1 collections
+  and environments import/export; the helper's own auth types are kept in an `lcHelper` field.
+  "Copy as curl" puts credentials in as `$PLACEHOLDERS`.
+- `/api/console` has a 30 MB JSON body limit (Serverpod's `maxRequestSize`); other routes keep 100 kB.
