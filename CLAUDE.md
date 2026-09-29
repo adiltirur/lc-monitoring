@@ -583,4 +583,6 @@ helper server (`routes/api-console.js`), never the browser, so credentials stay 
   searches `app_user_info` by email on the console's env (via `/api/users` + `envHeadersFor`) and
   writes the id into the request in place of `{{lcAccountId}}` (remembered as `lcFilled`, so a
   second pick replaces it).
+- **Response search** (Body / Headers, ⌘F): highlights matches across text nodes (so across JSON
+  syntax colours), ↵ / ⇧↵ step through them, Headers also filters rows. Capped at 2000 hits.
 - `/api/console` has a 30 MB JSON body limit (Serverpod's `maxRequestSize`); other routes keep 100 kB.

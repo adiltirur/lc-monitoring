@@ -98,6 +98,19 @@
 .ac-resp-head .stat { font: 500 12px/1 var(--font-mono); color: var(--ink-2); }
 .ac-resp-head .stat b { color: var(--ink); font-weight: 700; }
 .ac-resp .lc-tabs { padding: 0 var(--panel-pad); }
+.ac-resp-tools { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; padding: var(--s-3) var(--panel-pad) 0; }
+.ac-search { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 220px; max-width: 460px; height: 30px; padding: 0 4px 0 8px;
+  background: var(--surface-2); border: 1px solid var(--rule-strong); border-radius: var(--r); }
+.ac-search:focus-within { border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus); }
+.ac-search > .material-symbols-outlined { font-size: 17px; color: var(--ink-3); }
+.ac-search input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--ink); font: 12.5px var(--font-mono); outline: none; box-shadow: none; padding: 0; height: 28px; }
+/* beat the global form-field resets: the wrapper draws the border and focus ring */
+.ac-search input, .ac-search input:focus { border: 0 !important; box-shadow: none !important; outline: none !important; --tw-ring-shadow: 0 0 #0000; }
+.ac-search .lc-icon-btn { width: 24px; height: 24px; }
+.ac-search-count { font: 500 11px/1 var(--font-mono); color: var(--ink-3); white-space: nowrap; }
+.ac-search-count.none { color: var(--red); }
+mark.ac-hit { background: color-mix(in srgb, var(--yellow) 38%, transparent); color: inherit; border-radius: 2px; }
+mark.ac-hit.cur { background: var(--yellow); color: #00212a; }
 .ac-resp-body { flex: 1; overflow: auto; padding: var(--s-3) var(--panel-pad) var(--panel-pad); min-height: 0; }
 .ac-pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12px/1.55 var(--font-mono); color: var(--ink); }
 .ac-pre .k { color: var(--blue); }

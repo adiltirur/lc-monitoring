@@ -28,6 +28,9 @@ let acState = {
   resp: null,
   respTab: 'body',
   pretty: true,
+  respQuery: '',    // response search (Body / Headers), kept across tabs and sends
+  respHit: 0,
+  respHits: 0,
   sending: false,
 };
 
@@ -175,4 +178,11 @@ async function acRefreshHistory() {
 document.addEventListener('keydown', (e) => {
   if (window.__currentView !== 'api-console') return;
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); acSend(); }
+  // ⌘F searches the response (Body / Headers); the Mac shell has no find bar.
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f' && acState.resp && acState.resp.status != null) {
+    e.preventDefault();
+    if (!['body', 'headers'].includes(acState.respTab)) acRespTab('body');
+    const box = document.getElementById('acRespSearch');
+    if (box) { box.focus(); box.select(); }
+  }
 });
