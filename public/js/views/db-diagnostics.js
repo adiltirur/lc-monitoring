@@ -62,11 +62,12 @@ function dgFindings(ov, rds) {
     const staleTx = ov.idleInTx.filter(r => r.open_seconds > 60);
     if (staleTx.length) add('warn', `${staleTx.length} transaction${staleTx.length === 1 ? '' : 's'} left open over a minute`, 'The app opened a transaction and did not finish it; this can block other work.');
     for (const t of ov.seqScans) {
-      const avgRows = t.seq_scans ? t.rows_read / t.seq_scans : 0;
-      const fullScans = t.live_rows > 1000 && avgRows > t.live_rows * 0.5;
-      if (fullScans && t.seq_scans > 100 && t.bytes > 50 * 1024 * 1024) {
-        add('warn', `Possible missing index on ${escHtml(t.table)}`, `${dgNum(t.seq_scans)} full-table reads of a ${dgBytes(t.bytes)} table (index lookups: ${dgNum(t.index_scans)}).`);
+      if (dgSeqVerdict(t) === 'now' && t.bytes > 20 * 1024 * 1024) {
+        add('warn', `Possible missing index on ${escHtml(t.table)}`, `${dgNum(t.delta_scans)} full-table reads of a ${dgBytes(t.bytes)} table in the last ${dgSecs(t.delta_seconds)}.`);
       }
+    }
+    if (ov.seqScans.length && !ov.seqScans.some(t => t.delta_scans !== undefined)) {
+      add('info', 'Full-table reads: no earlier check to compare with', 'The counts below are totals since the stats were last reset. Refresh in a few minutes to see which tables are being read in full right now.');
     }
     const ls = ov.logSettings;
     if (ls && (ls.logAllQueries || ls.logAllSessions)) add('err', 'Serverpod is logging every request', `logAllQueries=${!!ls.logAllQueries}, logAllSessions=${!!ls.logAllSessions}. This filled prod with a 51 GB query log on 2026-09-30.`);
@@ -161,19 +162,55 @@ function dgLivePanels(ov) {
     + dgSection('Transactions left open (idle in transaction)', 'pending', ov.idleInTx.length, idle);
 }
 
+// Full-read counters are lifetime totals, so on their own they keep flagging
+// problems that were fixed long ago. Compare with the previous check (kept per
+// environment in localStorage) to see what is being read in full right now.
+function dgSeqKey(env) {
+  return `lc_dg_seq_${env}`;
+}
+
+function dgApplySeqDeltas(ov, env) {
+  let prev = null;
+  try { prev = JSON.parse(localStorage.getItem(dgSeqKey(env)) || 'null'); } catch {}
+  const now = Date.now();
+  const usable = prev && prev.statsReset === ov.statsReset && now - prev.at < 24 * 3600 * 1000;
+  for (const t of ov.seqScans) {
+    const p = usable && prev.tables[t.table];
+    if (!p) continue;
+    t.delta_scans = Math.max(0, t.seq_scans - p.seq_scans);
+    t.delta_rows = Math.max(0, t.rows_read - p.rows_read);
+    t.delta_seconds = Math.round((now - prev.at) / 1000);
+  }
+  const tables = {};
+  for (const t of ov.seqScans) tables[t.table] = { seq_scans: t.seq_scans, rows_read: t.rows_read };
+  try { localStorage.setItem(dgSeqKey(env), JSON.stringify({ at: now, statsReset: ov.statsReset, tables })); } catch {}
+}
+
+function dgSeqVerdict(t) {
+  const heavy = (scans, rows) => scans > 0 && t.live_rows > 1000 && rows / scans > t.live_rows * 0.5;
+  if (t.delta_scans !== undefined) return heavy(t.delta_scans, t.delta_rows) ? 'now' : heavy(t.seq_scans, t.rows_read) ? 'past' : '';
+  return t.seq_scans > 100 && heavy(t.seq_scans, t.rows_read) ? 'unknown' : '';
+}
+
 function dgSeqScanPanel(ov) {
+  const badges = {
+    now: statusBadge('reads whole table now', 'amber'),
+    past: '<span class="pill ghost">only in the past</span>',
+    unknown: '<span class="pill ghost">in the past — refresh to compare</span>',
+  };
   const rows = ov.seqScans.map(t => {
     const avg = t.seq_scans ? t.rows_read / t.seq_scans : 0;
-    const full = t.live_rows > 1000 && avg > t.live_rows * 0.5;
+    const recent = t.delta_scans === undefined ? '—' : `+${dgNum(t.delta_scans)} <span style="color:var(--ink-3)">in ${dgSecs(t.delta_seconds)}</span>`;
     return `<tr><td class="mono">${escHtml(t.table)}</td><td class="mono">${dgBytes(t.bytes)}</td>
+      <td class="mono">${recent}</td>
       <td class="mono">${dgNum(t.seq_scans)}</td><td class="mono">${dgNum(t.index_scans)}</td>
       <td class="mono">${dgNum(Math.round(avg))} / ${dgNum(t.live_rows)}</td>
-      <td>${full && t.seq_scans > 100 ? statusBadge('reads whole table', 'amber') : ''}</td></tr>`;
+      <td>${badges[dgSeqVerdict(t)] || ''}</td></tr>`;
   });
-  const since = ov.statsReset ? `Counted since ${escHtml(deTime(ov.statsReset))}.` : 'Counted since the stats were last reset.';
+  const since = ov.statsReset ? escHtml(deTime(ov.statsReset)) : 'the last stats reset';
   return dgSection('Full-table reads (tables over 10 MB)', 'manage_search', ov.seqScans.length,
-    dgTable(['Table', 'Size', 'Full reads', 'Index lookups', 'Rows per read / total', ''], rows),
-    `Many full reads of a big table usually means a missing index (like core_fhir_message_inbox.correlationId on 2026-09-30). ${since} Refresh after a few minutes and compare "Full reads" to see what is happening now.`);
+    dgTable(['Table', 'Size', 'Since last check', 'Full reads (total)', 'Index lookups (total)', 'Rows per read / total', ''], rows),
+    `Many full reads of a big table usually means a missing index. Totals count since ${since}; "Since last check" shows what happened between your last two refreshes, which is what matters now.`);
 }
 
 function dgBiggestPanel(ov) {
@@ -267,6 +304,7 @@ async function renderDbDiagnostics(el) {
   setConnStatus(dgState.overview ? 'connected' : 'error');
 
   const o = dgState.overview;
+  if (o) dgApplySeqDeltas(o, env);
   const sub = `Environment: <b>${escHtml(env)}</b>${dgState.rds && dgState.rds.instanceId ? ` · ${escHtml(dgState.rds.instanceId)} (${escHtml(dgState.rds.instanceClass || '')})` : ''} · checked ${escHtml(deTime(new Date().toISOString()))}`;
   let body = dgFindingsPanel(dgFindings(o, dgState.rds)) + dgRdsPanel(dgState.rds, dgState.rdsError);
   if (o) {
