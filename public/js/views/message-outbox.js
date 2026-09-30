@@ -46,6 +46,19 @@ async function retryMessageOutbox(id) {
   }
 }
 
+async function sendNowMessageOutbox(id) {
+  const env = document.getElementById('envBtn')?.dataset.env || 'dev';
+  if (!confirm(`Send this pending message now on ${env.toUpperCase()}?\n\nThe server's scheduled dispatch is moved to now (a new one is only created if none exists), so it is sent once, within a few seconds.`)) return;
+  try {
+    const res = await apiFetch(`/api/message-outbox/${id}/send-now`, { method: 'POST' });
+    if (res && res.error) throw new Error(res.error);
+    showToast(`✓ Sending — ${res.action}`);
+    renderMessageOutbox(document.getElementById('content'));
+  } catch (e) {
+    alert('Send now failed: ' + e.message);
+  }
+}
+
 async function killMessageOutbox(id) {
   if (!confirm('Mark this message DEAD? This stops all further retries.')) return;
   try {
@@ -135,6 +148,7 @@ async function renderMessageOutbox(el, page = 1) {
       const canRetry = row.status === 'failed' || row.status === 'dead';
       const canKill = row.status === 'pending' || row.status === 'sending' || row.status === 'failed';
       const actions = [
+        row.status === 'pending' ? `<button class="px-2 py-1 rounded bg-primary/10 text-primary hover:bg-primary/20 text-xs font-bold" onclick="event.stopPropagation();sendNowMessageOutbox('${escHtml(row.id)}')">Send now</button>` : '',
         canRetry ? `<button class="px-2 py-1 rounded bg-primary/10 text-primary hover:bg-primary/20 text-xs font-bold" onclick="event.stopPropagation();retryMessageOutbox('${escHtml(row.id)}')">Retry</button>` : '',
         canKill ? `<button class="px-2 py-1 rounded bg-red-100 text-red-700 hover:bg-red-200 text-xs font-bold" onclick="event.stopPropagation();killMessageOutbox('${escHtml(row.id)}')">Kill</button>` : '',
       ].filter(Boolean).join(' ');
