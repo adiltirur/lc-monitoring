@@ -47,6 +47,7 @@ const TITLE_BY_VIEW = {
   'send-notification': 'Send Notification',
   'future-calls': 'Future Calls',
   'health': 'Server Health',
+  'db-diagnostics': 'DB Diagnostics',
   'api-keys': 'API Keys',
   'query-runner': 'Query Runner',
   'ai-query': 'AI Assistant',
