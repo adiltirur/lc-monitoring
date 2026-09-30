@@ -156,17 +156,15 @@ router.post('/api/message-outbox/:id/retry', async (req, res) => {
   }
 });
 
-// ─── Routes: send a pending message now ───────────────────────────────────────
+// ─── Helpers: send a pending message now ──────────────────────────────────────
 // Core's dispatcher claims a row with a plain read-then-update (no status check
 // in the UPDATE), so two dispatches running at once can send the same message
-// twice. "Send now" therefore never adds a second dispatch: it moves the
+// twice. Sending now therefore never adds a second dispatch: it moves the
 // scheduled one (identifier messageOutbox_<id>, or an earlier helper
-// messageOutbox_<id>_manual_…) to NOW() and drops duplicates, and only inserts
-// a new one when none exists. Rows touched in the last 30 s are refused because
-// the server may be picking them up right now.
-router.post('/api/message-outbox/:id/send-now', async (req, res) => {
-  const id = req.params.id;
-  const client = await getPool(req).connect();
+// messageOutbox_<id>_manual_…) to NOW() (+ delaySeconds) and drops duplicates,
+// and only inserts a new one when none exists. Rows touched in the last 30 s
+// are refused because the server may be picking them up right now.
+async function sendPendingNow(client, id, delaySeconds = 0) {
   try {
     await client.query('BEGIN');
     const { rows } = await client.query(
@@ -174,15 +172,15 @@ router.post('/api/message-outbox/:id/send-now', async (req, res) => {
        FROM core_message_outbox WHERE id = $1 FOR UPDATE`,
       [id]
     );
-    if (!rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Not found' }); }
+    if (!rows.length) { await client.query('ROLLBACK'); return { ok: false, code: 404, error: 'Not found' }; }
     const status = OUTBOX_STATUSES[rows[0].status] ?? rows[0].status;
     if (status !== 'pending') {
       await client.query('ROLLBACK');
-      return res.status(409).json({ error: `Only pending messages can be sent now (this one is ${status}). Use Retry for failed/dead.` });
+      return { ok: false, code: 409, error: `Only pending messages can be sent now (this one is ${status}). Use Retry for failed/dead.` };
     }
     if (rows[0].recently_touched) {
       await client.query('ROLLBACK');
-      return res.status(409).json({ error: 'Changed in the last 30 seconds — the server may be sending it right now. Refresh and try again shortly.' });
+      return { ok: false, code: 409, error: 'Changed in the last 30 seconds — the server may be sending it right now. Refresh and try again shortly.' };
     }
 
     const identifier = `messageOutbox_${id}`;
@@ -195,9 +193,12 @@ router.post('/api/message-outbox/:id/send-now', async (req, res) => {
       [identifier, manualPrefix]
     );
 
-    let action;
+    let action, created = false;
     if (calls.length) {
-      await client.query(`UPDATE serverpod_future_call SET "time" = NOW() WHERE id = $1`, [calls[0].id]);
+      await client.query(
+        `UPDATE serverpod_future_call SET "time" = NOW() + make_interval(secs => $2) WHERE id = $1`,
+        [calls[0].id, delaySeconds]
+      );
       if (calls.length > 1) {
         await client.query(`DELETE FROM serverpod_future_call WHERE id = ANY($1::bigint[])`, [calls.slice(1).map(c => c.id)]);
       }
@@ -205,20 +206,83 @@ router.post('/api/message-outbox/:id/send-now', async (req, res) => {
     } else {
       await client.query(
         `INSERT INTO serverpod_future_call (name, "time", "serializedObject", "serverId", identifier)
-         VALUES ('messageOutboxDispatchFutureCall', NOW(), $1, 'helper', $2)`,
-        [JSON.stringify({ outboxId: id }), identifier]
+         VALUES ('messageOutboxDispatchFutureCall', NOW() + make_interval(secs => $3), $1, 'helper', $2)`,
+        [JSON.stringify({ outboxId: id }), identifier, delaySeconds]
       );
       action = 'no dispatch was scheduled — created one';
+      created = true;
     }
 
     await client.query(
-      `UPDATE core_message_outbox SET "nextAttemptAt" = NOW(), "updatedAt" = NOW() WHERE id = $1`,
-      [id]
+      `UPDATE core_message_outbox SET "nextAttemptAt" = NOW() + make_interval(secs => $2), "updatedAt" = NOW() WHERE id = $1`,
+      [id, delaySeconds]
     );
     await client.query('COMMIT');
-    res.json({ ok: true, action });
+    return { ok: true, action, created };
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
+    return { ok: false, code: 500, error: e.message };
+  }
+}
+
+// ─── Routes: send one pending message now ─────────────────────────────────────
+router.post('/api/message-outbox/:id/send-now', async (req, res) => {
+  const client = await getPool(req).connect();
+  try {
+    const r = await sendPendingNow(client, req.params.id);
+    if (!r.ok) return res.status(r.code).json({ error: r.error });
+    res.json({ ok: true, action: r.action });
+  } finally {
+    client.release();
+  }
+});
+
+// ─── Routes: send all pending messages (oldest first, spaced out) ─────────────
+// { dryRun: true } only counts. Otherwise sends up to `limit` (max 200) oldest
+// pending messages, one transaction each, spacing their dispatch SEND_ALL_GAP_S
+// seconds apart so Brevo and the database are not hit all at once.
+const SEND_ALL_MAX = 200;
+const SEND_ALL_GAP_S = 2;
+
+router.post('/api/message-outbox/send-all-pending', async (req, res) => {
+  const { dryRun = false, confirm = false, channel = '' } = req.body || {};
+  const limit = Math.min(Math.max(parseInt(req.body?.limit) || SEND_ALL_MAX, 1), SEND_ALL_MAX);
+  const channelIdx = channel ? OUTBOX_CHANNELS.indexOf(channel) : -1;
+  if (channel && channelIdx < 0) return res.status(400).json({ error: `Unknown channel ${channel}` });
+  const client = await getPool(req).connect();
+  try {
+    const params = channelIdx >= 0 ? [channelIdx] : [];
+    const channelSql = channelIdx >= 0 ? 'AND channel = $1' : '';
+    const { rows: [summary] } = await client.query(
+      `SELECT count(*)::int AS total, min("createdAt") AS oldest
+       FROM core_message_outbox
+       WHERE status = 0 AND "updatedAt" <= NOW() - interval '30 seconds' ${channelSql}`,
+      params
+    );
+    if (dryRun) return res.json({ total: summary.total, oldest: summary.oldest, willSend: Math.min(summary.total, limit), max: SEND_ALL_MAX, gapSeconds: SEND_ALL_GAP_S });
+    if (confirm !== true) return res.status(400).json({ error: 'confirm required' });
+
+    const { rows: ids } = await client.query(
+      `SELECT id FROM core_message_outbox
+       WHERE status = 0 AND "updatedAt" <= NOW() - interval '30 seconds' ${channelSql}
+       ORDER BY "createdAt", id LIMIT ${limit}`,
+      params
+    );
+    const result = { scheduled: 0, created: 0, skipped: 0, errors: [] };
+    for (let i = 0; i < ids.length; i++) {
+      const r = await sendPendingNow(client, ids[i].id, result.scheduled * SEND_ALL_GAP_S);
+      if (r.ok) {
+        result.scheduled++;
+        if (r.created) result.created++;
+      } else if (r.code === 409 || r.code === 404) {
+        result.skipped++;
+      } else {
+        result.errors.push({ id: ids[i].id, error: r.error });
+        if (result.errors.length >= 5) break;
+      }
+    }
+    res.json({ ...result, remaining: Math.max(0, summary.total - result.scheduled - result.skipped), finishesInSeconds: Math.max(0, (result.scheduled - 1) * SEND_ALL_GAP_S) });
+  } catch (e) {
     res.status(500).json({ error: e.message });
   } finally {
     client.release();

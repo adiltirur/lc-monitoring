@@ -59,6 +59,35 @@ async function sendNowMessageOutbox(id) {
   }
 }
 
+function moPendingTotal(stats) {
+  if (!stats) return 0;
+  return MO_CHANNELS.reduce((n, ch) => n + ((stats[ch] && stats[ch].pending) || 0), 0);
+}
+
+async function sendAllPendingMessageOutbox() {
+  const env = document.getElementById('envBtn')?.dataset.env || 'dev';
+  const channel = moFilters.channel || '';
+  try {
+    const preview = await apiPost('/api/message-outbox/send-all-pending', { dryRun: true, channel });
+    if (!preview.total) { showToast('No pending messages to send (messages changed in the last 30 s are left alone)'); return; }
+    const capped = preview.total > preview.max ? `\nOnly the oldest ${preview.max} are sent per click.` : '';
+    const msg = `Send ${preview.willSend} pending ${channel || 'email/SMS'} message(s) on ${env.toUpperCase()}?\n\n` +
+      `Oldest waiting since ${deTime(preview.oldest)}.\n` +
+      `They are dispatched ${preview.gapSeconds} s apart (about ${Math.ceil(Math.max(0, preview.willSend - 1) * preview.gapSeconds / 60)} min in total), each exactly once.${capped}`;
+    if (!confirm(msg)) return;
+    const r = await apiPost('/api/message-outbox/send-all-pending', { confirm: true, channel });
+    const parts = [`${r.scheduled} scheduled`];
+    if (r.created) parts.push(`${r.created} had no dispatch (created)`);
+    if (r.skipped) parts.push(`${r.skipped} skipped (changed meanwhile)`);
+    if (r.remaining) parts.push(`${r.remaining} still pending — click again`);
+    showToast(`✓ ${parts.join(' · ')}`);
+    if (r.errors && r.errors.length) alert(`Some messages failed:\n${r.errors.map(e => `${e.id}: ${e.error}`).join('\n')}`);
+    renderMessageOutbox(document.getElementById('content'));
+  } catch (e) {
+    alert('Send all failed: ' + e.message);
+  }
+}
+
 async function killMessageOutbox(id) {
   if (!confirm('Mark this message DEAD? This stops all further retries.')) return;
   try {
@@ -171,7 +200,8 @@ async function renderMessageOutbox(el, page = 1) {
       pageHero('Message Outbox', {
         sub: 'Brevo email/SMS durable queue — monitor, retry, kill',
         live: true,
-        actions: `<button class="p-2 bg-surface-container rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors" onclick="renderMessageOutbox(document.getElementById('content'))" title="Refresh"><span class="material-symbols-outlined">refresh</span></button>`,
+        actions: (moPendingTotal(stats) ? btnGhost(`Send all pending (${moPendingTotal(stats)})`, 'sendAllPendingMessageOutbox()', { icon: 'send' }) : '') +
+          `<button class="p-2 bg-surface-container rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors" onclick="renderMessageOutbox(document.getElementById('content'))" title="Refresh"><span class="material-symbols-outlined">refresh</span></button>`,
       }) +
       moStatsBanner(stats) +
       filterCard(filterHtml, 6) +
