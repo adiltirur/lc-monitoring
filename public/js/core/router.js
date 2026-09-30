@@ -28,6 +28,7 @@ function navigate(view) {
   else if (view === 'send-notification') renderSendNotification(content);
   else if (view === 'future-calls') renderFutureCalls(content);
   else if (view === 'health') renderHealth(content);
+  else if (view === 'db-diagnostics') renderDbDiagnostics(content);
   else if (view === 'api-keys') renderApiKeys(content);
   else if (view === 'google-business') renderGoogleBusiness(content);
   else if (view === 'monitoring') renderMonitoring(content);

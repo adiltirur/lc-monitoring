@@ -580,3 +580,27 @@ helper server (`routes/api-console.js`), never the browser, so credentials stay 
   and environments import/export; the helper's own auth types are kept in an `lcHelper` field.
   "Copy as curl" puts credentials in as `$PLACEHOLDERS`.
 - `/api/console` has a 30 MB JSON body limit (Serverpod's `maxRequestSize`); other routes keep 100 kB.
+
+## DB Diagnostics (`/api/db-diag/*`, view `#db-diagnostics`)
+
+Answers "is something making the database slow or stuck?" for the connected environment.
+Built after the 2026-09-30 prod outage (51 GB `serverpod_query_log`, then an unindexed
+`core_fhir_message_inbox.correlationId` lookup draining the `db.t3.micro`'s EBS byte balance).
+
+- `GET /api/db-diag/overview` — one READ ONLY transaction with `statement_timeout = 15s`
+  (`withReadOnly` in `routes/db-diagnostics.js`): connections by state, queries running > 5 s
+  (with wait event), blocked queries + their blockers (`pg_blocking_pids`), idle-in-transaction
+  sessions, full-table reads on tables > 10 MB (`pg_stat_user_tables`), largest tables,
+  top queries from `pg_stat_statements` (if installed), Serverpod `logSettings`.
+  Optional probes run behind a savepoint so one failure does not abort the rest.
+- `GET /api/db-diag/rds?hours=3` — maps `x-db-host` to the RDS instance by following the
+  CNAME (`database*.lillian.care` → `<instance>.….rds.amazonaws.com`), then DescribeDBInstances +
+  CloudWatch 5-min averages (EBSByteBalance%, latencies, DiskQueueDepth, CPU, memory, storage,
+  connections). Local DBs return `{ instanceId: null }`.
+- `GET /api/db-diag/slow-queries?hours=24` — Serverpod's own slow-query log (≥ 1 s), loaded on
+  demand. Contains real statements (possible PII) — the view says so.
+- `POST /api/db-diag/enable-statements` `{confirm:true}` — the only write:
+  `CREATE EXTENSION IF NOT EXISTS pg_stat_statements`; the view asks for confirmation.
+- The view (`public/js/views/db-diagnostics.js`, prefix `dg`) turns the numbers into a
+  Findings list (disk bandwidth < 30 % / < 5 %, read latency > 5 / 10 ms, low memory/storage,
+  blocked/long-running/stale transactions, likely missing index, log-everything settings).
