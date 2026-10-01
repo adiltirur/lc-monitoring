@@ -6,9 +6,46 @@ const OUTBOX_CHANNELS = ['email', 'sms'];
 const OUTBOX_STATUSES = ['pending', 'sending', 'sent', 'failed', 'dead'];
 const OUTBOX_ERROR_CLASSES = ['permanent', 'transient'];
 
+// ─── Helpers: Brevo delivery status ───────────────────────────────────────────
+// Core stores every Brevo webhook event in brevo_webhook_event, keyed by the
+// messageId Brevo returned when the message was accepted, which is saved on
+// core_message_outbox."providerMessageId". Environments that have not run that
+// migration yet simply show no Brevo status, so the check is cached per pool.
+const BREVO_SUPPORT_TTL_MS = 60_000;
+const brevoSupportCache = new WeakMap();
+
+async function brevoSupported(req) {
+  const pool = getPool(req);
+  const cached = brevoSupportCache.get(pool);
+  if (cached && cached.at > Date.now() - BREVO_SUPPORT_TTL_MS) return cached.ok;
+  const rows = await query(
+    req,
+    `SELECT
+       EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'public' AND table_name = 'core_message_outbox'
+                 AND column_name = 'providerMessageId') AS outbox,
+       EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'public' AND table_name = 'brevo_webhook_event'
+                 AND column_name = 'reason') AS events`
+  );
+  const ok = Boolean(rows[0].outbox && rows[0].events);
+  brevoSupportCache.set(pool, { ok, at: Date.now() });
+  return ok;
+}
+
+// Latest Brevo event per outbox row, by the time Brevo reported it.
+const BREVO_LATEST_JOIN = `LEFT JOIN LATERAL (
+    SELECT e.event, COALESCE(e."eventAt", e."receivedAt") AS at
+    FROM brevo_webhook_event e
+    WHERE e."messageId" = o."providerMessageId"
+    ORDER BY COALESCE(e."eventAt", e."receivedAt") DESC, e.id DESC
+    LIMIT 1
+  ) brevo ON true`;
+
 router.get('/api/message-outbox', async (req, res) => {
   try {
-    const { status, channel, dateFrom, dateTo, correlationId, recipient, lastHttpStatus, lastErrorClass, page = 1, pageSize = 50 } = req.query;
+    const { status, channel, dateFrom, dateTo, correlationId, recipient, lastHttpStatus, lastErrorClass, brevoStatus, page = 1, pageSize = 50 } = req.query;
+    const withBrevo = await brevoSupported(req);
     const filters = [];
     if (status) {
       const list = String(status).split(',').map(s => s.trim()).filter(Boolean);
@@ -41,9 +78,17 @@ router.get('/api/message-outbox', async (req, res) => {
         clauses.push(`${col} ${op} $${params.length}`);
       }
     }
+    if (withBrevo && brevoStatus === 'none') {
+      clauses.push('brevo.event IS NULL');
+    } else if (withBrevo && brevoStatus) {
+      params.push(String(brevoStatus));
+      clauses.push(`brevo.event = $${params.length}`);
+    }
     const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : '';
-    const baseSql = `SELECT id, channel, status, "attemptCount", "maxAttempts", "lastHttpStatus", "lastErrorClass", "nextAttemptAt", "firstTeamsNotifiedAt", "correlationId", "createdAt", "updatedAt", "sentAt", "deadAt" FROM core_message_outbox ${where} ORDER BY "createdAt" DESC`;
-    const countSql = `SELECT COUNT(*) FROM core_message_outbox ${where}`;
+    const from = withBrevo ? `core_message_outbox o ${BREVO_LATEST_JOIN}` : 'core_message_outbox o';
+    const brevoCols = withBrevo ? ', o."providerMessageId", brevo.event AS "brevoStatus", brevo.at AS "brevoStatusAt"' : '';
+    const baseSql = `SELECT o.id, o.channel, o.status, o."attemptCount", o."maxAttempts", o."lastHttpStatus", o."lastErrorClass", o."nextAttemptAt", o."firstTeamsNotifiedAt", o."correlationId", o."createdAt", o."updatedAt", o."sentAt", o."deadAt"${brevoCols} FROM ${from} ${where} ORDER BY o."createdAt" DESC`;
+    const countSql = `SELECT COUNT(*) FROM ${from} ${where}`;
     const result = await paginate(req, baseSql, countSql, params, parseInt(page), parseInt(pageSize));
 
     result.rows = result.rows.map(r => ({
@@ -53,6 +98,7 @@ router.get('/api/message-outbox', async (req, res) => {
       lastErrorClass: r.lastErrorClass === null ? null : (OUTBOX_ERROR_CLASSES[r.lastErrorClass] ?? r.lastErrorClass),
     }));
 
+    result.brevoSupported = withBrevo;
     res.json(result);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -89,6 +135,16 @@ router.get('/api/message-outbox/stats', async (req, res) => {
       const ch = OUTBOX_CHANNELS[r.channel];
       if (ch && stats[ch]) stats[ch].sentLast24h = r.count;
     }
+    if (await brevoSupported(req)) {
+      const brevoRows = await query(
+        req,
+        `SELECT event, COUNT(*)::int AS count
+         FROM brevo_webhook_event
+         WHERE "receivedAt" > NOW() - INTERVAL '30 days'
+         GROUP BY event ORDER BY count DESC`
+      );
+      stats.brevo = Object.fromEntries(brevoRows.map(r => [r.event, r.count]));
+    }
     res.json(stats);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -106,8 +162,19 @@ router.get('/api/message-outbox/:id', async (req, res) => {
     const r = rows[0];
     let decodedPayload = null;
     try { decodedPayload = JSON.parse(r.payload); } catch { decodedPayload = r.payload; }
+    const brevoEvents = r.providerMessageId && await brevoSupported(req)
+      ? await query(
+          req,
+          `SELECT event, reason, "eventAt", "receivedAt"
+           FROM brevo_webhook_event
+           WHERE "messageId" = $1
+           ORDER BY COALESCE("eventAt", "receivedAt"), id`,
+          [r.providerMessageId]
+        )
+      : [];
     res.json({
       ...r,
+      brevoEvents,
       channel: OUTBOX_CHANNELS[r.channel] ?? r.channel,
       status: OUTBOX_STATUSES[r.status] ?? r.status,
       lastErrorClass: r.lastErrorClass === null ? null : (OUTBOX_ERROR_CLASSES[r.lastErrorClass] ?? r.lastErrorClass),

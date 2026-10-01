@@ -12,6 +12,45 @@ const MO_STATUS_PILL = {
   dead:     ['bg-red-100','text-red-700'],
 };
 
+// Brevo delivery events (from Core's brevo_webhook_event, via the webhook).
+const MO_BREVO_EVENTS = ['request','delivered','unique_opened','opened','click','proxy_open','deferred','soft_bounce','hard_bounce','invalid_email','blocked','spam','unsubscribed','error'];
+const MO_BREVO_GOOD = new Set(['delivered','unique_opened','opened','click','proxy_open']);
+const MO_BREVO_WARN = new Set(['deferred','soft_bounce']);
+const MO_BREVO_BAD = new Set(['hard_bounce','invalid_email','blocked','spam','unsubscribed','error']);
+
+function moBrevoPill(event, title = '') {
+  if (!event) return '<span class="text-xs opacity-50">—</span>';
+  const cls = MO_BREVO_GOOD.has(event) ? 'bg-emerald-100 text-emerald-700'
+    : MO_BREVO_WARN.has(event) ? 'bg-amber-100 text-amber-800'
+    : MO_BREVO_BAD.has(event) ? 'bg-red-100 text-red-700'
+    : 'bg-slate-100 text-slate-700';
+  return `<span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${cls}" title="${escHtml(title)}">${escHtml(event.replace(/_/g, ' '))}</span>`;
+}
+
+function moBrevoTimeline(detail) {
+  if (!detail.providerMessageId) {
+    return '<div class="text-xs opacity-60">No Brevo messageId on this row — it was sent before Core stored message ids, or it was never accepted by Brevo.</div>';
+  }
+  const events = detail.brevoEvents || [];
+  const rows = events.map(ev => `<div class="flex items-start gap-3 py-1.5 border-b border-outline-variant/20 last:border-0">
+      <div class="mono-text text-[11px] opacity-70 whitespace-nowrap w-40">${escHtml(deTime(ev.eventAt || ev.receivedAt))}</div>
+      <div>${moBrevoPill(ev.event)}</div>
+      <div class="text-xs break-all">${escHtml(ev.reason || '')}</div>
+    </div>`).join('');
+  return `<div class="text-[11px] mono-text opacity-70 mb-2 break-all">messageId: ${escHtml(detail.providerMessageId)}</div>
+    ${rows || '<div class="text-xs opacity-60">No events from Brevo yet.</div>'}`;
+}
+
+function moBrevoStats(brevo) {
+  if (!brevo) return '';
+  const entries = Object.entries(brevo);
+  if (!entries.length) return '';
+  return `<div class="bg-surface-container-lowest rounded-lg p-3 border border-outline-variant/20 mb-4">
+    <div class="text-xs font-bold uppercase tracking-wider text-on-surface-variant mb-2">Brevo events · last 30 days</div>
+    <div class="flex flex-wrap gap-2 text-xs">${entries.map(([ev, n]) => `<span class="inline-flex items-center gap-1">${moBrevoPill(ev)}<b>${n}</b></span>`).join('')}</div>
+  </div>`;
+}
+
 function moExtractRecipient(row) {
   return row.recipient || '—';
 }
@@ -110,7 +149,7 @@ async function toggleMessageOutboxDetail(tr, id) {
   tr.classList.add('bg-surface-container-low','border-l-4','border-primary');
   const expandTr = document.createElement('tr');
   expandTr.className = 'expand-row bg-surface-container-low/50';
-  expandTr.innerHTML = `<td class="p-6" colspan="10"><div class="text-on-surface-variant text-sm">Loading…</div></td>`;
+  expandTr.innerHTML = `<td class="p-6" colspan="11"><div class="text-on-surface-variant text-sm">Loading…</div></td>`;
   tr.after(expandTr);
 
   try {
@@ -118,12 +157,16 @@ async function toggleMessageOutboxDetail(tr, id) {
     const payloadStr = typeof detail.decodedPayload === 'object'
       ? JSON.stringify(detail.decodedPayload, null, 2)
       : String(detail.decodedPayload ?? '');
-    expandTr.innerHTML = `<td colspan="10" class="p-0">
+    expandTr.innerHTML = `<td colspan="11" class="p-0">
       <div class="p-6 border-l-4 border-primary bg-surface-container-low/40">
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div>
             <h4 class="text-xs font-black uppercase tracking-widest text-on-surface-variant mb-3">Payload (decoded)</h4>
             <pre class="code-bg text-xs mono-text p-4 rounded-lg whitespace-pre-wrap break-all max-h-96 overflow-y-auto">${escHtml(payloadStr)}</pre>
+          </div>
+          <div class="lg:col-span-2">
+            <h4 class="text-xs font-black uppercase tracking-widest text-on-surface-variant mb-3">Brevo delivery</h4>
+            <div class="bg-surface-container-lowest rounded-lg p-4 border border-outline-variant/20">${moBrevoTimeline(detail)}</div>
           </div>
           <div>
             <h4 class="text-xs font-black uppercase tracking-widest text-on-surface-variant mb-3">Last Error Body</h4>
@@ -143,7 +186,7 @@ async function toggleMessageOutboxDetail(tr, id) {
       </div>
     </td>`;
   } catch (e) {
-    expandTr.innerHTML = `<td class="p-6" colspan="10"><div class="text-error text-sm">Failed to load: ${escHtml(e.message)}</div></td>`;
+    expandTr.innerHTML = `<td class="p-6" colspan="11"><div class="text-error text-sm">Failed to load: ${escHtml(e.message)}</div></td>`;
   }
 }
 
@@ -160,11 +203,13 @@ async function renderMessageOutbox(el, page = 1) {
     const statusOpts = [{value:'',label:'All Statuses'}, ...MO_STATUSES.map(s => ({value:s, label:s}))];
     const channelOpts = [{value:'',label:'All Channels'}, ...MO_CHANNELS.map(c => ({value:c, label:c}))];
     const errorClassOpts = [{value:'',label:'Any'}, {value:'permanent',label:'permanent'}, {value:'transient',label:'transient'}];
+    const brevoOpts = [{value:'',label:'Any'}, {value:'none',label:'no event yet'}, ...MO_BREVO_EVENTS.map(e => ({value:e, label:e.replace(/_/g,' ')}))];
 
     const filterHtml =
       fSelect('Status', statusOpts, `oninput="moFilters.status=this.value"`, moFilters.status || '') +
       fSelect('Channel', channelOpts, `oninput="moFilters.channel=this.value"`, moFilters.channel || '') +
       fSelect('Error class', errorClassOpts, `oninput="moFilters.lastErrorClass=this.value"`, moFilters.lastErrorClass || '') +
+      (data.brevoSupported ? fSelect('Brevo', brevoOpts, `oninput="moFilters.brevoStatus=this.value"`, moFilters.brevoStatus || '') : '') +
       fInput('From', `type="datetime-local" value="${moFilters.dateFrom||''}" oninput="moFilters.dateFrom=this.value"`) +
       fInput('To', `type="datetime-local" value="${moFilters.dateTo||''}" oninput="moFilters.dateTo=this.value"`) +
       fInput('Correlation', `placeholder="e.g. appointmentId" value="${escHtml(moFilters.correlationId||'')}" oninput="moFilters.correlationId=this.value"`) +
@@ -190,6 +235,7 @@ async function renderMessageOutbox(el, page = 1) {
         <td class="px-4 py-2 mono-text text-xs opacity-70 whitespace-nowrap">${escHtml(deTime(row.nextAttemptAt)) || '—'}</td>
         <td class="px-4 py-2 mono-text text-xs ${row.lastHttpStatus >= 500 ? 'text-red-600 font-bold' : row.lastHttpStatus >= 400 ? 'text-amber-600' : ''}">${row.lastHttpStatus ?? '—'}</td>
         <td class="px-4 py-2 text-xs">${escHtml(row.lastErrorClass) || '—'}</td>
+        <td class="px-4 py-2">${moBrevoPill(row.brevoStatus, row.brevoStatusAt ? deTime(row.brevoStatusAt) : '')}</td>
         <td class="px-4 py-2 text-xs truncate max-w-[180px]" title="${escHtml(row.correlationId||'')}">${escHtml(row.correlationId) || '—'}</td>
         <td class="px-4 py-2 mono-text text-[10px] opacity-60">${escHtml(String(row.id).slice(0,8))}…</td>
         <td class="px-4 py-2">${actions || '—'}</td>
@@ -204,8 +250,9 @@ async function renderMessageOutbox(el, page = 1) {
           `<button class="p-2 bg-surface-container rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors" onclick="renderMessageOutbox(document.getElementById('content'))" title="Refresh"><span class="material-symbols-outlined">refresh</span></button>`,
       }) +
       moStatsBanner(stats) +
+      moBrevoStats(stats && stats.brevo) +
       filterCard(filterHtml, 6) +
-      tableShell(['Created','Channel','Status','Attempt','Next','HTTP','Err cls','Correlation','ID','Actions'], rowsHtml, 'moPaging')
+      tableShell(['Created','Channel','Status','Attempt','Next','HTTP','Err cls','Brevo','Correlation','ID','Actions'], rowsHtml, 'moPaging')
     );
 
     document.querySelectorAll('.mo-row').forEach(tr => {
