@@ -28,6 +28,9 @@ let acState = {
   resp: null,
   respTab: 'body',
   pretty: true,
+  respQuery: '',    // response search (Body / Headers), kept across tabs and sends
+  respHit: 0,
+  respHits: 0,
   sending: false,
 };
 
@@ -35,14 +38,14 @@ function acBlankRequest() {
   return {
     name: 'Untitled request', kind: 'custom', ref: null,
     method: 'GET', url: '{{coreApi}}/', headers: [{ key: 'Accept', value: 'application/json', enabled: true }],
-    bodyMode: 'none', body: '', auth: { type: 'none' }, effect: null, example: null,
+    bodyMode: 'none', body: '', auth: { type: 'none' }, effect: null, example: null, filled: {},
   };
 }
 
 // Only the fields that describe a request (what history/collections store).
 function acRequestPayload(r = acState.req) {
   return { name: r.name, kind: r.kind, ref: r.ref, method: r.method, url: r.url, headers: r.headers,
-    bodyMode: r.bodyMode, body: r.body, auth: r.auth, effect: r.effect || null };
+    bodyMode: r.bodyMode, body: r.body, auth: r.auth, effect: r.effect || null, filled: r.filled || {} };
 }
 
 function acSaveDraft() {
@@ -69,6 +72,7 @@ async function renderApiConsole(el) {
   const draft = acLoadDraft();
   acState.env = AC_ENVS.includes(draft?.env) ? draft.env : AC_ENVS.includes(globalEnv) ? globalEnv : 'dev';
   if (!acState.req) acState.req = draft?.req ? { ...acBlankRequest(), ...draft.req } : acBlankRequest();
+  if (acState.req.lcFilled) { acState.req.filled = { ...acState.req.filled, lcAccountId: acState.req.lcFilled }; delete acState.req.lcFilled; }
 
   el.innerHTML = `<div class="lc-view ac-view">
     ${pageHero('API Console', {
@@ -175,4 +179,11 @@ async function acRefreshHistory() {
 document.addEventListener('keydown', (e) => {
   if (window.__currentView !== 'api-console') return;
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); acSend(); }
+  // ⌘F searches the response (Body / Headers); the Mac shell has no find bar.
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f' && acState.resp && acState.resp.status != null) {
+    e.preventDefault();
+    if (!['body', 'headers'].includes(acState.respTab)) acRespTab('body');
+    const box = document.getElementById('acRespSearch');
+    if (box) { box.focus(); box.select(); }
+  }
 });

@@ -3,9 +3,10 @@
 
 const AC_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 
-function acRenderRequest() {
+function acRenderRequest(keepUrlFocus = false) {
   const el = document.getElementById('acReq');
   if (!el || !acState.req) return;
+  const caret = keepUrlFocus ? document.getElementById('acUrl')?.selectionStart : null;
   const r = acState.req;
   const tabs = [
     ['params', `Params${acQueryPairs(r.url).length ? ` <span class="pill">${acQueryPairs(r.url).length}</span>` : ''}`],
@@ -18,6 +19,7 @@ function acRenderRequest() {
     <div class="ac-req-head">
       ${r.kind === 'serverpod' ? '<span class="pill info">Serverpod</span>' : r.kind === 'external' ? '<span class="pill">External</span>' : '<span class="pill ghost">Custom</span>'}
       <input class="ac-name" value="${escHtml(r.name)}" oninput="acState.req.name=this.value;acSaveDraft()" spellcheck="false">
+      ${acLookupButtons(r)}
       <button class="btn btn-sm" onclick="acCopyCurl()" title="Copy as curl (secrets as $VARIABLES)"><span class="material-symbols-outlined">terminal</span>curl</button>
       <button class="btn btn-sm" onclick="acOpenSave()" title="Save to a collection"><span class="material-symbols-outlined">bookmark_add</span>Save</button>
       <button class="btn btn-sm" onclick="acNewRequest()" title="New blank request"><span class="material-symbols-outlined">add</span>New</button>
@@ -33,6 +35,7 @@ function acRenderRequest() {
     <div class="lc-tabs">${tabs.map(([k, l]) => `<button class="lc-tab ${acState.reqTab === k ? 'active' : ''}" onclick="acReqTab('${k}')">${l}</button>`).join('')}</div>
     <div class="ac-pane" id="acReqPane"></div>`;
   acRenderReqPane();
+  if (caret != null) { const u = document.getElementById('acUrl'); u.focus(); u.setSelectionRange(caret, caret); }
 }
 
 function acWarningHtml() {
@@ -68,6 +71,8 @@ function acSetUrl(v) {
   acState.req.url = v;
   acSaveDraft();
   if (acState.reqTab === 'params') acRenderReqPane();
+  const shown = document.querySelectorAll('.ac-req-head [onclick^="acOpenLookup"]').length;
+  if (shown !== Object.keys(AC_LOOKUPS).filter(n => acUsesPlaceholder(n)).length) acRenderRequest(true);
 }
 
 function acAuthLabel(type) {
@@ -99,7 +104,7 @@ function acParamsHtml() {
       <td><button class="lc-icon-btn" onclick="acDelParam(${i})" title="Remove"><span class="material-symbols-outlined">close</span></button></td></tr>`).join('')}
     </table>
     <div class="ac-row" style="margin-top:8px"><button class="btn btn-sm" onclick="acAddParam()"><span class="material-symbols-outlined">add</span>Add param</button>
-    <span class="ac-hint">Values are sent as typed — encode special characters yourself (e.g. <code>%7C</code> for |). <code>{{variables}}</code> work everywhere.</span></div>`;
+    <span class="ac-hint">Characters not allowed in URLs (<code>|</code>, spaces, <code>{ }</code> …) are percent-encoded when sent; <code>&amp;</code>, <code>=</code> and <code>+</code> are sent as typed. <code>{{variables}}</code> work everywhere.</span></div>`;
 }
 
 function acWriteParams(pairs) {
@@ -253,6 +258,8 @@ function acDocsHtml() {
         <span class="pill">auth: ${escHtml(acAuthLabel(t.auth))}</span></div>
       ${t.doc ? `<p style="margin-top:10px">${escHtml(t.doc)}</p>` : ''}
       ${t.source ? `<h4>Call site</h4><div class="mono">${escHtml(t.source)}</div>` : ''}
+      ${t.generated ? `<h4>Added by a scan</h4><div class="ac-row"><span class="ac-hint">Claude Code added this on ${escHtml(deTime(t.addedAt))} (lib/api-console/externals-generated.json). Check method and body against the call site.</span>
+        <button class="btn btn-sm btn-danger" onclick="acRemoveGenerated('${escHtml(t.id)}')"><span class="material-symbols-outlined">delete</span>Remove template</button></div>` : ''}
       <h4>Variables</h4><div class="ac-hint">${acVarsIn(r).map(v => `<code>{{${escHtml(v)}}}</code>`).join(' ') || 'none'}</div>
     </div>`;
   }

@@ -543,7 +543,9 @@ backend calls, and the webhooks other systems call into the backend. Requests ar
 helper server (`routes/api-console.js`), never the browser, so credentials stay server-side.
 
 - **Catalog** (`lib/api-console/catalog.js`) is parsed live from LillianCare-Core and is
-  rebuilt when `endpoints.dart` or `client.dart` change: endpoints/methods/param types from
+  rebuilt automatically when any source changes (generated code, `*.spy.yaml`, `*_endpoint.dart`,
+  shared models, config — newest mtime + file count), or via the Reload button (`?reload=1`),
+  which also shows the Core branch/commit it was read from: endpoints/methods/param types from
   `lib/src/generated/endpoints.dart` (+ the `serverpod_auth*` modules in `~/.pub-cache`),
   `requireLogin` and `///` docs from the endpoint sources, return types from the generated
   client, model fields / enum serialization from `*.spy.yaml` and the freezed `Api*` classes
@@ -565,6 +567,12 @@ helper server (`routes/api-console.js`), never the browser, so credentials stay 
   `LC_API_KEY_<ENV>`, optional `PMS_BASE_URL_TEST`). Every secret added is masked (‹label›) in
   the trace and the echoed request. **A service's credentials are only attached when the URL
   points at that service for the selected env** (`assertCredentialTarget`).
+- **Find missing** (`lib/api-console/sync.js`, button in the catalog): a headless Claude Code session
+  in LillianCare-Core (same read-only sandbox as Investigations: Read/Grep/Glob, secrets denied,
+  `--json-schema` structured output) lists outbound calls / webhook routes without a template.
+  The server validates each entry (group ↔ auth ↔ base-URL prefix, no credential headers, dedup by
+  method + path + query keys) and appends it to `lib/api-console/externals-generated.json`
+  (tracked — review with git diff; entries can be removed from their Docs tab). ~2–4 min, ~$1.
 - **Production guard**: on `production`, anything but GET/HEAD — and every Serverpod call —
   returns 428 unless `body.confirm === 'production'`; the UI asks for it each time.
 - **Variables**: `{{name}}` in URL/headers/body. Precedence: dynamic (`{{$isoTimestamp}}`,
@@ -579,6 +587,13 @@ helper server (`routes/api-console.js`), never the browser, so credentials stay 
   modals, Postman import/export + curl) and `public/css/api-console.css`. Postman v2.1 collections
   and environments import/export; the helper's own auth types are kept in an `lcHelper` field.
   "Copy as curl" puts credentials in as `$PLACEHOLDERS`.
+- **Find by email** (`AC_LOOKUPS` in `api-console-panels.js`): when a request uses `{{lcAccountId}}`
+  or `{{fcmToken}}`, the header shows a lookup that searches `app_user_info` on the console's env
+  (via `/api/users` + `envHeadersFor`); for FCM it then lists the user's devices
+  (`/api/users/:id/tokens`, as in Send Notification). The pick replaces the placeholder in the
+  request and is remembered in `req.filled`, so a second pick replaces it.
+- **Response search** (Body / Headers, ⌘F): highlights matches across text nodes (so across JSON
+  syntax colours), ↵ / ⇧↵ step through them, Headers also filters rows. Capped at 2000 hits.
 - `/api/console` has a 30 MB JSON body limit (Serverpod's `maxRequestSize`); other routes keep 100 kB.
 
 ## DB Diagnostics (`/api/db-diag/*`, view `#db-diagnostics`)

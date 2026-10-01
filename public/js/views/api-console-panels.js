@@ -228,3 +228,118 @@ async function acDeleteSaved(ci, ii) {
   acState.collections[ci].items.splice(ii, 1);
   await acPersistCollections();
 }
+
+// ── look up a user by email → lcAccountId or FCM device token ──
+// Searches app_user_info on the console's env (same query as the Users view). For
+// fcmToken it then lists the user's devices (app_user_notification_token, as in Send
+// Notification). The chosen value replaces {{name}} in the open request's URL, headers
+// and body; it is remembered in req.filled, so picking again replaces it.
+const AC_LOOKUPS = {
+  lcAccountId: { title: 'Find lcAccountId', icon: 'person_search', label: 'lcAccountId' },
+  fcmToken: { title: 'Find FCM device token', icon: 'phonelink_ring', label: 'FCM token' },
+};
+
+function acUsesPlaceholder(name, r = acState.req) {
+  const text = [r.url, r.body, ...r.headers.map(h => h.value)].join(' ');
+  const prev = (r.filled || {})[name];
+  return new RegExp(`\\{\\{\\s*${name}\\s*\\}\\}`).test(text) || (!!prev && text.includes(prev));
+}
+
+function acLookupButtons(r) {
+  return Object.entries(AC_LOOKUPS).filter(([name]) => acUsesPlaceholder(name, r)).map(([name, l]) =>
+    `<button class="btn btn-sm" onclick="acOpenLookup('${name}')" title="${escHtml(l.title)} by email"><span class="material-symbols-outlined">${l.icon}</span>${escHtml(l.label)}</button>`).join('');
+}
+
+function acOpenLookup(name) {
+  const l = AC_LOOKUPS[name];
+  acModal(`${acModalHead(`${escHtml(l.title)} — ${escHtml(acState.env)}`)}
+    <div class="ac-modal-body">
+      <div class="ac-row" style="flex-wrap:nowrap">
+        <input class="lc-input" id="acLcQuery" autofocus placeholder="Email (or part of a name)" autocomplete="off"
+          onkeydown="if(event.key==='Enter')acLookupSearch('${name}')">
+        ${btnPrimary('Search', `acLookupSearch('${name}')`, { icon: 'search' })}
+      </div>
+      <div class="ac-hint">Searches <code>app_user_info</code> on ${escHtml(acState.env)}${name === 'fcmToken' ? ', then lists the user’s devices from <code>app_user_notification_token</code>' : ''}; the value replaces <code>{{${name}}}</code> in the URL, headers and body.</div>
+      <div id="acLcResults"></div>
+    </div>`, { wide: true });
+}
+
+// Kept for the lcAccountId buttons already in place.
+function acOpenLcLookup() { acOpenLookup('lcAccountId'); }
+
+async function acLookupSearch(name) {
+  const q = document.getElementById('acLcQuery').value.trim();
+  const box = document.getElementById('acLcResults');
+  if (!q) return;
+  box.innerHTML = loadingState('Searching…');
+  try {
+    await ensureEnvPasswords();
+    const res = await fetch(`/api/users?q=${encodeURIComponent(q)}&page=1&pageSize=10`, { headers: envHeadersFor(acState.env) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    const rows = data.rows || [];
+    if (!rows.length) { box.innerHTML = `<div class="ac-hint">No user matches “${escHtml(q)}” on ${escHtml(acState.env)}.</div>`; return; }
+    box.innerHTML = rows.map(u => {
+      const who = `${u.firstName || ''} ${u.lastName || ''}`.trim() || '—';
+      const action = name === 'fcmToken'
+        ? `<button class="btn btn-sm btn-primary" onclick="acLookupDevices(${Number(u.id)}, this)">Devices</button>`
+        : u.lcAccountId ? `<button class="btn btn-sm btn-primary" onclick="acFillPlaceholder('lcAccountId','${escHtml(u.lcAccountId)}')">Use</button>` : '<span class="pill">no lcAccountId</span>';
+      return `<div class="ac-acc" style="flex-wrap:wrap">
+        <div class="grow"><div class="who">${escHtml(who)} · ${escHtml(u.email || '')}</div>
+          <div class="sub mono">id ${escHtml(u.id)} · lcAccountId ${escHtml(u.lcAccountId || '—')}${u.praxisId ? ` · ${escHtml(praxisLabel(u.praxisId))}` : ''}${u.pmsPatientId ? ` · pmsPatientId ${escHtml(u.pmsPatientId)}` : ''}</div></div>
+        ${action}
+        <div class="ac-devices" id="acDevices-${Number(u.id)}" style="flex-basis:100%"></div>
+      </div>`;
+    }).join('') + (data.total > rows.length ? `<div class="ac-hint">${data.total - rows.length} more — refine the search.</div>` : '');
+  } catch (e) {
+    box.innerHTML = `<div class="ac-hint" style="color:var(--red)">${escHtml(e.message)}</div>`;
+  }
+}
+
+async function acLookupDevices(userId, btn) {
+  const box = document.getElementById(`acDevices-${userId}`);
+  if (btn) btn.disabled = true;
+  box.innerHTML = `<div class="ac-hint">Loading devices…</div>`;
+  try {
+    const res = await fetch(`/api/users/${userId}/tokens`, { headers: envHeadersFor(acState.env) });
+    const tokens = await res.json();
+    if (!res.ok) throw new Error(tokens.error || `HTTP ${res.status}`);
+    if (!tokens.length) { box.innerHTML = `<div class="ac-hint">No device tokens for this user.</div>`; return; }
+    acState.lookupTokens = tokens;
+    box.innerHTML = tokens.map((t, i) => `<div class="ac-device">
+        <span class="pill ${t.platform === 'ios' ? 'info' : t.platform === 'android' ? 'ok' : ''}">${escHtml(t.platform || '?')}</span>
+        <span class="mono grow" title="${escHtml(t.token)}">${escHtml(t.deviceId || '—')} · ${escHtml(acShortToken(t.token))}</span>
+        <span class="ac-hint">last used ${escHtml(t.lastUsedAt ? deTime(t.lastUsedAt) : '—')}</span>
+        <button class="btn btn-sm btn-primary" onclick="acFillPlaceholder('fcmToken', acState.lookupTokens[${i}].token)">Use</button>
+      </div>`).join('');
+  } catch (e) {
+    box.innerHTML = `<div class="ac-hint" style="color:var(--red)">${escHtml(e.message)}</div>`;
+  } finally { if (btn) btn.disabled = false; }
+}
+
+const acShortToken = (t) => (t && t.length > 24 ? `${t.slice(0, 12)}…${t.slice(-6)}` : t || '');
+
+function acFillPlaceholder(name, value) {
+  const r = acState.req;
+  r.filled = r.filled || {};
+  const prev = r.filled[name];
+  const re = new RegExp(`\\{\\{\\s*${name}\\s*\\}\\}`, 'g');
+  const replace = (s) => {
+    let out = String(s || '').replace(re, value);
+    if (prev && prev !== value) out = out.split(prev).join(value);
+    return out;
+  };
+  const before = JSON.stringify([r.url, r.body, r.headers]);
+  r.url = replace(r.url);
+  r.body = replace(r.body);
+  r.headers = r.headers.map(h => ({ ...h, value: replace(h.value) }));
+  acCloseModal();
+  if (JSON.stringify([r.url, r.body, r.headers]) !== before) {
+    r.filled[name] = value;
+    acSaveDraft();
+    acRenderRequest();
+    showToast(`✅ ${AC_LOOKUPS[name].label} inserted`);
+  } else {
+    copyText(value);
+  }
+}

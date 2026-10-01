@@ -23,6 +23,13 @@
 .ac-side { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow: hidden; }
 .ac-side .lc-tabs { padding: 0 var(--s-2); }
 .ac-side-search { padding: var(--s-2) var(--s-3); border-bottom: 1px solid var(--rule); }
+.ac-catalog-info { display: flex; align-items: center; gap: 6px; padding: 4px 6px 4px 12px; border-bottom: 1px solid var(--rule);
+  font-size: 11px; color: var(--ink-3); }
+.ac-catalog-info .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac-catalog-info .mono { font-family: var(--font-mono); }
+.ac-catalog-info .btn-sm { height: 24px; padding: 0 8px; font-size: 11px; }
+.ac-sync-log { max-height: 260px; overflow: auto; font-size: 11.5px; }
+.ac-catalog-info .lc-icon-btn { width: 24px; height: 24px; }
 .ac-side-list { flex: 1; overflow: auto; padding: var(--s-1) 0 var(--s-3); }
 .ac-group { font: 700 11px/1 var(--font-sign); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3);
   padding: 12px 12px 6px; display: flex; align-items: center; gap: 6px; }
@@ -98,6 +105,19 @@
 .ac-resp-head .stat { font: 500 12px/1 var(--font-mono); color: var(--ink-2); }
 .ac-resp-head .stat b { color: var(--ink); font-weight: 700; }
 .ac-resp .lc-tabs { padding: 0 var(--panel-pad); }
+.ac-resp-tools { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; padding: var(--s-3) var(--panel-pad) 0; }
+.ac-search { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 220px; max-width: 460px; height: 30px; padding: 0 4px 0 8px;
+  background: var(--surface-2); border: 1px solid var(--rule-strong); border-radius: var(--r); }
+.ac-search:focus-within { border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus); }
+.ac-search > .material-symbols-outlined { font-size: 17px; color: var(--ink-3); }
+.ac-search input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--ink); font: 12.5px var(--font-mono); outline: none; box-shadow: none; padding: 0; height: 28px; }
+/* beat the global form-field resets: the wrapper draws the border and focus ring */
+.ac-search input, .ac-search input:focus { border: 0 !important; box-shadow: none !important; outline: none !important; --tw-ring-shadow: 0 0 #0000; }
+.ac-search .lc-icon-btn { width: 24px; height: 24px; }
+.ac-search-count { font: 500 11px/1 var(--font-mono); color: var(--ink-3); white-space: nowrap; }
+.ac-search-count.none { color: var(--red); }
+mark.ac-hit { background: color-mix(in srgb, var(--yellow) 38%, transparent); color: inherit; border-radius: 2px; }
+mark.ac-hit.cur { background: var(--yellow); color: #00212a; }
 .ac-resp-body { flex: 1; overflow: auto; padding: var(--s-3) var(--panel-pad) var(--panel-pad); min-height: 0; }
 .ac-pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12px/1.55 var(--font-mono); color: var(--ink); }
 .ac-pre .k { color: var(--blue); }
@@ -140,6 +160,10 @@
 .ac-acc .grow { flex: 1; min-width: 0; }
 .ac-acc .who { font: 600 13px/1.3 var(--font-ui); color: var(--ink); }
 .ac-acc .sub { font-size: 11.5px; color: var(--ink-3); }
+.ac-devices:empty { display: none; }
+.ac-devices { padding: 4px 0 0 12px; }
+.ac-device { display: flex; align-items: center; gap: var(--s-2); padding: 5px 0; font-size: 12px; }
+.ac-device .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ac-form { display: grid; grid-template-columns: 120px 1fr 1fr; gap: var(--s-2); align-items: end; }
 .ac-form .full { grid-column: 1 / -1; }
 

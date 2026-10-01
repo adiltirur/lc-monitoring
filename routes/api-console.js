@@ -9,7 +9,8 @@
 const crypto = require('crypto');
 const router = require('express').Router();
 const { getCatalog } = require('../lib/api-console/catalog');
-const { EXTERNALS } = require('../lib/api-console/externals');
+const { getExternals } = require('../lib/api-console/externals');
+const sync = require('../lib/api-console/sync');
 const auth = require('../lib/api-console/auth');
 const store = require('../lib/api-console/store');
 const { send, networkHint, errorMessage } = require('../lib/api-console/http');
@@ -28,7 +29,7 @@ function checkEnv(env) {
 
 // ── catalog + meta ──
 router.get('/api/console/catalog', (req, res) => {
-  try { res.json({ serverpod: getCatalog(), externals: EXTERNALS }); } catch (e) { fail(res, e); }
+  try { res.json({ serverpod: getCatalog({ force: req.query.reload === '1' }), externals: getExternals() }); } catch (e) { fail(res, e); }
 });
 
 router.get('/api/console/meta', async (req, res) => {
@@ -36,6 +37,16 @@ router.get('/api/console/meta', async (req, res) => {
     const env = checkEnv(req.query.env || 'dev');
     res.json({ env, envs: store.ENVS, authTypes: auth.AUTH_TYPES, secrets: auth.secretStatus(env), baseVars: await auth.baseVars(env) });
   } catch (e) { fail(res, e); }
+});
+
+// ── "Find missing": Claude Code scans Core for calls without a template (lib/api-console/sync.js) ──
+router.post('/api/console/sync', (req, res) => {
+  try { res.json(sync.start(getExternals())); } catch (e) { fail(res, e); }
+});
+router.get('/api/console/sync', (req, res) => res.json(sync.status()));
+router.delete('/api/console/sync', (req, res) => res.json(sync.cancel()));
+router.delete('/api/console/externals/:id', (req, res) => {
+  try { sync.removeGenerated(req.params.id); res.json({ ok: true }); } catch (e) { fail(res, e); }
 });
 
 // ── accounts (passwords never leave the server) ──
@@ -108,13 +119,27 @@ async function resolveRequest(env, input, { forCurl = false } = {}) {
   let url;
   try { url = new URL(urlText); } catch { throw Object.assign(new Error(`Invalid URL: ${urlText || '(empty)'}`), { status: 400 }); }
   if (!/^https?:$/.test(url.protocol)) throw Object.assign(new Error('Only http and https URLs'), { status: 400 });
+  const encoded = encodeUnsafeUrlChars(url);
   const has = (name) => Object.keys(headers).some(k => k.toLowerCase() === name);
   if (hasBody && input.bodyMode === 'json' && !has('content-type')) headers['Content-Type'] = 'application/json';
   if (!forCurl) {
     if (!has('user-agent')) headers['User-Agent'] = 'LC-Helper-API-Console/1.0';
     if (!has('accept')) headers.Accept = '*/*';
   }
-  return { method, url, headers, bodyText, baseVars: vars };
+  return { method, url, headers, bodyText, baseVars: vars, encoded };
+}
+
+// WHATWG URLs keep |, ^, `, {, }, \ unencoded in the query; strict servers (Principa's
+// Jetty) answer 400 with an empty body. Encode them like Dart's Uri and Postman do.
+// Returns the characters that were encoded, for the trace.
+function encodeUnsafeUrlChars(url) {
+  const unsafe = /[|^`{}\\"<> ]/g;
+  const found = new Set([...(url.pathname + url.search).matchAll(unsafe)].map(m => m[0]));
+  if (!found.size) return [];
+  const enc = (s) => s.replace(unsafe, c => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'));
+  url.pathname = enc(url.pathname);
+  url.search = enc(url.search);
+  return [...found];
 }
 
 function isTextual(contentType, buf) {
@@ -154,6 +179,7 @@ router.post('/api/console/send', async (req, res) => {
     env = checkEnv(body.env);
     const r = await resolveRequest(env, input);
     log('info', `${env.toUpperCase()} · ${r.method} ${r.url}`);
+    if (r.encoded.length) log('info', `Percent-encoded ${r.encoded.map(c => `"${c}"`).join(', ')} in the URL (not allowed raw)`);
 
     // Production guard
     const prodApi = (await auth.baseVars('production')).coreApi;
