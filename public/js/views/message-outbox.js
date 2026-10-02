@@ -34,7 +34,7 @@ function moBrevoTimeline(detail) {
   const events = detail.brevoEvents || [];
   const rows = events.map(ev => `<div class="flex items-start gap-3 py-1.5 border-b border-outline-variant/20 last:border-0">
       <div class="mono-text text-[11px] opacity-70 whitespace-nowrap w-40">${escHtml(deTime(ev.eventAt || ev.receivedAt))}</div>
-      <div>${moBrevoPill(ev.event)}</div>
+      <div class="whitespace-nowrap">${moBrevoPill(ev.event)}${ev.occurrences > 1 ? ` <span class="text-xs font-bold">×${ev.occurrences}</span> <span class="text-[10px] opacity-60">latest</span>` : ''}</div>
       <div class="text-xs break-all">${escHtml(ev.reason || '')}</div>
     </div>`).join('');
   return `<div class="text-[11px] mono-text opacity-70 mb-2 break-all">messageId: ${escHtml(detail.providerMessageId)}</div>

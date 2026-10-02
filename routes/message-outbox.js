@@ -165,7 +165,7 @@ router.get('/api/message-outbox/:id', async (req, res) => {
     const brevoEvents = r.providerMessageId && await brevoSupported(req)
       ? await query(
           req,
-          `SELECT event, reason, "eventAt", "receivedAt"
+          `SELECT *
            FROM brevo_webhook_event
            WHERE "messageId" = $1
            ORDER BY COALESCE("eventAt", "receivedAt"), id`,
