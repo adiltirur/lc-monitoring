@@ -84,6 +84,44 @@ function parseDocumentBundle(bundle) {
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
 }
 
+// Principa re-documents an ongoing prescription once per encounter, so the
+// same MedicationRequest comes back under several ids that differ only in
+// id/encounter. Collapse identical copies to the newest one, like the core
+// server's MedicationDeduplicator (LCB-136).
+const MED_COPY_FIELDS = new Set(['id', 'meta', 'encounter', 'identifier']);
+
+function medicationContentKey(req) {
+  const content = Object.fromEntries(Object.entries(req).filter(([key]) => !MED_COPY_FIELDS.has(key)));
+  return JSON.stringify(content);
+}
+
+function medicationSequence(req) {
+  const n = Number(String(req.id || '').split('-').pop());
+  return Number.isFinite(n) ? n : null;
+}
+
+function isNewerMedicationCopy(candidate, current) {
+  const a = medicationSequence(candidate);
+  const b = medicationSequence(current);
+  if (a !== null && b !== null) return a > b;
+  return String(candidate.id || '') > String(current.id || '');
+}
+
+function dedupeMedicationRequests(requests) {
+  const groups = new Map();
+  for (const req of requests) {
+    const key = medicationContentKey(req);
+    const group = groups.get(key);
+    if (!group) {
+      groups.set(key, { kept: req, ids: [req.id || ''] });
+      continue;
+    }
+    group.ids.push(req.id || '');
+    if (isNewerMedicationCopy(req, group.kept)) group.kept = req;
+  }
+  return [...groups.values()].map(g => ({ req: g.kept, copyIds: g.ids }));
+}
+
 function parseMedicationBundle(bundle) {
   const entries = (bundle && bundle.entry) || [];
   const resources = entries.map(e => e.resource).filter(Boolean);
@@ -92,8 +130,8 @@ function parseMedicationBundle(bundle) {
     if (r.resourceType === 'Medication' && r.id) medById[`Medication/${r.id}`] = r;
   }
   const requests = resources.filter(r => r.resourceType === 'MedicationRequest');
-  return requests
-    .map(req => {
+  return dedupeMedicationRequests(requests)
+    .map(({ req, copyIds }) => {
       const medRef = (req.medicationReference && req.medicationReference.reference) || '';
       const med = medById[medRef];
       const medCoding = (med && med.code && med.code.coding && med.code.coding[0]) || {};
@@ -118,6 +156,7 @@ function parseMedicationBundle(bundle) {
       const form = (med && med.form && med.form.coding && med.form.coding[0] && med.form.coding[0].display) || '';
       return {
         id: req.id || '',
+        copyIds,
         medicationName: medName,
         status: req.status || '',
         intent: req.intent || '',

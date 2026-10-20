@@ -1,0 +1,32 @@
+[
+  {
+    "id": "gen-367c3aaf99",
+    "group": "Other",
+    "name": "AWS checkip – outbound IP",
+    "method": "GET",
+    "url": "https://checkip.amazonaws.com",
+    "auth": "none",
+    "effect": "read",
+    "headers": {},
+    "source": "web/routes/diagnostics_route.dart:22",
+    "doc": "Gets the server's outbound (NAT gateway) public IP as plain text. It is called once on the first /diagnostics/ip request and cached; that route returns 403 in production.",
+    "usedByBackend": true,
+    "generated": true,
+    "addedAt": "2026-09-29T11:55:02.332Z"
+  },
+  {
+    "id": "gen-c4d62a0750",
+    "group": "Inbound webhooks",
+    "name": "Praxis invite landing page",
+    "method": "GET",
+    "url": "{{coreWeb}}/invite/{{inviteCode}}",
+    "auth": "none",
+    "effect": "read",
+    "headers": {},
+    "source": "web/routes/invite_route.dart:101",
+    "doc": "Public HTML page for praxis invitation links. It shows a 7-digit invite code (for example 1234567) and redirects to the app deep link. Codes that are not exactly 7 digits get a 404.",
+    "usedByBackend": true,
+    "generated": true,
+    "addedAt": "2026-09-29T11:55:02.332Z"
+  }
+]

@@ -40,6 +40,18 @@ async function renderUsers(el, page = 1) {
   }
 }
 
+function udCard(icon, title, body, opts = {}) {
+  const count = opts.count !== undefined ? ` <span class="count">${opts.count}</span>` : '';
+  return `<div class="panel"${opts.id ? ` id="${opts.id}"` : ''}>
+    <div class="panel-header"><span class="panel-title"><span class="material-symbols-outlined">${icon}</span>${escHtml(title)}${count}</span>${opts.actions || ''}</div>
+    <div class="panel-body">${body}</div>
+  </div>`;
+}
+
+function udEmpty(text) {
+  return `<div class="faint" style="font-size:12.5px">${escHtml(text)}</div>`;
+}
+
 async function renderUserDetail(el, userId) {
   el.innerHTML = pageWrap(loadingState('Loading user…'));
   try {
@@ -48,10 +60,8 @@ async function renderUserDetail(el, userId) {
     const changed = {};
 
     const EDITABLE = ['firstName','lastName','email','phoneNumber','street','city','postalCode','newEmail','newPhone'];
-    const FIELD_GROUPS = {
-      'Editable Records': ['firstName','lastName','email','phoneNumber','street','city','postalCode','newEmail','newPhone'],
-      'System Attributes (Read-Only)': ['id','gender','dob','consent','praxisId','mfaActivated','isVerified','lcAccountId','pmsPatientId','verifiedBy','verifiedOn','verifiedByDocument','verifiedByPraxisId','createdAt','modifiedAt'],
-    };
+    const READONLY = ['id','gender','dob','consent','praxisId','mfaActivated','isVerified','lcAccountId','pmsPatientId','verifiedBy','verifiedOn','verifiedByDocument','verifiedByPraxisId','createdAt','modifiedAt'];
+    const MONO = ['id','lcAccountId','pmsPatientId','praxisId','verifiedByPraxisId','createdAt','modifiedAt','dob','verifiedOn'];
 
     function fieldDisplay(k, val) {
       if (val === null || val === undefined) return '';
@@ -59,183 +69,66 @@ async function renderUserDetail(el, userId) {
       return String(val);
     }
 
-    function fieldHtml(k) {
-      const isEdit = EDITABLE.includes(k);
-      const display = fieldDisplay(k, u[k]);
-      if (isEdit) {
-        return `<div class="space-y-1.5">
-          <label class="text-[11px] font-bold uppercase tracking-widest text-on-surface-variant">${escHtml(k)}</label>
-          <input class="user-field w-full bg-surface-container-lowest border border-outline-variant rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary-fixed focus:border-primary" data-key="${k}" value="${escHtml(display)}" oninput="markChanged('${k}', this.value)">
-        </div>`;
-      } else {
-        if (k === 'isVerified') {
-          return `<div class="space-y-1.5">
-            <label class="text-[11px] font-bold uppercase tracking-widest text-on-surface-variant">${escHtml(k)}</label>
-            <div class="bg-surface-container-low px-3 py-2 rounded-lg flex items-center">
-              ${u[k] ? statusBadge('Verified','tertiary') : statusBadge('Pending','amber')}
-            </div>
-          </div>`;
-        }
-        if (k === 'mfaActivated' || k === 'consent') {
-          return `<div class="space-y-1.5">
-            <label class="text-[11px] font-bold uppercase tracking-widest text-on-surface-variant">${escHtml(k)}</label>
-            <div class="bg-surface-container-low px-3 py-2 rounded-lg flex items-center">
-              ${u[k] ? statusBadge('Enabled','primary') : statusBadge('Disabled','slate')}
-            </div>
-          </div>`;
-        }
-        const isMono = k === 'id' || k === 'lcAccountId' || k === 'pmsPatientId' || k === 'praxisId' || k === 'verifiedByPraxisId';
-        const showPraxisName = (k === 'praxisId' || k === 'verifiedByPraxisId') && praxisName(display);
-        return `<div class="space-y-1.5">
-          <label class="text-[11px] font-bold uppercase tracking-widest text-on-surface-variant">${escHtml(k)}</label>
-          <div class="bg-surface-container-low px-3 py-2 rounded-lg ${isMono ? 'mono-text text-xs' : 'text-sm'} text-on-surface-variant">${escHtml(display) || '—'}${showPraxisName ? ` <span class="text-on-surface ml-2">· ${escHtml(praxisName(display))}</span>` : ''}</div>
-        </div>`;
-      }
+    function editHtml(k) {
+      return `<div class="field">${fLabel(k)}<input class="lc-input user-field" data-key="${k}" value="${escHtml(fieldDisplay(k, u[k]))}" oninput="markChanged('${k}', this.value)"></div>`;
     }
 
-    const editableFields = FIELD_GROUPS['Editable Records'].map(fieldHtml).join('');
-    const readonlyFields = FIELD_GROUPS['System Attributes (Read-Only)'].map(fieldHtml).join('');
+    function readHtml(k) {
+      const display = fieldDisplay(k, u[k]);
+      let value;
+      if (k === 'isVerified') value = u[k] ? statusBadge('Verified', 'tertiary') : statusBadge('Pending', 'amber');
+      else if (k === 'mfaActivated' || k === 'consent') value = u[k] ? statusBadge('Enabled', 'tertiary') : statusBadge('Disabled', 'slate');
+      else {
+        const pName = (k === 'praxisId' || k === 'verifiedByPraxisId') && display && praxisName(display);
+        value = (escHtml(display) || '<span class="faint">—</span>') + (pName ? `<span class="faint">${escHtml(pName)}</span>` : '');
+      }
+      return `<div class="kv"><span class="kv-label">${escHtml(k)}</span><span class="kv-value${MONO.includes(k) && display ? ' mono' : ''}">${value}</span></div>`;
+    }
 
-    const insuranceCard = d.insurance ? `
-      <div class="bg-surface-container-lowest rounded-xl shadow-whisper p-6 border border-transparent hover:border-outline-variant transition-all">
-        <div class="flex items-center gap-3 mb-6">
-          <div class="w-10 h-10 rounded-lg bg-primary/5 flex items-center justify-center text-primary">
-            <span class="material-symbols-outlined">clinical_notes</span>
-          </div>
-          <h3 class="font-bold tracking-tight">Insurance</h3>
-        </div>
-        <div class="space-y-3">
-          ${Object.entries(d.insurance).map(([k,v]) => `<div class="flex justify-between items-center pb-2 border-b border-surface-container-low last:border-b-0">
-            <span class="text-[11px] font-bold uppercase tracking-widest text-on-surface-variant">${escHtml(k)}</span>
-            <span class="text-sm font-semibold mono-text">${escHtml(String(v??''))||'—'}</span>
-          </div>`).join('')}
-        </div>
-      </div>` : '';
+    const insuranceCard = d.insurance ? udCard('clinical_notes', 'Insurance',
+      Object.entries(d.insurance).map(([k, v]) => `<div class="kv-row"><span class="kv-label">${escHtml(k)}</span><span class="kv-value mono">${escHtml(String(v ?? '')) || '<span class="faint">—</span>'}</span></div>`).join('')) : '';
 
-    const familyCard = `
-      <div class="bg-surface-container-lowest rounded-xl shadow-whisper p-6 border border-transparent hover:border-outline-variant transition-all">
-        <div class="flex items-center gap-3 mb-6">
-          <div class="w-10 h-10 rounded-lg bg-tertiary/5 flex items-center justify-center text-tertiary">
-            <span class="material-symbols-outlined">family_history</span>
-          </div>
-          <h3 class="font-bold tracking-tight">Family Members (${d.family.length})</h3>
-        </div>
-        <div class="space-y-3">
-          ${d.family.length ? d.family.map(f => {
-            const initials = ((f.firstName||'?').charAt(0) + (f.lastName||'').charAt(0)).toUpperCase();
-            return `<div class="flex items-center justify-between p-3 rounded-lg hover:bg-surface-container-low transition-colors">
-              <div class="flex items-center gap-3">
-                <div class="w-8 h-8 rounded-full bg-secondary-container flex items-center justify-center text-on-secondary-container text-xs font-bold">${escHtml(initials)}</div>
-                <div>
-                  <p class="text-sm font-semibold">${escHtml(f.firstName||'')} ${escHtml(f.lastName||'')}</p>
-                  <p class="text-[10px] text-on-surface-variant uppercase tracking-tighter">${escHtml(f.insuranceType||'')} · ${escHtml(deTime(f.dob))}</p>
-                </div>
-              </div>
-              <div class="w-2 h-2 rounded-full bg-tertiary ring-4 ring-tertiary/10"></div>
-            </div>`;
-          }).join('') : '<div class="text-outline text-sm italic">No family members</div>'}
-        </div>
-      </div>`;
+    const familyCard = udCard('family_history', 'Family members',
+      d.family.length ? d.family.map(f => {
+        const initials = ((f.firstName || '?').charAt(0) + (f.lastName || '').charAt(0)).toUpperCase();
+        return `<div class="list-row"><div class="row" style="min-width:0">
+          <span class="avatar">${escHtml(initials)}</span>
+          <div style="min-width:0"><div class="list-title">${escHtml(f.firstName || '')} ${escHtml(f.lastName || '')}</div>
+          <div class="list-meta">${escHtml(f.insuranceType ?? '')} · ${escHtml(deTime(f.dob))}</div></div>
+        </div></div>`;
+      }).join('') : udEmpty('No family members'), { count: d.family.length });
 
-    const apptCard = `
-      <div class="bg-surface-container-lowest rounded-xl shadow-whisper p-6 border border-transparent hover:border-outline-variant transition-all">
-        <div class="flex items-center justify-between mb-6">
-          <div class="flex items-center gap-3">
-            <div class="w-10 h-10 rounded-lg bg-secondary/5 flex items-center justify-center text-secondary">
-              <span class="material-symbols-outlined">calendar_month</span>
-            </div>
-            <h3 class="font-bold tracking-tight">Recent Appointments (${d.appointments.length})</h3>
-          </div>
-        </div>
-        ${d.appointments.length ? `<table class="w-full text-left">
-          <thead><tr class="border-b border-surface-container-low">
-            <th class="pb-3 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Date</th>
-            <th class="pb-3 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Category</th>
-            <th class="pb-3 text-right text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Status</th>
-          </tr></thead>
-          <tbody class="divide-y divide-surface-container-low">
-            ${d.appointments.map(a => {
-              const [bg, fg] = APT_STATUS_PILL[a.status] || APT_STATUS_PILL[0];
-              return `<tr>
-                <td class="py-3 text-xs font-semibold mono-text">${escHtml(deTime(a.createdAt))}</td>
-                <td class="py-3"><span class="px-2 py-0.5 ${bg} ${fg} text-[9px] font-bold rounded uppercase tracking-wider">${escHtml(a.category||'')}</span></td>
-                <td class="py-3 text-right"><span class="text-[10px] font-bold uppercase ${fg}">${escHtml(APT_STATUS[a.status]||a.status)}</span></td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-        </table>` : '<div class="text-outline text-sm italic">No appointments</div>'}
-      </div>`;
+    const apptCard = udCard('calendar_month', 'Recent appointments',
+      d.appointments.length ? d.appointments.map(a => `<div class="list-row">
+        <div><div class="list-title">${escHtml(a.category || '—')}</div><div class="list-meta">${escHtml(deTime(a.createdAt))}</div></div>
+        ${statusBadge(APT_STATUS[a.status] || String(a.status), 'slate')}
+      </div>`).join('') : udEmpty('No appointments'), { count: d.appointments.length });
 
-    el.innerHTML = `<div class="p-8 max-w-[1600px] mx-auto">
-      <div class="flex items-center gap-4 mb-6">
-        <button class="flex items-center gap-2 text-slate-500 hover:text-primary transition-colors font-medium" onclick="renderUsers(document.getElementById('content'))">
-          <span class="material-symbols-outlined">arrow_back</span>
-          <span class="text-sm">Back to Users</span>
-        </button>
-        <div class="h-6 w-px bg-slate-200"></div>
-        <div class="flex flex-col">
-          <h2 class="text-sm font-bold tracking-tight text-slate-900 leading-tight">User Detail</h2>
-          <span class="text-xs text-slate-500">${escHtml(u.firstName||'')} ${escHtml(u.lastName||'')}</span>
+    const pmsPending = udEmpty(u.lcAccountId ? 'Loading…' : 'No lcAccountId — PMS data unavailable');
+    const actions = (u.isVerified
+        ? `<span class="pill ok"><span class="material-symbols-outlined" style="font-size:14px">verified</span>Verified</span>`
+        : `<button class="btn" onclick="verifyUser(${userId})"><span class="material-symbols-outlined">verified</span>Verify user</button>`) +
+      `<button id="saveBtn" class="btn btn-primary" onclick="saveUserChanges(${userId})" disabled><span class="material-symbols-outlined">save</span>Save changes</button>`;
+    const name = `${u.firstName || ''} ${u.lastName || ''}`.trim() || `User ${userId}`;
+
+    el.innerHTML = pageWrap(
+      `<button class="back-link" onclick="renderUsers(document.getElementById('content'))"><span class="material-symbols-outlined">arrow_back</span>Users</button>` +
+      pageHero(name, { sub: `User ${escHtml(String(userId))}${u.email ? ' · ' + escHtml(u.email) : ''}`, actions }) +
+      `<div class="detail-grid">
+        <div class="detail-stack">
+          ${udCard('badge', 'Profile', `<h4 class="section-label">Editable</h4><div class="form-grid">${EDITABLE.map(editHtml).join('')}</div>
+            <div id="dirtyFooter" class="dirty-note" style="display:none"><span class="material-symbols-outlined">warning</span>Unsaved changes: <span id="dirtyList" class="mono"></span></div>`)}
+          ${udCard('tune', 'System attributes', `<div class="kv-grid">${READONLY.map(readHtml).join('')}</div>`, { actions: '<span class="faint" style="font-size:12px">Read-only</span>' })}
         </div>
-      </div>
-      <div class="grid grid-cols-10 gap-8">
-        <div class="col-span-10 lg:col-span-6 space-y-6">
-          <div class="bg-surface-container-lowest rounded-xl shadow-whisper overflow-hidden">
-            <div class="px-8 py-6 flex items-center justify-between bg-white border-b border-surface-container-low">
-              <div class="flex items-center gap-3">
-                <span class="material-symbols-outlined text-primary">badge</span>
-                <h3 class="font-bold text-lg tracking-tight">User Information</h3>
-              </div>
-              <div class="flex items-center gap-3">
-                ${!u.isVerified
-                  ? `<button class="px-4 py-2 bg-tertiary text-on-tertiary rounded-lg text-sm font-semibold flex items-center gap-2 hover:opacity-90 active:scale-95 transition-all" onclick="verifyUser(${userId})">
-                      <span class="material-symbols-outlined text-[18px] ms-fill">verified</span>Verify User
-                    </button>`
-                  : `<span class="flex items-center gap-2 px-4 py-2 bg-tertiary/10 text-tertiary rounded-lg text-sm font-semibold">
-                      <span class="material-symbols-outlined text-[18px] ms-fill">verified</span>Verified
-                    </span>`}
-                <button id="saveBtn" class="px-4 py-2 bg-primary text-on-primary rounded-lg text-sm font-semibold flex items-center gap-2 hover:opacity-90 active:scale-95 transition-all disabled:opacity-30 disabled:cursor-not-allowed" onclick="saveUserChanges(${userId})" disabled>
-                  <span class="material-symbols-outlined text-[18px]">save</span>Save Changes
-                </button>
-              </div>
-            </div>
-            <div class="p-8">
-              <h4 class="text-[11px] font-bold uppercase tracking-widest text-primary/70 mb-4">Editable Records</h4>
-              <div class="grid grid-cols-2 gap-x-8 gap-y-4 mb-8">${editableFields}</div>
-              <h4 class="text-[11px] font-bold uppercase tracking-widest text-on-surface-variant/70 mb-4">System Attributes (Read-Only)</h4>
-              <div class="grid grid-cols-2 gap-x-8 gap-y-4">${readonlyFields}</div>
-              <div id="dirtyFooter" class="mt-10 pt-6 border-t border-surface-container hidden items-center gap-2">
-                <span class="material-symbols-outlined text-amber-600 text-lg">warning</span>
-                <p class="text-sm font-semibold text-amber-700">Unsaved changes: <span id="dirtyList" class="mono-text text-xs"></span></p>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="col-span-10 lg:col-span-4 space-y-6">
+        <div class="detail-stack">
           ${insuranceCard}
           ${familyCard}
           ${apptCard}
-          <div id="medsCard" class="bg-surface-container-lowest rounded-xl shadow-whisper p-6 border border-transparent">
-            <div class="flex items-center gap-3 mb-4">
-              <div class="w-10 h-10 rounded-lg bg-primary/5 flex items-center justify-center text-primary">
-                <span class="material-symbols-outlined">medication</span>
-              </div>
-              <h3 class="font-bold tracking-tight">Medications</h3>
-            </div>
-            <div class="text-outline text-sm italic">${u.lcAccountId ? 'Loading…' : 'No lcAccountId — PMS data unavailable'}</div>
-          </div>
-          <div id="documentsCard" class="bg-surface-container-lowest rounded-xl shadow-whisper p-6 border border-transparent">
-            <div class="flex items-center gap-3 mb-4">
-              <div class="w-10 h-10 rounded-lg bg-tertiary/5 flex items-center justify-center text-tertiary">
-                <span class="material-symbols-outlined">description</span>
-              </div>
-              <h3 class="font-bold tracking-tight">Documents</h3>
-            </div>
-            <div class="text-outline text-sm italic">${u.lcAccountId ? 'Loading…' : 'No lcAccountId — PMS data unavailable'}</div>
-          </div>
+          ${udCard('medication', 'Medications', pmsPending, { id: 'medsCard' })}
+          ${udCard('description', 'Documents', pmsPending, { id: 'documentsCard' })}
         </div>
-      </div>
-    </div>`;
+      </div>`
+    );
 
     window._userChanged = changed;
     window._userId = userId;
@@ -252,99 +145,74 @@ async function renderUserDetail(el, userId) {
 
 // ── PMS: medications + documents (proxied through server.js) ─────────────────
 const MED_STATUS_PILL = {
-  active:         ['bg-emerald-100','text-emerald-700'],
-  'on-hold':      ['bg-amber-100','text-amber-700'],
-  cancelled:      ['bg-red-100','text-red-700'],
-  completed:      ['bg-slate-100','text-slate-700'],
-  stopped:        ['bg-red-100','text-red-700'],
-  'entered-in-error': ['bg-red-100','text-red-700'],
-  draft:          ['bg-blue-100','text-blue-700'],
+  active: 'ok', 'on-hold': 'warn', cancelled: 'err', completed: '', stopped: 'err', 'entered-in-error': 'err', draft: 'info',
 };
 
+function udReplaceCard(id, html) {
+  const card = document.getElementById(id);
+  if (card) card.outerHTML = html;
+}
+
 async function loadPmsMedications(lcAccountId) {
-  const card = document.getElementById('medsCard');
-  if (!card) return;
+  if (!document.getElementById('medsCard')) return;
   try {
     const data = await apiFetch(`/api/pms/users/${encodeURIComponent(lcAccountId)}/medications`);
     const meds = data.medications || [];
     const body = meds.length ? meds.map(m => {
-      const [bg, fg] = MED_STATUS_PILL[m.status] || ['bg-slate-100','text-slate-700'];
       const dosage = (m.dosage || []).map(d => escHtml(d.text)).filter(Boolean).join(' · ');
-      return `<div class="p-3 rounded-lg hover:bg-surface-container-low transition-colors border-b border-surface-container-low last:border-b-0">
-        <div class="flex items-start justify-between gap-3 mb-1">
-          <div class="text-sm font-semibold leading-tight">${escHtml(m.medicationName)}</div>
-          <span class="px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider ${bg} ${fg} whitespace-nowrap">${escHtml(m.status||'—')}</span>
+      return `<div class="list-row" style="align-items:flex-start">
+        <div style="min-width:0">
+          <div class="list-title">${escHtml(m.medicationName)}</div>
+          <div class="list-meta">${escHtml(deTime(m.authoredOn)) || '—'}${m.pzn ? ' · PZN ' + escHtml(m.pzn) : ''}${m.form ? ' · ' + escHtml(m.form) : ''}${(m.copyIds || []).length > 1 ? ` · <span title="${escHtml(m.copyIds.join(', '))}">${m.copyIds.length} identical copies in Principa</span>` : ''}</div>
+          ${dosage ? `<div style="font-size:12.5px;color:var(--ink-2);margin-top:4px">${dosage}</div>` : ''}
+          ${m.reason ? `<div class="faint" style="font-size:12px;margin-top:2px">${escHtml(m.reason)}</div>` : ''}
         </div>
-        <div class="text-[11px] text-on-surface-variant mono-text">${escHtml(deTime(m.authoredOn)) || '—'}${m.pzn ? ' · PZN ' + escHtml(m.pzn) : ''}${m.form ? ' · ' + escHtml(m.form) : ''}</div>
-        ${dosage ? `<div class="text-xs text-on-surface-variant mt-1">${dosage}</div>` : ''}
-        ${m.reason ? `<div class="text-[11px] text-on-surface-variant/70 mt-1 italic">${escHtml(m.reason)}</div>` : ''}
+        <span class="pill ${MED_STATUS_PILL[m.status] ?? ''}">${escHtml(m.status || '—')}</span>
       </div>`;
-    }).join('') : '<div class="text-outline text-sm italic">No medications</div>';
-    card.innerHTML = `
-      <div class="flex items-center gap-3 mb-4">
-        <div class="w-10 h-10 rounded-lg bg-primary/5 flex items-center justify-center text-primary">
-          <span class="material-symbols-outlined">medication</span>
-        </div>
-        <h3 class="font-bold tracking-tight">Medications (${meds.length})</h3>
-      </div>
-      <div class="space-y-1">${body}</div>`;
+    }).join('') : udEmpty('No medications');
+    udReplaceCard('medsCard', udCard('medication', 'Medications', body, { id: 'medsCard', count: meds.length }));
   } catch (e) {
-    card.innerHTML = `<div class="flex items-center gap-3 mb-3">
-      <div class="w-10 h-10 rounded-lg bg-error/10 flex items-center justify-center text-error"><span class="material-symbols-outlined">medication</span></div>
-      <h3 class="font-bold tracking-tight">Medications</h3>
-    </div>
-    <div class="text-xs text-error mono-text break-all">${escHtml(e.message)}</div>`;
+    udReplaceCard('medsCard', udCard('medication', 'Medications', `<div class="mono" style="font-size:12px;color:var(--red);word-break:break-all">${escHtml(e.message)}</div>`, { id: 'medsCard' }));
   }
 }
 
 async function loadPmsDocuments(lcAccountId) {
-  const card = document.getElementById('documentsCard');
-  if (!card) return;
+  if (!document.getElementById('documentsCard')) return;
   try {
     const data = await apiFetch(`/api/pms/users/${encodeURIComponent(lcAccountId)}/documents`);
     const docs = data.documents || [];
-    const body = docs.length ? docs.map(d => `<div class="p-3 rounded-lg hover:bg-surface-container-low transition-colors border-b border-surface-container-low last:border-b-0 cursor-pointer flex items-start justify-between gap-3"
+    const body = docs.length ? docs.map(d => `<div class="list-row clickable"
         onclick="openDocumentPreview('${escHtml(d.binaryID)}','${escHtml(d.title).replace(/'/g,"\\'")}','${escHtml(d.contentType)}')">
-      <div class="min-w-0 flex-1">
-        <div class="text-sm font-semibold truncate">${escHtml(d.title)}</div>
-        <div class="text-[11px] text-on-surface-variant mono-text">${escHtml(deTime(d.createdAt)) || '—'}${d.documentType ? ' · ' + escHtml(d.documentType) : ''}${d.contentType ? ' · ' + escHtml(d.contentType) : ''}</div>
-        ${d.description ? `<div class="text-[11px] text-on-surface-variant/70 mt-1 italic truncate">${escHtml(d.description)}</div>` : ''}
+      <div style="min-width:0;flex:1">
+        <div class="list-title" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(d.title)}</div>
+        <div class="list-meta">${escHtml(deTime(d.createdAt)) || '—'}${d.documentType ? ' · ' + escHtml(d.documentType) : ''}${d.contentType ? ' · ' + escHtml(d.contentType) : ''}</div>
+        ${d.description ? `<div class="faint" style="font-size:12px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(d.description)}</div>` : ''}
       </div>
-      <span class="material-symbols-outlined text-on-surface-variant flex-shrink-0">open_in_new</span>
-    </div>`).join('') : '<div class="text-outline text-sm italic">No documents</div>';
-    card.innerHTML = `
-      <div class="flex items-center gap-3 mb-4">
-        <div class="w-10 h-10 rounded-lg bg-tertiary/5 flex items-center justify-center text-tertiary">
-          <span class="material-symbols-outlined">description</span>
-        </div>
-        <h3 class="font-bold tracking-tight">Documents (${docs.length})</h3>
-      </div>
-      <div class="space-y-1">${body}</div>`;
+      <span class="material-symbols-outlined faint" style="font-size:17px">open_in_new</span>
+    </div>`).join('') : udEmpty('No documents');
+    udReplaceCard('documentsCard', udCard('description', 'Documents', body, { id: 'documentsCard', count: docs.length }));
   } catch (e) {
-    card.innerHTML = `<div class="flex items-center gap-3 mb-3">
-      <div class="w-10 h-10 rounded-lg bg-error/10 flex items-center justify-center text-error"><span class="material-symbols-outlined">description</span></div>
-      <h3 class="font-bold tracking-tight">Documents</h3>
-    </div>
-    <div class="text-xs text-error mono-text break-all">${escHtml(e.message)}</div>`;
+    udReplaceCard('documentsCard', udCard('description', 'Documents', `<div class="mono" style="font-size:12px;color:var(--red);word-break:break-all">${escHtml(e.message)}</div>`, { id: 'documentsCard' }));
   }
 }
 
 async function openDocumentPreview(binaryId, title, hintedContentType) {
   const modal = document.createElement('div');
-  modal.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-6';
-  modal.innerHTML = `<div class="bg-surface-container-lowest rounded-xl shadow-whisper w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden border border-outline-variant/30">
-    <div class="px-6 py-4 flex items-center justify-between border-b border-outline-variant/20 flex-shrink-0">
-      <div class="min-w-0 flex-1">
-        <h3 class="font-bold text-lg tracking-tight truncate">${escHtml(title)}</h3>
-        <div class="text-[11px] text-on-surface-variant mono-text truncate">${escHtml(binaryId)}</div>
+  modal.style.cssText = 'position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:24px;background:rgba(0,33,42,.45)';
+  modal.innerHTML = `<div class="panel" style="width:100%;max-width:1024px;max-height:90vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:var(--shadow-pop)">
+    <div class="panel-header">
+      <div style="min-width:0;flex:1">
+        <div class="panel-title" style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(title)}</div>
+        <div class="list-meta" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(binaryId)}</div>
       </div>
-      <div class="flex items-center gap-2 flex-shrink-0">
-        <a id="docDownload" class="hidden px-3 py-1.5 bg-surface-container-high text-on-surface rounded-lg text-xs font-bold flex items-center gap-1.5 hover:bg-surface-variant transition-colors" download="${escHtml(title)}"><span class="material-symbols-outlined text-sm">download</span>Download</a>
-        <button class="p-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors" onclick="this.closest('.fixed').remove()"><span class="material-symbols-outlined">close</span></button>
+      <div class="row-sm" style="flex-shrink:0">
+        <a id="docDownload" class="btn btn-sm" style="display:none;text-decoration:none" download="${escHtml(title)}"><span class="material-symbols-outlined">download</span>Download</a>
+        <button class="btn btn-ghost btn-sm" onclick="this.closest('.doc-modal').remove()"><span class="material-symbols-outlined">close</span></button>
       </div>
     </div>
-    <div id="docBody" class="flex-1 overflow-auto p-4 bg-surface-container"><div class="text-outline text-sm italic text-center py-12">Loading…</div></div>
+    <div id="docBody" style="flex:1;overflow:auto;padding:16px;background:var(--surface-2)"><div class="empty-sub" style="text-align:center;padding:48px 0">Loading…</div></div>
   </div>`;
+  modal.className = 'doc-modal';
   const onKey = e => { if (e.key === 'Escape') { modal.remove(); document.removeEventListener('keydown', onKey); } };
   document.addEventListener('keydown', onKey);
   modal.addEventListener('click', e => { if (e.target === modal) { modal.remove(); document.removeEventListener('keydown', onKey); } });
@@ -357,16 +225,16 @@ async function openDocumentPreview(binaryId, title, hintedContentType) {
     const body = modal.querySelector('#docBody');
     const dl   = modal.querySelector('#docDownload');
     dl.href = dataUrl;
-    dl.classList.remove('hidden');
+    dl.style.display = '';
     if (ct.startsWith('image/')) {
-      body.innerHTML = `<img src="${dataUrl}" alt="${escHtml(title)}" class="max-w-full mx-auto rounded-lg shadow-lg">`;
+      body.innerHTML = `<img src="${dataUrl}" alt="${escHtml(title)}" style="max-width:100%;display:block;margin:0 auto;border-radius:var(--r)">`;
     } else if (ct === 'application/pdf' || ct.endsWith('/pdf')) {
-      body.innerHTML = `<iframe src="${dataUrl}" class="w-full h-[75vh] rounded-lg bg-white" title="${escHtml(title)}"></iframe>`;
+      body.innerHTML = `<iframe src="${dataUrl}" style="width:100%;height:75vh;border:0;border-radius:var(--r);background:#fff" title="${escHtml(title)}"></iframe>`;
     } else {
-      body.innerHTML = `<div class="text-sm text-on-surface-variant">Content type <span class="mono-text">${escHtml(ct)}</span> cannot be previewed inline — use Download above.</div>`;
+      body.innerHTML = `<div style="font-size:12.5px;color:var(--ink-2)">Content type <span class="mono">${escHtml(ct)}</span> cannot be previewed inline — use Download above.</div>`;
     }
   } catch (e) {
-    modal.querySelector('#docBody').innerHTML = `<div class="text-sm text-error mono-text break-all">${escHtml(e.message)}</div>`;
+    modal.querySelector('#docBody').innerHTML = `<div class="mono" style="font-size:12px;color:var(--red);word-break:break-all">${escHtml(e.message)}</div>`;
   }
 }
 
@@ -383,12 +251,10 @@ function markChanged(key, val) {
   document.getElementById('saveBtn').disabled = !keys.length;
   const footer = document.getElementById('dirtyFooter');
   if (keys.length) {
-    footer.classList.remove('hidden');
-    footer.classList.add('flex');
+    footer.style.display = '';
     document.getElementById('dirtyList').textContent = keys.join(', ');
   } else {
-    footer.classList.add('hidden');
-    footer.classList.remove('flex');
+    footer.style.display = 'none';
   }
 }
 

@@ -6,9 +6,80 @@ const OUTBOX_CHANNELS = ['email', 'sms'];
 const OUTBOX_STATUSES = ['pending', 'sending', 'sent', 'failed', 'dead'];
 const OUTBOX_ERROR_CLASSES = ['permanent', 'transient'];
 
+// ─── Helpers: Brevo delivery status ───────────────────────────────────────────
+// Core stores every Brevo webhook event in brevo_webhook_event, keyed by the
+// messageId Brevo returned when the message was accepted, which is saved on
+// core_message_outbox."providerMessageId". Environments that have not run that
+// migration yet simply show no Brevo status, so the check is cached per pool.
+const BREVO_SUPPORT_TTL_MS = 60_000;
+const brevoSupportCache = new WeakMap();
+
+async function brevoSupported(req) {
+  const pool = getPool(req);
+  const cached = brevoSupportCache.get(pool);
+  if (cached && cached.at > Date.now() - BREVO_SUPPORT_TTL_MS) return cached.ok;
+  const rows = await query(
+    req,
+    `SELECT
+       EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'public' AND table_name = 'core_message_outbox'
+                 AND column_name = 'providerMessageId') AS outbox,
+       EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'public' AND table_name = 'brevo_webhook_event'
+                 AND column_name = 'reason') AS events`
+  );
+  const ok = Boolean(rows[0].outbox && rows[0].events);
+  brevoSupportCache.set(pool, { ok, at: Date.now() });
+  return ok;
+}
+
+// Latest Brevo event per outbox row, by the time Brevo reported it.
+const BREVO_LATEST_JOIN = `LEFT JOIN LATERAL (
+    SELECT e.event, COALESCE(e."eventAt", e."receivedAt") AS at
+    FROM brevo_webhook_event e
+    WHERE e."messageId" = o."providerMessageId"
+    ORDER BY COALESCE(e."eventAt", e."receivedAt") DESC, e.id DESC
+    LIMIT 1
+  ) brevo ON true`;
+
+// ─── Helpers: email template ──────────────────────────────────────────────────
+// Email payloads are the Brevo request body, so they carry the Brevo
+// "templateId". Core maps it in email_template_id to a CoreEmailType (byIndex —
+// this list must follow the order in Core's email_template_type.spy.yaml) and a
+// name. One Brevo template can back several types. Extracted with a regex so a
+// payload that is not valid JSON does not break the query.
+const CORE_EMAIL_TYPES = [
+  'openConsultationPatient', 'openConsultationPraxis', 'nps', 'documentRequestPatient',
+  'documentRequestPraxis', 'otp', 'emailVerification', 'emailVerificationLC',
+  'emailVerificationReminder', 'praxisAppCredentials', 'contactUsPatient', 'contactUsPraxis',
+  'registration', 'passwordReset', 'confirmNewEmail', 'confirmCurrentEmail',
+  'appointmentConfirmationPatient', 'appointmentCancellationPatient', 'appointmentReschedulePatient',
+  'praxisConfigExport', 'appointmentReservationPatient', 'appointmentReminderPatient',
+  'appointmentBookingFromPrincipa', 'documentForVerifiedUser', 'documentForUnverifiedUser',
+  'pmsPatientInvitation', 'pmsAutoLinkDobMismatch', 'pmsAutoLinkDobMismatchInvitation',
+  'appointmentRescheduleFromPrincipa', 'appointmentCancellationByPatient',
+  'waitingListConfirmationPatient', 'influenzaAppointmentConfirmationPatient',
+  'medicationPrescriptionReadyVerifiedUser', 'waitingListBookingInvitation',
+];
+
+const TEMPLATE_JOIN = `LEFT JOIN LATERAL (
+    SELECT substring(o.payload from '"templateId"\\s*:\\s*(\\d{1,9})')::int AS id
+  ) tpl ON true
+  LEFT JOIN LATERAL (
+    SELECT min(t."templateName") AS name, array_agg(DISTINCT t."templateType") AS types
+    FROM email_template_id t
+    WHERE t."templateId" = tpl.id
+  ) tplinfo ON true`;
+const TEMPLATE_COLS = 'tpl.id AS "templateId", tplinfo.name AS "templateName", tplinfo.types AS "templateTypes"';
+
+function templateTypeNames(types) {
+  return (types || []).filter(t => t !== null).map(t => CORE_EMAIL_TYPES[t] ?? String(t));
+}
+
 router.get('/api/message-outbox', async (req, res) => {
   try {
-    const { status, channel, dateFrom, dateTo, correlationId, recipient, lastHttpStatus, lastErrorClass, page = 1, pageSize = 50 } = req.query;
+    const { status, channel, dateFrom, dateTo, correlationId, recipient, lastHttpStatus, lastErrorClass, brevoStatus, templateId, page = 1, pageSize = 50 } = req.query;
+    const withBrevo = await brevoSupported(req);
     const filters = [];
     if (status) {
       const list = String(status).split(',').map(s => s.trim()).filter(Boolean);
@@ -28,6 +99,7 @@ router.get('/api/message-outbox', async (req, res) => {
     if (correlationId) filters.push(['"correlationId"', 'ILIKE', `%${correlationId}%`]);
     if (recipient) filters.push(['payload', 'ILIKE', `%${recipient}%`]);
     if (lastHttpStatus) filters.push(['"lastHttpStatus"', '=', parseInt(lastHttpStatus)]);
+    if (templateId && Number.isInteger(parseInt(templateId))) filters.push(['tpl.id', '=', parseInt(templateId)]);
 
     const clauses = [];
     const params = [];
@@ -41,9 +113,17 @@ router.get('/api/message-outbox', async (req, res) => {
         clauses.push(`${col} ${op} $${params.length}`);
       }
     }
+    if (withBrevo && brevoStatus === 'none') {
+      clauses.push('brevo.event IS NULL');
+    } else if (withBrevo && brevoStatus) {
+      params.push(String(brevoStatus));
+      clauses.push(`brevo.event = $${params.length}`);
+    }
     const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : '';
-    const baseSql = `SELECT id, channel, status, "attemptCount", "maxAttempts", "lastHttpStatus", "lastErrorClass", "nextAttemptAt", "firstTeamsNotifiedAt", "correlationId", "createdAt", "updatedAt", "sentAt", "deadAt" FROM core_message_outbox ${where} ORDER BY "createdAt" DESC`;
-    const countSql = `SELECT COUNT(*) FROM core_message_outbox ${where}`;
+    const from = `core_message_outbox o ${TEMPLATE_JOIN}${withBrevo ? ` ${BREVO_LATEST_JOIN}` : ''}`;
+    const brevoCols = withBrevo ? ', o."providerMessageId", brevo.event AS "brevoStatus", brevo.at AS "brevoStatusAt"' : '';
+    const baseSql = `SELECT o.id, o.channel, o.status, o."attemptCount", o."maxAttempts", o."lastHttpStatus", o."lastErrorClass", o."nextAttemptAt", o."firstTeamsNotifiedAt", o."correlationId", o."createdAt", o."updatedAt", o."sentAt", o."deadAt", ${TEMPLATE_COLS}${brevoCols} FROM ${from} ${where} ORDER BY o."createdAt" DESC`;
+    const countSql = `SELECT COUNT(*) FROM ${from} ${where}`;
     const result = await paginate(req, baseSql, countSql, params, parseInt(page), parseInt(pageSize));
 
     result.rows = result.rows.map(r => ({
@@ -51,8 +131,10 @@ router.get('/api/message-outbox', async (req, res) => {
       channel: OUTBOX_CHANNELS[r.channel] ?? r.channel,
       status: OUTBOX_STATUSES[r.status] ?? r.status,
       lastErrorClass: r.lastErrorClass === null ? null : (OUTBOX_ERROR_CLASSES[r.lastErrorClass] ?? r.lastErrorClass),
+      templateTypes: templateTypeNames(r.templateTypes),
     }));
 
+    result.brevoSupported = withBrevo;
     res.json(result);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -89,7 +171,52 @@ router.get('/api/message-outbox/stats', async (req, res) => {
       const ch = OUTBOX_CHANNELS[r.channel];
       if (ch && stats[ch]) stats[ch].sentLast24h = r.count;
     }
+    if (await brevoSupported(req)) {
+      const brevoRows = await query(
+        req,
+        `SELECT event, COUNT(*)::int AS count
+         FROM brevo_webhook_event
+         WHERE "receivedAt" > NOW() - INTERVAL '30 days'
+         GROUP BY event ORDER BY count DESC`
+      );
+      stats.brevo = Object.fromEntries(brevoRows.map(r => [r.event, r.count]));
+    }
     res.json(stats);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Templates known to Core, plus Brevo ids seen in outbox payloads (last 90 days)
+// that have no email_template_id row, so they can still be filtered on.
+router.get('/api/message-outbox/templates', async (req, res) => {
+  try {
+    const rows = await query(
+      req,
+      `SELECT t."templateId"::int AS "templateId", t."templateName", t."templateType", COALESCE(u.count, 0)::int AS count
+       FROM email_template_id t
+       LEFT JOIN (
+         SELECT tpl.id, COUNT(*) AS count
+         FROM core_message_outbox o ${TEMPLATE_JOIN}
+         WHERE o."createdAt" > NOW() - INTERVAL '90 days' AND tpl.id IS NOT NULL
+         GROUP BY tpl.id
+       ) u ON u.id = t."templateId"
+       UNION ALL
+       SELECT tpl.id, NULL, NULL, COUNT(*)::int
+       FROM core_message_outbox o ${TEMPLATE_JOIN}
+       WHERE o."createdAt" > NOW() - INTERVAL '90 days' AND tpl.id IS NOT NULL
+         AND NOT EXISTS (SELECT 1 FROM email_template_id t WHERE t."templateId" = tpl.id)
+       GROUP BY tpl.id`
+    );
+    const byId = new Map();
+    for (const r of rows) {
+      const t = byId.get(r.templateId) || { templateId: r.templateId, templateName: r.templateName, types: [], count: r.count };
+      if (r.templateType !== null) t.types.push(CORE_EMAIL_TYPES[r.templateType] ?? String(r.templateType));
+      byId.set(r.templateId, t);
+    }
+    const templates = [...byId.values()].sort((a, b) =>
+      (!a.templateName - !b.templateName) || (a.templateName || '').localeCompare(b.templateName || '') || a.templateId - b.templateId);
+    res.json({ templates });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -99,18 +226,30 @@ router.get('/api/message-outbox/:id', async (req, res) => {
   try {
     const rows = await query(
       req,
-      `SELECT * FROM core_message_outbox WHERE id = $1`,
+      `SELECT o.*, ${TEMPLATE_COLS} FROM core_message_outbox o ${TEMPLATE_JOIN} WHERE o.id = $1`,
       [req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
     const r = rows[0];
     let decodedPayload = null;
     try { decodedPayload = JSON.parse(r.payload); } catch { decodedPayload = r.payload; }
+    const brevoEvents = r.providerMessageId && await brevoSupported(req)
+      ? await query(
+          req,
+          `SELECT *
+           FROM brevo_webhook_event
+           WHERE "messageId" = $1
+           ORDER BY COALESCE("eventAt", "receivedAt"), id`,
+          [r.providerMessageId]
+        )
+      : [];
     res.json({
       ...r,
+      brevoEvents,
       channel: OUTBOX_CHANNELS[r.channel] ?? r.channel,
       status: OUTBOX_STATUSES[r.status] ?? r.status,
       lastErrorClass: r.lastErrorClass === null ? null : (OUTBOX_ERROR_CLASSES[r.lastErrorClass] ?? r.lastErrorClass),
+      templateTypes: templateTypeNames(r.templateTypes),
       decodedPayload,
     });
   } catch (e) {

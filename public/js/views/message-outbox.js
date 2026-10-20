@@ -4,13 +4,52 @@
 let moFilters = {};
 const MO_STATUSES = ['pending','sending','sent','failed','dead'];
 const MO_CHANNELS = ['email','sms'];
-const MO_STATUS_PILL = {
-  pending:  ['bg-slate-100','text-slate-700'],
-  sending:  ['bg-blue-100','text-blue-700'],
-  sent:     ['bg-emerald-100','text-emerald-700'],
-  failed:   ['bg-amber-100','text-amber-800'],
-  dead:     ['bg-red-100','text-red-700'],
-};
+const MO_STATUS_PILL = { pending: '', sending: 'info', sent: 'ok', failed: 'warn', dead: 'err' };
+
+// Brevo delivery events (from Core's brevo_webhook_event, via the webhook).
+const MO_BREVO_EVENTS = ['request','delivered','unique_opened','opened','click','proxy_open','deferred','soft_bounce','hard_bounce','invalid_email','blocked','spam','unsubscribed','error'];
+const MO_BREVO_GOOD = new Set(['delivered','unique_opened','opened','click','proxy_open']);
+const MO_BREVO_WARN = new Set(['deferred','soft_bounce']);
+const MO_BREVO_BAD = new Set(['hard_bounce','invalid_email','blocked','spam','unsubscribed','error']);
+
+function moBrevoPill(event, title = '') {
+  if (!event) return '<span class="faint">—</span>';
+  const cls = MO_BREVO_GOOD.has(event) ? 'ok' : MO_BREVO_WARN.has(event) ? 'warn' : MO_BREVO_BAD.has(event) ? 'err' : '';
+  return `<span class="pill ${cls}" title="${escHtml(title)}">${escHtml(event.replace(/_/g, ' '))}</span>`;
+}
+
+function moBrevoTimeline(detail) {
+  if (!detail.providerMessageId) {
+    return '<div class="faint" style="font-size:12px">No Brevo messageId on this row — it was sent before Core stored message ids, or it was never accepted by Brevo.</div>';
+  }
+  const events = detail.brevoEvents || [];
+  const rows = events.map(ev => `<div class="list-row" style="justify-content:flex-start;padding:6px 0">
+      <span class="list-meta" style="margin:0;width:150px;flex-shrink:0">${escHtml(deTime(ev.eventAt || ev.receivedAt))}</span>
+      <span class="row-sm" style="white-space:nowrap">${moBrevoPill(ev.event)}${ev.occurrences > 1 ? `<b style="font-size:12px">×${ev.occurrences}</b><span class="faint" style="font-size:11.5px">latest</span>` : ''}</span>
+      <span style="font-size:12px;word-break:break-all">${escHtml(ev.reason || '')}</span>
+    </div>`).join('');
+  return `<div class="list-meta" style="margin:0 0 6px;word-break:break-all">messageId: ${escHtml(detail.providerMessageId)}</div>
+    ${rows || '<div class="faint" style="font-size:12px">No events from Brevo yet.</div>'}`;
+}
+
+function moBrevoStats(brevo) {
+  if (!brevo) return '';
+  const entries = Object.entries(brevo);
+  if (!entries.length) return '';
+  return `<div class="mo-stat-line"><span class="mo-stat-label">Brevo · 30 days</span>${entries.map(([ev, n]) => `<span class="row-sm">${moBrevoPill(ev)}<b class="mono">${n}</b></span>`).join('')}</div>`;
+}
+
+// "Name · type" for a row's Brevo template; the id alone when Core has no mapping for it.
+function moTemplateLabel(row) {
+  if (row.templateId === null || row.templateId === undefined) return '';
+  const name = row.templateName || (row.templateTypes || []).join(', ');
+  return name || `#${row.templateId}`;
+}
+
+function moTemplateTitle(row) {
+  if (row.templateId === null || row.templateId === undefined) return '';
+  return [`Brevo template ${row.templateId}`, row.templateName, (row.templateTypes || []).join(', ')].filter(Boolean).join(' · ');
+}
 
 function moExtractRecipient(row) {
   return row.recipient || '—';
@@ -20,18 +59,12 @@ function moStatsBanner(stats) {
   if (!stats) return '';
   const chan = (ch) => {
     const s = stats[ch] || {};
-    return `<div class="bg-surface-container-lowest rounded-lg p-3 border border-outline-variant/20">
-      <div class="text-xs font-bold uppercase tracking-wider text-on-surface-variant mb-2">${ch}</div>
-      <div class="flex flex-wrap gap-2 text-xs">
-        <span class="px-2 py-0.5 rounded bg-emerald-100 text-emerald-700">🟢 sent 24h: <b>${s.sentLast24h||0}</b></span>
-        <span class="px-2 py-0.5 rounded bg-slate-100 text-slate-700">⚪ pending: <b>${s.pending||0}</b></span>
-        <span class="px-2 py-0.5 rounded bg-blue-100 text-blue-700">🔵 sending: <b>${s.sending||0}</b></span>
-        <span class="px-2 py-0.5 rounded bg-amber-100 text-amber-800">🟠 failed: <b>${s.failed||0}</b></span>
-        <span class="px-2 py-0.5 rounded bg-red-100 text-red-700">🔴 dead: <b>${s.dead||0}</b></span>
-      </div>
+    const n = (label, v, cls) => `<span class="pill ${cls}">${label}<b class="mono">${v || 0}</b></span>`;
+    return `<div class="mo-stat-line"><span class="mo-stat-label">${ch === 'sms' ? 'SMS' : 'Email'}</span>
+      ${n('sent 24h', s.sentLast24h, 'ok')}${n('pending', s.pending, '')}${n('sending', s.sending, 'info')}${n('failed', s.failed, s.failed ? 'warn' : '')}${n('dead', s.dead, s.dead ? 'err' : '')}
     </div>`;
   };
-  return `<div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">${MO_CHANNELS.map(chan).join('')}</div>`;
+  return `<div class="mo-stats">${MO_CHANNELS.map(chan).join('')}</div>`;
 }
 
 async function retryMessageOutbox(id) {
@@ -104,13 +137,13 @@ async function toggleMessageOutboxDetail(tr, id) {
   const existing = tr.nextElementSibling;
   if (existing && existing.classList.contains('expand-row')) {
     existing.remove();
-    tr.classList.remove('bg-surface-container-low','border-l-4','border-primary');
+    tr.classList.remove('active');
     return;
   }
-  tr.classList.add('bg-surface-container-low','border-l-4','border-primary');
+  tr.classList.add('active');
   const expandTr = document.createElement('tr');
-  expandTr.className = 'expand-row bg-surface-container-low/50';
-  expandTr.innerHTML = `<td class="p-6" colspan="10"><div class="text-on-surface-variant text-sm">Loading…</div></td>`;
+  expandTr.className = 'expand-row mo-detail';
+  expandTr.innerHTML = `<td colspan="12"><div class="mo-detail-body faint">Loading…</div></td>`;
   tr.after(expandTr);
 
   try {
@@ -118,32 +151,34 @@ async function toggleMessageOutboxDetail(tr, id) {
     const payloadStr = typeof detail.decodedPayload === 'object'
       ? JSON.stringify(detail.decodedPayload, null, 2)
       : String(detail.decodedPayload ?? '');
-    expandTr.innerHTML = `<td colspan="10" class="p-0">
-      <div class="p-6 border-l-4 border-primary bg-surface-container-low/40">
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div>
-            <h4 class="text-xs font-black uppercase tracking-widest text-on-surface-variant mb-3">Payload (decoded)</h4>
-            <pre class="code-bg text-xs mono-text p-4 rounded-lg whitespace-pre-wrap break-all max-h-96 overflow-y-auto">${escHtml(payloadStr)}</pre>
-          </div>
-          <div>
-            <h4 class="text-xs font-black uppercase tracking-widest text-on-surface-variant mb-3">Last Error Body</h4>
-            <pre class="code-bg text-xs mono-text p-4 rounded-lg whitespace-pre-wrap break-all max-h-96 overflow-y-auto ${detail.lastErrorBody ? 'text-red-300' : ''}">${escHtml(detail.lastErrorBody || '(no error)')}</pre>
-            <div class="mt-4 grid grid-cols-2 gap-2 text-xs">
-              <div><b>HTTP Status:</b> ${detail.lastHttpStatus ?? '—'}</div>
-              <div><b>Error Class:</b> ${detail.lastErrorClass ?? '—'}</div>
-              <div><b>Attempt:</b> ${detail.attemptCount}/${detail.maxAttempts}</div>
-              <div><b>Next attempt:</b> ${escHtml(deTime(detail.nextAttemptAt)) || '—'}</div>
-              <div><b>First Teams ping:</b> ${escHtml(deTime(detail.firstTeamsNotifiedAt)) || '—'}</div>
-              <div><b>Sent at:</b> ${escHtml(deTime(detail.sentAt)) || '—'}</div>
-              <div><b>Dead at:</b> ${escHtml(deTime(detail.deadAt)) || '—'}</div>
-              <div><b>Correlation:</b> ${escHtml(detail.correlationId) || '—'}</div>
-            </div>
-          </div>
+    const kv = (label, value) => `<div class="kv-row"><span class="kv-label">${label}</span><span class="kv-value mono">${value}</span></div>`;
+    expandTr.innerHTML = `<td colspan="12"><div class="mo-detail-body">
+      <div>
+        <h4 class="section-label">Payload (decoded)</h4>
+        <pre class="code mo-pre">${escHtml(payloadStr)}</pre>
+      </div>
+      <div>
+        <h4 class="section-label">Last error body</h4>
+        <pre class="code mo-pre"${detail.lastErrorBody ? ' style="color:var(--red)"' : ''}>${escHtml(detail.lastErrorBody || '(no error)')}</pre>
+        <div class="mo-kv">
+          ${kv('HTTP status', detail.lastHttpStatus ?? '—')}
+          ${kv('Error class', escHtml(detail.lastErrorClass ?? '—'))}
+          ${kv('Attempt', `${detail.attemptCount}/${detail.maxAttempts}`)}
+          ${kv('Next attempt', escHtml(deTime(detail.nextAttemptAt)) || '—')}
+          ${kv('First Teams ping', escHtml(deTime(detail.firstTeamsNotifiedAt)) || '—')}
+          ${kv('Sent at', escHtml(deTime(detail.sentAt)) || '—')}
+          ${kv('Dead at', escHtml(deTime(detail.deadAt)) || '—')}
+          ${kv('Template', escHtml(moTemplateTitle(detail)) || '—')}
+          ${kv('Correlation', escHtml(detail.correlationId) || '—')}
         </div>
       </div>
-    </td>`;
+      <div style="grid-column:1 / -1">
+        <h4 class="section-label">Brevo delivery</h4>
+        ${moBrevoTimeline(detail)}
+      </div>
+    </div></td>`;
   } catch (e) {
-    expandTr.innerHTML = `<td class="p-6" colspan="10"><div class="text-error text-sm">Failed to load: ${escHtml(e.message)}</div></td>`;
+    expandTr.innerHTML = `<td colspan="12"><div class="mo-detail-body" style="color:var(--red)">Failed to load: ${escHtml(e.message)}</div></td>`;
   }
 }
 
@@ -151,48 +186,61 @@ async function renderMessageOutbox(el, page = 1) {
   el.innerHTML = pageWrap(pageHero('Message Outbox', { sub: 'Brevo email/SMS durable queue', live: true }) + loadingState());
   try {
     const p = new URLSearchParams({ ...moFilters, page, pageSize: 50 });
-    const [data, stats] = await Promise.all([
+    const [data, stats, templates] = await Promise.all([
       apiFetch(`/api/message-outbox?${p}`),
       apiFetch(`/api/message-outbox/stats`).catch(() => null),
+      apiFetch(`/api/message-outbox/templates`).then(r => r.templates || []).catch(() => []),
     ]);
     setConnStatus('connected');
 
     const statusOpts = [{value:'',label:'All Statuses'}, ...MO_STATUSES.map(s => ({value:s, label:s}))];
     const channelOpts = [{value:'',label:'All Channels'}, ...MO_CHANNELS.map(c => ({value:c, label:c}))];
     const errorClassOpts = [{value:'',label:'Any'}, {value:'permanent',label:'permanent'}, {value:'transient',label:'transient'}];
+    const templateOpts = [{value:'',label:'All Templates'}, ...templates.map(t => ({
+      value: t.templateId,
+      label: `${t.templateName || t.types.join(', ') || 'not in email_template_id'} (#${t.templateId})${t.count ? ` · ${t.count}` : ''}`,
+    }))];
+    if (moFilters.templateId && !templates.some(t => String(t.templateId) === String(moFilters.templateId))) {
+      templateOpts.push({ value: moFilters.templateId, label: `#${moFilters.templateId}` });
+    }
+    const brevoOpts = [{value:'',label:'Any'}, {value:'none',label:'no event yet'}, ...MO_BREVO_EVENTS.map(e => ({value:e, label:e.replace(/_/g,' ')}))];
 
     const filterHtml =
       fSelect('Status', statusOpts, `oninput="moFilters.status=this.value"`, moFilters.status || '') +
       fSelect('Channel', channelOpts, `oninput="moFilters.channel=this.value"`, moFilters.channel || '') +
+      fSelect('Template', templateOpts, `oninput="moFilters.templateId=this.value"`, moFilters.templateId || '') +
       fSelect('Error class', errorClassOpts, `oninput="moFilters.lastErrorClass=this.value"`, moFilters.lastErrorClass || '') +
+      (data.brevoSupported ? fSelect('Brevo', brevoOpts, `oninput="moFilters.brevoStatus=this.value"`, moFilters.brevoStatus || '') : '') +
       fInput('From', `type="datetime-local" value="${moFilters.dateFrom||''}" oninput="moFilters.dateFrom=this.value"`) +
       fInput('To', `type="datetime-local" value="${moFilters.dateTo||''}" oninput="moFilters.dateTo=this.value"`) +
       fInput('Correlation', `placeholder="e.g. appointmentId" value="${escHtml(moFilters.correlationId||'')}" oninput="moFilters.correlationId=this.value"`) +
       fInput('Recipient', `placeholder="email or phone substring" value="${escHtml(moFilters.recipient||'')}" oninput="moFilters.recipient=this.value"`) +
       fInput('HTTP Status', `placeholder="e.g. 500" value="${escHtml(moFilters.lastHttpStatus||'')}" oninput="moFilters.lastHttpStatus=this.value"`) +
-      `<div class="flex gap-2">${btnPrimary('Search', `renderMessageOutbox(document.getElementById('content'))`, { full: true })}${btnGhost('Clear', `moFilters={};renderMessageOutbox(document.getElementById('content'))`)}</div>`;
+      `<div class="row-sm">${btnPrimary('Search', `renderMessageOutbox(document.getElementById('content'))`, { full: true })}${btnGhost('Clear', `moFilters={};renderMessageOutbox(document.getElementById('content'))`)}</div>`;
 
     const rowsHtml = data.rows.map(row => {
-      const [bg, fg] = MO_STATUS_PILL[row.status] || ['bg-slate-100','text-slate-700'];
       const canRetry = row.status === 'failed' || row.status === 'dead';
       const canKill = row.status === 'pending' || row.status === 'sending' || row.status === 'failed';
       const actions = [
-        row.status === 'pending' ? `<button class="px-2 py-1 rounded bg-primary/10 text-primary hover:bg-primary/20 text-xs font-bold" onclick="event.stopPropagation();sendNowMessageOutbox('${escHtml(row.id)}')">Send now</button>` : '',
-        canRetry ? `<button class="px-2 py-1 rounded bg-primary/10 text-primary hover:bg-primary/20 text-xs font-bold" onclick="event.stopPropagation();retryMessageOutbox('${escHtml(row.id)}')">Retry</button>` : '',
-        canKill ? `<button class="px-2 py-1 rounded bg-red-100 text-red-700 hover:bg-red-200 text-xs font-bold" onclick="event.stopPropagation();killMessageOutbox('${escHtml(row.id)}')">Kill</button>` : '',
-      ].filter(Boolean).join(' ');
+        row.status === 'pending' ? `<button class="btn btn-sm" onclick="event.stopPropagation();sendNowMessageOutbox('${escHtml(row.id)}')">Send now</button>` : '',
+        canRetry ? `<button class="btn btn-sm" onclick="event.stopPropagation();retryMessageOutbox('${escHtml(row.id)}')">Retry</button>` : '',
+        canKill ? `<button class="btn btn-sm btn-danger" onclick="event.stopPropagation();killMessageOutbox('${escHtml(row.id)}')">Kill</button>` : '',
+      ].filter(Boolean).join('');
 
-      return `<tr class="zebra-row hover:bg-surface-container transition-colors cursor-pointer mo-row" data-id="${escHtml(row.id)}">
-        <td class="px-4 py-2 mono-text text-xs opacity-70 whitespace-nowrap">${escHtml(deTime(row.createdAt))}</td>
-        <td class="px-4 py-2"><span class="px-2 py-0.5 bg-surface-container-high rounded text-[10px] font-bold mono-text">${escHtml(row.channel)}</span></td>
-        <td class="px-4 py-2"><span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${bg} ${fg}">${escHtml(row.status)}</span></td>
-        <td class="px-4 py-2 mono-text text-xs">${row.attemptCount}/${row.maxAttempts}</td>
-        <td class="px-4 py-2 mono-text text-xs opacity-70 whitespace-nowrap">${escHtml(deTime(row.nextAttemptAt)) || '—'}</td>
-        <td class="px-4 py-2 mono-text text-xs ${row.lastHttpStatus >= 500 ? 'text-red-600 font-bold' : row.lastHttpStatus >= 400 ? 'text-amber-600' : ''}">${row.lastHttpStatus ?? '—'}</td>
-        <td class="px-4 py-2 text-xs">${escHtml(row.lastErrorClass) || '—'}</td>
-        <td class="px-4 py-2 text-xs truncate max-w-[180px]" title="${escHtml(row.correlationId||'')}">${escHtml(row.correlationId) || '—'}</td>
-        <td class="px-4 py-2 mono-text text-[10px] opacity-60">${escHtml(String(row.id).slice(0,8))}…</td>
-        <td class="px-4 py-2">${actions || '—'}</td>
+      const http = row.lastHttpStatus;
+      return `<tr class="mo-row" data-id="${escHtml(row.id)}">
+        <td class="mono" style="white-space:nowrap">${escHtml(deTime(row.createdAt))}</td>
+        <td>${escHtml(row.channel)}</td>
+        <td><span class="pill ${MO_STATUS_PILL[row.status] ?? ''}">${escHtml(row.status)}</span></td>
+        <td class="mono">${row.attemptCount}/${row.maxAttempts}</td>
+        <td class="mono" style="white-space:nowrap">${escHtml(deTime(row.nextAttemptAt)) || '—'}</td>
+        <td class="mono${http >= 500 ? ' err' : ''}"${http >= 400 && http < 500 ? ' style="color:rgb(var(--tw-amber-700))"' : ''}>${http ?? '—'}</td>
+        <td>${escHtml(row.lastErrorClass) || '—'}</td>
+        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(moTemplateTitle(row))}">${escHtml(moTemplateLabel(row)) || '—'}</td>
+        <td>${moBrevoPill(row.brevoStatus, row.brevoStatusAt ? deTime(row.brevoStatusAt) : '')}</td>
+        <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(row.correlationId||'')}">${escHtml(row.correlationId) || '—'}</td>
+        <td class="mono muted" title="${escHtml(String(row.id))}">${escHtml(String(row.id).slice(0,8))}…</td>
+        <td><div class="row-sm">${actions || '—'}</div></td>
       </tr>`;
     }).join('');
 
@@ -201,11 +249,12 @@ async function renderMessageOutbox(el, page = 1) {
         sub: 'Brevo email/SMS durable queue — monitor, retry, kill',
         live: true,
         actions: (moPendingTotal(stats) ? btnGhost(`Send all pending (${moPendingTotal(stats)})`, 'sendAllPendingMessageOutbox()', { icon: 'send' }) : '') +
-          `<button class="p-2 bg-surface-container rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors" onclick="renderMessageOutbox(document.getElementById('content'))" title="Refresh"><span class="material-symbols-outlined">refresh</span></button>`,
+          `<button class="btn btn-ghost" onclick="renderMessageOutbox(document.getElementById('content'))" title="Refresh"><span class="material-symbols-outlined">refresh</span></button>`,
       }) +
       moStatsBanner(stats) +
+      moBrevoStats(stats && stats.brevo) +
       filterCard(filterHtml, 6) +
-      tableShell(['Created','Channel','Status','Attempt','Next','HTTP','Err cls','Correlation','ID','Actions'], rowsHtml, 'moPaging')
+      tableShell(['Created','Channel','Status','Attempt','Next','HTTP','Err cls','Template','Brevo','Correlation','ID','Actions'], rowsHtml, 'moPaging')
     );
 
     document.querySelectorAll('.mo-row').forEach(tr => {

@@ -425,8 +425,11 @@ folder's own `.fvmrc` — praxis pins an older SDK — is ignored): `flutter cle
 App Store export). Mobile outputs are revealed in Finder (`open -R`).
 `RL_ENV` adds `LANG` (CocoaPods needs UTF-8; launchd doesn't set it).
 
-**Deploy (web only, separate step)** — `aws s3 sync build/web/ s3://<bucket> --delete --exclude "index.html"`
+**Deploy (web only, separate step)** — `aws s3 sync build/web/ s3://<bucket> --delete --exclude "index.html" --cache-control no-cache`
 (index.html is never uploaded) → `aws cloudfront create-invalidation --paths "/*"`.
+`no-cache` is required: Flutter web assets are not content-hashed (e.g. the tree-shaken
+`assets/fonts/MaterialIcons-Regular.otf` keeps its name while its glyph set changes), so without
+it browsers heuristically cache stale files and newly used icons render blank.
 The server only deploys a `build/web` it built itself for the SAME env
 (recorded in `.release/state.json`, gitignored; cleared when any build of that
 app starts, since `flutter clean` wipes `build/`). Prod requires body
@@ -619,3 +622,23 @@ Built after the 2026-09-30 prod outage (51 GB `serverpod_query_log`, then an uni
 - The view (`public/js/views/db-diagnostics.js`, prefix `dg`) turns the numbers into a
   Findings list (disk bandwidth < 30 % / < 5 %, read latency > 5 / 10 ms, low memory/storage,
   blocked/long-running/stale transactions, likely missing index, log-everything settings).
+
+## PMS Invitations (`/api/pms-invitations/*`, view `#pms-invitations`)
+
+Read-only view of `app_user_pms_invitation` and `app_user_pms_auto_link_log`. Core writes both
+from a Principa FHIR Patient message (`fhir_patient_invitation_handler.dart`): no app user with
+that email → invitation code emailed; email matches but DOB differs → linking code emailed
+(`dobMismatch`); email + DOB match → auto-linked. Redemption is in `invitation_redemption.dart`.
+Enums are byIndex: `PI_STATUSES` / `PI_OUTCOMES` in `routes/pms-invitations.js` must follow the
+order in Core's `*.spy.yaml` (status 2 `expired` is legacy, still present on some envs).
+Clicking a PMS patient id jumps to the other tab filtered to it; linked/matched user ids open
+User Detail. If a table is missing on an env, the tab says so instead of failing.
+
+## Message Outbox (`/api/message-outbox/*`, view `#message-outbox`)
+
+Core's Brevo email/SMS queue (`core_message_outbox`). Email `payload` is the Brevo request body, so the
+template is read from its top-level `"templateId"` (regex, not a JSON cast, so a bad payload can't break the
+query) and joined to Core's `email_template_id` for the name and `CoreEmailType`. `CORE_EMAIL_TYPES` in
+`routes/message-outbox.js` is byIndex and must follow Core's `email_template_type.spy.yaml` order. One Brevo
+template can back several types. `GET /api/message-outbox/templates` lists Core's templates plus Brevo ids
+seen in the last 90 days that have no mapping, with counts; `?templateId=` filters the list.
