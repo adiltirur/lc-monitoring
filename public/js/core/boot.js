@@ -15,5 +15,6 @@ envConfigPromise.then(() => navigate(initView));
 window.addEventListener('hashchange', () => {
   if (window.__navFromCode) { window.__navFromCode = false; return; }
   const v = window.location.hash.replace('#', '');
-  if (v && v !== window.__currentView) navigate(v);
+  if (!v) navigate('monitoring');
+  else if (v !== window.__currentView) navigate(v);
 });

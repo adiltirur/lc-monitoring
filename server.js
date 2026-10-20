@@ -22,6 +22,7 @@ app.use(require('./routes/analytics'));
 app.use(require('./routes/analytics-export'));
 app.use(require('./routes/analytics-cockpit'));
 app.use(require('./routes/message-outbox'));
+app.use(require('./routes/pms-invitations'));
 app.use(require('./routes/health'));
 app.use(require('./routes/db-diagnostics'));
 app.use(require('./routes/api-keys'));

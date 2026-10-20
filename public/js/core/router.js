@@ -4,7 +4,11 @@
 function navigate(view) {
   if (view === 'test-refresh') view = 'db-refresh'; // old bookmark
   window.__currentView = view;
-  if (window.location.hash.replace('#', '') !== view) {
+  if (!window.location.hash) {
+    // First view of a bare URL: replace the entry instead of pushing one, so
+    // back / the two-finger swipe never lands on an empty, hash-less page.
+    history.replaceState(null, '', '#' + view);
+  } else if (window.location.hash.replace('#', '') !== view) {
     window.__navFromCode = true;
     window.location.hash = view;
   }
@@ -19,9 +23,11 @@ function navigate(view) {
   else if (view === 'analytics') renderAnalytics(content);
   else if (view === 'users') renderUsers(content);
   else if (view === 'bookings') renderBookings(content);
+  else if (view === 'pms-invitations') renderPmsInvitations(content);
   else if (view === 'query-runner') renderQueryRunner(content);
   else if (view === 'ai-query') renderAIQuery(content);
   else if (view === 'investigations') renderInvestigations(content);
+  else if (view === 'fhir-scrubber') renderFhirScrubber(content);
   else if (view === 'api-console') renderApiConsole(content);
   else if (view === 'csv-decrypt') renderCsvDecrypt(content);
   else if (view === 'rds-restore') renderRdsRestore(content);

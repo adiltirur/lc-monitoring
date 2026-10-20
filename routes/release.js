@@ -89,7 +89,7 @@ function rlBuildSteps(appKey, env, platform, androidFormat, sdk) {
 function rlDeploySteps(appKey, env) {
   const { bucket, distribution } = RL_APPS[appKey].web[env];
   return [
-    ['S3 sync', 'aws', ['s3', 'sync', 'build/web/', `s3://${bucket}`, '--delete', '--exclude', 'index.html']],
+    ['S3 sync', 'aws', ['s3', 'sync', 'build/web/', `s3://${bucket}`, '--delete', '--exclude', 'index.html', '--cache-control', 'no-cache']],
     ['CloudFront invalidation', 'aws', ['cloudfront', 'create-invalidation', '--distribution-id', distribution, '--paths', '/*']],
   ];
 }

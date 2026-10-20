@@ -42,9 +42,43 @@ const BREVO_LATEST_JOIN = `LEFT JOIN LATERAL (
     LIMIT 1
   ) brevo ON true`;
 
+// ─── Helpers: email template ──────────────────────────────────────────────────
+// Email payloads are the Brevo request body, so they carry the Brevo
+// "templateId". Core maps it in email_template_id to a CoreEmailType (byIndex —
+// this list must follow the order in Core's email_template_type.spy.yaml) and a
+// name. One Brevo template can back several types. Extracted with a regex so a
+// payload that is not valid JSON does not break the query.
+const CORE_EMAIL_TYPES = [
+  'openConsultationPatient', 'openConsultationPraxis', 'nps', 'documentRequestPatient',
+  'documentRequestPraxis', 'otp', 'emailVerification', 'emailVerificationLC',
+  'emailVerificationReminder', 'praxisAppCredentials', 'contactUsPatient', 'contactUsPraxis',
+  'registration', 'passwordReset', 'confirmNewEmail', 'confirmCurrentEmail',
+  'appointmentConfirmationPatient', 'appointmentCancellationPatient', 'appointmentReschedulePatient',
+  'praxisConfigExport', 'appointmentReservationPatient', 'appointmentReminderPatient',
+  'appointmentBookingFromPrincipa', 'documentForVerifiedUser', 'documentForUnverifiedUser',
+  'pmsPatientInvitation', 'pmsAutoLinkDobMismatch', 'pmsAutoLinkDobMismatchInvitation',
+  'appointmentRescheduleFromPrincipa', 'appointmentCancellationByPatient',
+  'waitingListConfirmationPatient', 'influenzaAppointmentConfirmationPatient',
+  'medicationPrescriptionReadyVerifiedUser', 'waitingListBookingInvitation',
+];
+
+const TEMPLATE_JOIN = `LEFT JOIN LATERAL (
+    SELECT substring(o.payload from '"templateId"\\s*:\\s*(\\d{1,9})')::int AS id
+  ) tpl ON true
+  LEFT JOIN LATERAL (
+    SELECT min(t."templateName") AS name, array_agg(DISTINCT t."templateType") AS types
+    FROM email_template_id t
+    WHERE t."templateId" = tpl.id
+  ) tplinfo ON true`;
+const TEMPLATE_COLS = 'tpl.id AS "templateId", tplinfo.name AS "templateName", tplinfo.types AS "templateTypes"';
+
+function templateTypeNames(types) {
+  return (types || []).filter(t => t !== null).map(t => CORE_EMAIL_TYPES[t] ?? String(t));
+}
+
 router.get('/api/message-outbox', async (req, res) => {
   try {
-    const { status, channel, dateFrom, dateTo, correlationId, recipient, lastHttpStatus, lastErrorClass, brevoStatus, page = 1, pageSize = 50 } = req.query;
+    const { status, channel, dateFrom, dateTo, correlationId, recipient, lastHttpStatus, lastErrorClass, brevoStatus, templateId, page = 1, pageSize = 50 } = req.query;
     const withBrevo = await brevoSupported(req);
     const filters = [];
     if (status) {
@@ -65,6 +99,7 @@ router.get('/api/message-outbox', async (req, res) => {
     if (correlationId) filters.push(['"correlationId"', 'ILIKE', `%${correlationId}%`]);
     if (recipient) filters.push(['payload', 'ILIKE', `%${recipient}%`]);
     if (lastHttpStatus) filters.push(['"lastHttpStatus"', '=', parseInt(lastHttpStatus)]);
+    if (templateId && Number.isInteger(parseInt(templateId))) filters.push(['tpl.id', '=', parseInt(templateId)]);
 
     const clauses = [];
     const params = [];
@@ -85,9 +120,9 @@ router.get('/api/message-outbox', async (req, res) => {
       clauses.push(`brevo.event = $${params.length}`);
     }
     const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : '';
-    const from = withBrevo ? `core_message_outbox o ${BREVO_LATEST_JOIN}` : 'core_message_outbox o';
+    const from = `core_message_outbox o ${TEMPLATE_JOIN}${withBrevo ? ` ${BREVO_LATEST_JOIN}` : ''}`;
     const brevoCols = withBrevo ? ', o."providerMessageId", brevo.event AS "brevoStatus", brevo.at AS "brevoStatusAt"' : '';
-    const baseSql = `SELECT o.id, o.channel, o.status, o."attemptCount", o."maxAttempts", o."lastHttpStatus", o."lastErrorClass", o."nextAttemptAt", o."firstTeamsNotifiedAt", o."correlationId", o."createdAt", o."updatedAt", o."sentAt", o."deadAt"${brevoCols} FROM ${from} ${where} ORDER BY o."createdAt" DESC`;
+    const baseSql = `SELECT o.id, o.channel, o.status, o."attemptCount", o."maxAttempts", o."lastHttpStatus", o."lastErrorClass", o."nextAttemptAt", o."firstTeamsNotifiedAt", o."correlationId", o."createdAt", o."updatedAt", o."sentAt", o."deadAt", ${TEMPLATE_COLS}${brevoCols} FROM ${from} ${where} ORDER BY o."createdAt" DESC`;
     const countSql = `SELECT COUNT(*) FROM ${from} ${where}`;
     const result = await paginate(req, baseSql, countSql, params, parseInt(page), parseInt(pageSize));
 
@@ -96,6 +131,7 @@ router.get('/api/message-outbox', async (req, res) => {
       channel: OUTBOX_CHANNELS[r.channel] ?? r.channel,
       status: OUTBOX_STATUSES[r.status] ?? r.status,
       lastErrorClass: r.lastErrorClass === null ? null : (OUTBOX_ERROR_CLASSES[r.lastErrorClass] ?? r.lastErrorClass),
+      templateTypes: templateTypeNames(r.templateTypes),
     }));
 
     result.brevoSupported = withBrevo;
@@ -151,11 +187,46 @@ router.get('/api/message-outbox/stats', async (req, res) => {
   }
 });
 
+// Templates known to Core, plus Brevo ids seen in outbox payloads (last 90 days)
+// that have no email_template_id row, so they can still be filtered on.
+router.get('/api/message-outbox/templates', async (req, res) => {
+  try {
+    const rows = await query(
+      req,
+      `SELECT t."templateId"::int AS "templateId", t."templateName", t."templateType", COALESCE(u.count, 0)::int AS count
+       FROM email_template_id t
+       LEFT JOIN (
+         SELECT tpl.id, COUNT(*) AS count
+         FROM core_message_outbox o ${TEMPLATE_JOIN}
+         WHERE o."createdAt" > NOW() - INTERVAL '90 days' AND tpl.id IS NOT NULL
+         GROUP BY tpl.id
+       ) u ON u.id = t."templateId"
+       UNION ALL
+       SELECT tpl.id, NULL, NULL, COUNT(*)::int
+       FROM core_message_outbox o ${TEMPLATE_JOIN}
+       WHERE o."createdAt" > NOW() - INTERVAL '90 days' AND tpl.id IS NOT NULL
+         AND NOT EXISTS (SELECT 1 FROM email_template_id t WHERE t."templateId" = tpl.id)
+       GROUP BY tpl.id`
+    );
+    const byId = new Map();
+    for (const r of rows) {
+      const t = byId.get(r.templateId) || { templateId: r.templateId, templateName: r.templateName, types: [], count: r.count };
+      if (r.templateType !== null) t.types.push(CORE_EMAIL_TYPES[r.templateType] ?? String(r.templateType));
+      byId.set(r.templateId, t);
+    }
+    const templates = [...byId.values()].sort((a, b) =>
+      (!a.templateName - !b.templateName) || (a.templateName || '').localeCompare(b.templateName || '') || a.templateId - b.templateId);
+    res.json({ templates });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get('/api/message-outbox/:id', async (req, res) => {
   try {
     const rows = await query(
       req,
-      `SELECT * FROM core_message_outbox WHERE id = $1`,
+      `SELECT o.*, ${TEMPLATE_COLS} FROM core_message_outbox o ${TEMPLATE_JOIN} WHERE o.id = $1`,
       [req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
@@ -178,6 +249,7 @@ router.get('/api/message-outbox/:id', async (req, res) => {
       channel: OUTBOX_CHANNELS[r.channel] ?? r.channel,
       status: OUTBOX_STATUSES[r.status] ?? r.status,
       lastErrorClass: r.lastErrorClass === null ? null : (OUTBOX_ERROR_CLASSES[r.lastErrorClass] ?? r.lastErrorClass),
+      templateTypes: templateTypeNames(r.templateTypes),
       decodedPayload,
     });
   } catch (e) {
