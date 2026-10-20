@@ -55,6 +55,7 @@ const TITLE_BY_VIEW = {
   'investigations': 'Investigations',
   'fhir-scrubber': 'FHIR Scrubber',
   'api-console': 'API Console',
+  'sidecar': 'Principa SideCar',
   'csv-decrypt': 'CSV Decryptor',
   'monitoring': 'Monitor',
   'praxis-refresh': 'Praxis Refresh',

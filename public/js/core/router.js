@@ -29,6 +29,7 @@ function navigate(view) {
   else if (view === 'investigations') renderInvestigations(content);
   else if (view === 'fhir-scrubber') renderFhirScrubber(content);
   else if (view === 'api-console') renderApiConsole(content);
+  else if (view === 'sidecar') renderSidecar(content);
   else if (view === 'csv-decrypt') renderCsvDecrypt(content);
   else if (view === 'rds-restore') renderRdsRestore(content);
   else if (view === 'send-notification') renderSendNotification(content);
