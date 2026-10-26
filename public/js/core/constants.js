@@ -66,6 +66,7 @@ const TITLE_BY_VIEW = {
   'rds-restore': 'RDS Restore',
   'db-refresh': 'DB Refresh',
   'release': 'Build & Release',
+  'deployments': 'Deployments',
   'ssh-tunnels': 'SSH Tunnels',
   'local-stack': 'Local Stack',
   'lilli': 'Lilli Staging',

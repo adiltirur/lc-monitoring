@@ -46,6 +46,7 @@ function navigate(view) {
   else if (view === 'personio-audit') renderPersonioAudit(content);
   else if (view === 'db-refresh') renderDbRefresh(content);
   else if (view === 'release') renderRelease(content);
+  else if (view === 'deployments') renderDeployments(content);
   else if (view === 'ssh-tunnels') renderSshTunnels(content);
   else if (view === 'local-stack') renderLocalStack(content);
   else if (view === 'lilli') renderLilli(content);

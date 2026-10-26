@@ -440,6 +440,29 @@ memory with the log (lost on helper restart). Children spawn `detached` so
 Cancel kills the whole process group. The view polls `/api/release/status?since=<logEnd>`
 every 1.5 s and posts a native `notify` when a job finishes.
 
+## Deployments feature (`/api/deployments/*`, view `#deployments`)
+
+Shows whether a backend deploy actually reached the server. The `Deploy to AWS` Action in
+`LillianCare-Core` uploads the bundle and queues a CodeDeploy deployment; the server only
+changes if that deployment succeeds (`start_server` aborts on a failed migration and the old
+server keeps running). Config is `DP_ENVS` in `routes/deployments.js` (deployment group,
+branch, EC2 Name tag, API URL per env).
+
+- `GET /api/deployments/overview` (15 s cache, `?fresh=1` skips it): per env the last 25
+  CodeDeploy deployments (`BatchGetDeployments`; for failed ones the failed lifecycle
+  events with `logTail`), an API `HEAD` check, and the last 25 workflow runs via
+  `gh api` (Homebrew `gh`, logged in; `DP_PATH` adds it to launchd's PATH). A run is
+  linked to its deployment by the deployment description `commit <sha> run <id>` (set by
+  the workflow), or, for older deployments without one, by creation time inside the run.
+  `liveCommit` = commit of the newest succeeded deployment; `behind` = the newest run for
+  that env has a different commit.
+- `POST /api/deployments/server-check {env}`: read-only `AWS-RunShellScript` over SSM on
+  the newest instance with that Name tag: `systemctl show serverpod` plus the last 30
+  lines of `serverpod.err`, `serverpod.log` and `serverpod-migrations.log`. Production asks
+  for confirmation in the UI.
+- The view polls every 30 s while open, highlights runs that are green with a failed
+  deployment, and posts a native `notify` for a deployment that fails while it is open.
+
 ## Investigations feature (`/api/investigations/*`, view `#investigations`)
 
 AI-assisted prod investigations. Notes are markdown files in the **shared folder**

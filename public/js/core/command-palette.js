@@ -28,6 +28,7 @@ const CMDK = [
   { sec:'Navigate', icon:'settings_backup_restore', label:'RDS Restore', crumb:'',         run: () => navigate('rds-restore') },
   { sec:'Navigate', icon:'restart_alt',    label:'DB Refresh',       crumb:'',           run: () => navigate('db-refresh') },
   { sec:'Navigate', icon:'rocket_launch',  label:'Build & Release',  crumb:'',           run: () => navigate('release') },
+  { sec:'Navigate', icon:'cloud_sync',     label:'Deployments',      crumb:'Backend · CodeDeploy', run: () => navigate('deployments') },
   { sec:'Navigate', icon:'vpn_key',        label:'SSH Tunnels',      crumb:'',            run: () => navigate('ssh-tunnels') },
 
   { sec:'Actions',  icon:'search',     label:'Find user by email, phone, or ID', crumb:'Go → Users',   run: () => navigate('users') },
