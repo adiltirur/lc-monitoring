@@ -176,6 +176,8 @@ const DP_SERVER_SCRIPT = [
   'echo "@@ERR"; tail -n 30 /home/ec2-user/serverpod.err 2>/dev/null',
   'echo "@@LOG"; tail -n 30 /home/ec2-user/serverpod.log 2>/dev/null',
   'echo "@@MIG"; date -u -r /home/ec2-user/serverpod-migrations.log +%Y-%m-%dT%H:%M:%SZ 2>/dev/null; tail -n 30 /home/ec2-user/serverpod-migrations.log 2>/dev/null',
+  // A missing log (e.g. no migration run yet) must not fail the whole command.
+  'exit 0',
 ];
 
 function dpParseServerOutput(text) {
