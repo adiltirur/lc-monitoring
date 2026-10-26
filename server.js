@@ -47,6 +47,7 @@ app.use(require('./routes/lilli-inv'));
 app.use(require('./routes/api-console'));
 app.use(require('./routes/sidecar'));
 app.use(require('./routes/deployments'));
+app.use(require('./routes/log-cleanup'));
 
 // ─── Static files ─────────────────────────────────────────────────────────────
 app.use(express.static(path.join(__dirname, 'public'), { etag: false, maxAge: 0, setHeaders: (res) => { res.setHeader('Cache-Control', 'no-store'); } }));

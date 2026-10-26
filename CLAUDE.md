@@ -461,6 +461,11 @@ branch, EC2 Name tag, API URL per env).
   the newest instance with that Name tag: `systemctl show serverpod` plus the last 30
   lines of `serverpod.err`, `serverpod.log` and `serverpod-migrations.log`. Production asks
   for confirmation in the UI.
+- `POST /api/deployments/restart {env, confirmation}`: `systemctl restart serverpod` over
+  SSM, then waits up to 90 s for "Webserver listening" in the fresh `serverpod.log`
+  (`run_serverpod` truncates `serverpod.log`/`.err` on start) and returns the same fields as
+  the server check plus `up`. Production requires `confirmation === 'RESTART PRODUCTION'`
+  (server-side; the view asks with `prompt`).
 - The view polls every 30 s while open, highlights runs that are green with a failed
   deployment, and posts a native `notify` for a deployment that fails while it is open.
 
@@ -646,6 +651,27 @@ Built after the 2026-09-30 prod outage (51 GB `serverpod_query_log`, then an uni
 - The view (`public/js/views/db-diagnostics.js`, prefix `dg`) turns the numbers into a
   Findings list (disk bandwidth < 30 % / < 5 %, read latency > 5 / 10 ms, low memory/storage,
   blocked/long-running/stale transactions, likely missing index, log-everything settings).
+
+## Log Cleanup (`/api/log-cleanup/*`, view `#log-cleanup`)
+
+Serverpod's `sessionLogs.retentionPeriod` cleanup deletes every expired session in one
+`DELETE`; with a backlog (staging had 2 M sessions back to February in Oct 2026) it is
+cancelled after ~1.5 min ("FAILED TO CLEAN UP LOGS") and never catches up. This view runs the
+same rule in batches on the connected env.
+
+- `GET /api/log-cleanup/overview?retentionDays=7`: session count, expired count, oldest
+  session, sizes of `serverpod_session_log` / `_log` / `_query_log` / `_message_log`, plus
+  the current job.
+- `POST /api/log-cleanup/start {retentionDays, batchSize, pauseMs, vacuum, confirmation}`:
+  starts the one in-memory job (lost on helper restart). It holds one pooled client with
+  `statement_timeout = 120s` per batch and loops
+  `DELETE … WHERE id IN (SELECT id … WHERE "time" < now() - N days ORDER BY id LIMIT batch)`
+  (each statement autocommits; child log rows go by `ON DELETE CASCADE`), sleeping `pauseMs`
+  between batches so a `db.t3.micro` keeps its EBS burst balance. Afterwards an optional
+  plain `VACUUM (ANALYZE)` (no exclusive lock, does not shrink files). Production (by host or
+  `x-env`) requires `confirmation === 'CLEAN PRODUCTION LOGS'`.
+- `GET /api/log-cleanup/status` (view polls every 2 s), `POST /api/log-cleanup/cancel`
+  (stops after the current batch; not during VACUUM).
 
 ## PMS Invitations (`/api/pms-invitations/*`, view `#pms-invitations`)
 

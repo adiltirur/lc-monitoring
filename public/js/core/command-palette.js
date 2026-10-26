@@ -5,6 +5,7 @@ const CMDK = [
   { sec:'Navigate', icon:'radar',          label:'Monitor',          crumb:'',        kbd:'M', run: () => navigate('monitoring') },
   { sec:'Navigate', icon:'favorite',       label:'Server Health',    crumb:'',                 run: () => navigate('health') },
   { sec:'Navigate', icon:'troubleshoot',   label:'DB Diagnostics',   crumb:'',                 run: () => navigate('db-diagnostics') },
+  { sec:'Navigate', icon:'mop',            label:'Log Cleanup',      crumb:'Serverpod session logs', run: () => navigate('log-cleanup') },
   { sec:'Navigate', icon:'terminal',       label:'Session Logs',     crumb:'',       kbd:'S', run: () => navigate('session-logs') },
   { sec:'Navigate', icon:'shield',         label:'Admin Audit',      crumb:'',                  run: () => navigate('admin-audit') },
   { sec:'Navigate', icon:'notifications',  label:'Notifications',    crumb:'',          run: () => navigate('notifications') },

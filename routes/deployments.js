@@ -14,7 +14,7 @@ const { codedeployClient, ec2Client, ssmClient } = require('../lib/aws');
 // start_server hook leaves the old server running). This view puts the three
 // sources side by side per env: Action runs (via the `gh` CLI), CodeDeploy
 // deployments with the failed hook's log, and the live server (API HEAD check,
-// plus an on-demand read-only `systemctl` + log tail over SSM).
+// plus an on-demand read-only `systemctl` + log tail over SSM, and a restart).
 
 const DP_REPO = 'Lillian-Care-GmbH/LillianCare-Core';
 const DP_WORKFLOW = 'deployment-aws.yml';
@@ -202,36 +202,64 @@ function dpParseServerOutput(text) {
   };
 }
 
+// Runs a shell script on the env's instance over SSM and waits for the result.
+async function dpRunOnServer(env, comment, commands, waitMs) {
+  const instanceId = await dpResolveInstanceId(DP_ENVS[env].tag);
+  const sent = await ssmClient.send(new SendCommandCommand({
+    InstanceIds: [instanceId],
+    DocumentName: 'AWS-RunShellScript',
+    Comment: comment,
+    Parameters: { commands },
+    TimeoutSeconds: Math.ceil(waitMs / 1000) + 10,
+  }));
+  const commandId = sent.Command.CommandId;
+  const deadline = Date.now() + waitMs;
+  let inv = null;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 1000));
+    try {
+      inv = await ssmClient.send(new GetCommandInvocationCommand({ CommandId: commandId, InstanceId: instanceId }));
+    } catch (e) {
+      if (e.name === 'InvocationDoesNotExist') continue;
+      throw e;
+    }
+    if (!['Pending', 'InProgress', 'Delayed'].includes(inv.Status)) break;
+  }
+  if (!inv || inv.Status !== 'Success') {
+    throw new Error(`SSM command ${commandId} ended as ${inv ? inv.Status : 'no answer'}${inv && inv.StandardErrorContent ? ': ' + inv.StandardErrorContent : ''}`);
+  }
+  return { env, instanceId, checkedAt: new Date().toISOString(), ...dpParseServerOutput(inv.StandardOutputContent || '') };
+}
+
 router.post('/api/deployments/server-check', async (req, res) => {
   const env = (req.body && req.body.env) || '';
-  const cfg = DP_ENVS[env];
-  if (!cfg) return res.status(400).json({ error: `Unknown env "${env}"` });
+  if (!DP_ENVS[env]) return res.status(400).json({ error: `Unknown env "${env}"` });
   try {
-    const instanceId = await dpResolveInstanceId(cfg.tag);
-    const sent = await ssmClient.send(new SendCommandCommand({
-      InstanceIds: [instanceId],
-      DocumentName: 'AWS-RunShellScript',
-      Comment: 'LC Helper deployments: read-only server check',
-      Parameters: { commands: DP_SERVER_SCRIPT },
-      TimeoutSeconds: 30,
-    }));
-    const commandId = sent.Command.CommandId;
-    const deadline = Date.now() + 25000;
-    let inv = null;
-    while (Date.now() < deadline) {
-      await new Promise(r => setTimeout(r, 1000));
-      try {
-        inv = await ssmClient.send(new GetCommandInvocationCommand({ CommandId: commandId, InstanceId: instanceId }));
-      } catch (e) {
-        if (e.name === 'InvocationDoesNotExist') continue;
-        throw e;
-      }
-      if (!['Pending', 'InProgress', 'Delayed'].includes(inv.Status)) break;
-    }
-    if (!inv || inv.Status !== 'Success') {
-      return res.status(502).json({ error: `SSM command ${commandId} ended as ${inv ? inv.Status : 'no answer'}${inv && inv.StandardErrorContent ? ': ' + inv.StandardErrorContent : ''}` });
-    }
-    res.json({ env, instanceId, checkedAt: new Date().toISOString(), ...dpParseServerOutput(inv.StandardOutputContent || '') });
+    res.json(await dpRunOnServer(env, 'LC Helper deployments: read-only server check', DP_SERVER_SCRIPT, 25000));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Restarts serverpod.service. run_serverpod truncates serverpod.log/.err on
+// start, so waiting for "Webserver listening" in the fresh log means the
+// server is up. Production needs the typed confirmation.
+const DP_RESTART_CONFIRMATION = 'RESTART PRODUCTION';
+const DP_RESTART_SCRIPT = [
+  'systemctl restart serverpod',
+  'for i in $(seq 1 90); do grep -q "Webserver listening" /home/ec2-user/serverpod.log 2>/dev/null && break; sleep 1; done',
+  ...DP_SERVER_SCRIPT,
+];
+
+router.post('/api/deployments/restart', async (req, res) => {
+  const { env = '', confirmation } = req.body || {};
+  if (!DP_ENVS[env]) return res.status(400).json({ error: `Unknown env "${env}"` });
+  if (env === 'production' && confirmation !== DP_RESTART_CONFIRMATION) {
+    return res.status(400).json({ error: `Type "${DP_RESTART_CONFIRMATION}" to restart production` });
+  }
+  try {
+    const out = await dpRunOnServer(env, 'LC Helper deployments: restart serverpod', DP_RESTART_SCRIPT, 110000);
+    res.json({ ...out, restarted: true, up: /Webserver listening/.test(out.logTail) });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

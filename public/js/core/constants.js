@@ -49,6 +49,7 @@ const TITLE_BY_VIEW = {
   'future-calls': 'Future Calls',
   'health': 'Server Health',
   'db-diagnostics': 'DB Diagnostics',
+  'log-cleanup': 'Log Cleanup',
   'api-keys': 'API Keys',
   'query-runner': 'Query Runner',
   'ai-query': 'AI Assistant',
