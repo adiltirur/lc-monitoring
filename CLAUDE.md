@@ -452,8 +452,9 @@ branch, EC2 Name tag, API URL per env).
   CodeDeploy deployments (`BatchGetDeployments`; for failed ones the failed lifecycle
   events with `logTail`), an API `HEAD` check, and the last 25 workflow runs via
   `gh api` (Homebrew `gh`, logged in; `DP_PATH` adds it to launchd's PATH). A run is
-  linked to its deployment by the deployment description `commit <sha> run <id>` (set by
-  the workflow), or, for older deployments without one, by creation time inside the run.
+  linked to its deployment by creation time (the workflow creates it in its last step,
+  while the run is going). If a deployment description `commit <sha> run <id>` is ever
+  set, that exact link wins.
   `liveCommit` = commit of the newest succeeded deployment; `behind` = the newest run for
   that env has a different commit.
 - `POST /api/deployments/server-check {env}`: read-only `AWS-RunShellScript` over SSM on

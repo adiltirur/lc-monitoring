@@ -39,7 +39,8 @@ function dpGh(path) {
   });
 }
 
-// Deployments created by the workflow carry "commit <sha> run <id>".
+// The workflow sets no description today; if one with "commit <sha> run <id>"
+// is added, it links the deployment to its run exactly.
 function dpParseDescription(desc) {
   const m = /commit ([0-9a-f]{7,40}) run (\d+)/.exec(desc || '');
   return m ? { commit: m[1], runId: Number(m[2]) } : { commit: null, runId: null };
@@ -95,8 +96,8 @@ async function dpApiHealth(url) {
   }
 }
 
-// Older deployments have no description, so fall back to timing: the
-// workflow creates the deployment in its last step, while the run is going.
+// Without a description, match by timing: the workflow creates the
+// deployment in its last step, while the run is going.
 function dpMatchDeployment(run, deployments) {
   const byId = deployments.find(d => d.runId === run.id);
   if (byId) return byId;
