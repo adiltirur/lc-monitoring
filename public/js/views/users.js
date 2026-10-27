@@ -28,7 +28,7 @@ async function renderUsers(el, page = 1) {
     </tr>`).join('');
 
     el.innerHTML = pageWrap(
-      pageHero('Users', { sub: 'Patient and staff records' }) +
+      pageHero('Users', { sub: 'Patient and staff records', actions: btnGhost('Incomplete registrations', "navigate('incomplete-registrations')", { icon: 'how_to_reg' }) }) +
       filterCard(filterHtml, 6) +
       tableShell(['ID','Name','Email','Phone','Praxis','Verified','Created',''], rowsHtml, 'usPaging')
     );

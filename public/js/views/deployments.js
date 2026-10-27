@@ -48,7 +48,7 @@ function dpEnvCard(e) {
 
   const s = dpServer[e.env] || {};
   let server = '';
-  if (s.loading) server = `<div class="panel-body" style="border-top:1px solid var(--rule);font-size:12px"><span class="material-symbols-outlined spin" style="font-size:14px;vertical-align:middle">progress_activity</span> Asking the instance over SSM…</div>`;
+  if (s.loading) server = `<div class="panel-body" style="border-top:1px solid var(--rule);font-size:12px"><span class="material-symbols-outlined spin" style="font-size:14px;vertical-align:middle">progress_activity</span> ${s.restarting ? 'Restarting serverpod and waiting for it to listen (up to ~90 s)…' : 'Asking the instance over SSM…'}</div>`;
   else if (s.error) server = `<div class="panel-body mono" style="border-top:1px solid var(--rule);font-size:11px;color:var(--err);word-break:break-all">${escHtml(s.error)}</div>`;
   else if (s.data) {
     const d = s.data;
@@ -58,6 +58,7 @@ function dpEnvCard(e) {
         <span class="row-sm"><span class="dot ${ok ? 'ok' : 'err'}"></span>serverpod.service ${escHtml(d.activeState || '?')} (${escHtml(d.subState || '?')})</span>
         <span>since <span class="mono">${escHtml(d.activeSince || '—')}</span></span>
         ${d.migrationsAt ? `<span>last migration run <span class="mono">${escHtml(deTime(d.migrationsAt))}</span></span>` : ''}
+        ${d.restarted ? `<span class="pill ${d.up ? 'ok' : 'warn'}">${d.up ? 'restarted, listening' : 'restarted, not listening yet'}</span>` : ''}
         <span class="faint mono">${escHtml(d.instanceId)} · checked ${escHtml(deTime(d.checkedAt))}</span>
       </div>
       ${dpLogBlock('serverpod.err (last 30 lines)', d.errTail)}
@@ -82,7 +83,8 @@ function dpEnvCard(e) {
       <div style="min-width:220px">
         <div class="label" style="margin-bottom:2px">RUNNING</div>${liveLine}
       </div>
-      <div style="margin-left:auto">${btnGhost('Check server', `dpCheckServer('${e.env}')`, { icon: 'dns' })}</div>
+      <div style="margin-left:auto" class="row-sm">${btnGhost('Check server', `dpCheckServer('${e.env}')`, { icon: 'dns' })}
+        <button class="btn btn-danger" onclick="dpRestartServer('${e.env}')"><span class="material-symbols-outlined">restart_alt</span>Restart</button></div>
     </div>
     ${warn}${server}
   </div>`;
@@ -150,6 +152,27 @@ async function dpCheckServer(env) {
   dpRender();
   try {
     dpServer[env] = { data: await apiPost('/api/deployments/server-check', { env }) };
+  } catch (e) {
+    dpServer[env] = { error: e.message };
+  }
+  dpRender();
+}
+
+async function dpRestartServer(env) {
+  if (env === 'production') {
+    const typed = prompt('Restarting PRODUCTION interrupts live requests for ~30 s.\nType RESTART PRODUCTION to continue.');
+    if (typed !== 'RESTART PRODUCTION') return;
+    dpServer[env] = { loading: true, restarting: true, confirmation: typed };
+  } else {
+    if (!confirm(`Restart the ${env} Serverpod server? Requests fail for ~30 s and serverpod.log / serverpod.err start fresh.`)) return;
+    dpServer[env] = { loading: true, restarting: true };
+  }
+  const confirmation = dpServer[env].confirmation;
+  dpRender();
+  try {
+    const data = await apiPost('/api/deployments/restart', { env, confirmation });
+    dpServer[env] = { data };
+    showToast(data.up ? `${env} restarted and listening` : `${env} restarted, not listening yet: check the log`, data.up ? 'ok' : 'err');
   } catch (e) {
     dpServer[env] = { error: e.message };
   }

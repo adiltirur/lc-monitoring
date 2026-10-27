@@ -23,6 +23,8 @@ app.use(require('./routes/analytics-export'));
 app.use(require('./routes/analytics-cockpit'));
 app.use(require('./routes/message-outbox'));
 app.use(require('./routes/pms-invitations'));
+app.use(require('./routes/duplicate-accounts'));
+app.use(require('./routes/incomplete-registrations'));
 app.use(require('./routes/health'));
 app.use(require('./routes/db-diagnostics'));
 app.use(require('./routes/api-keys'));
@@ -47,6 +49,7 @@ app.use(require('./routes/lilli-inv'));
 app.use(require('./routes/api-console'));
 app.use(require('./routes/sidecar'));
 app.use(require('./routes/deployments'));
+app.use(require('./routes/log-cleanup'));
 
 // ─── Static files ─────────────────────────────────────────────────────────────
 app.use(express.static(path.join(__dirname, 'public'), { etag: false, maxAge: 0, setHeaders: (res) => { res.setHeader('Cache-Control', 'no-store'); } }));

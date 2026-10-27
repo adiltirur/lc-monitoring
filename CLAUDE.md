@@ -461,6 +461,11 @@ branch, EC2 Name tag, API URL per env).
   the newest instance with that Name tag: `systemctl show serverpod` plus the last 30
   lines of `serverpod.err`, `serverpod.log` and `serverpod-migrations.log`. Production asks
   for confirmation in the UI.
+- `POST /api/deployments/restart {env, confirmation}`: `systemctl restart serverpod` over
+  SSM, then waits up to 90 s for "Webserver listening" in the fresh `serverpod.log`
+  (`run_serverpod` truncates `serverpod.log`/`.err` on start) and returns the same fields as
+  the server check plus `up`. Production requires `confirmation === 'RESTART PRODUCTION'`
+  (server-side; the view asks with `prompt`).
 - The view polls every 30 s while open, highlights runs that are green with a failed
   deployment, and posts a native `notify` for a deployment that fails while it is open.
 
@@ -647,6 +652,27 @@ Built after the 2026-09-30 prod outage (51 GB `serverpod_query_log`, then an uni
   Findings list (disk bandwidth < 30 % / < 5 %, read latency > 5 / 10 ms, low memory/storage,
   blocked/long-running/stale transactions, likely missing index, log-everything settings).
 
+## Log Cleanup (`/api/log-cleanup/*`, view `#log-cleanup`)
+
+Serverpod's `sessionLogs.retentionPeriod` cleanup deletes every expired session in one
+`DELETE`; with a backlog (staging had 2 M sessions back to February in Oct 2026) it is
+cancelled after ~1.5 min ("FAILED TO CLEAN UP LOGS") and never catches up. This view runs the
+same rule in batches on the connected env.
+
+- `GET /api/log-cleanup/overview?retentionDays=7`: session count, expired count, oldest
+  session, sizes of `serverpod_session_log` / `_log` / `_query_log` / `_message_log`, plus
+  the current job.
+- `POST /api/log-cleanup/start {retentionDays, batchSize, pauseMs, vacuum, confirmation}`:
+  starts the one in-memory job (lost on helper restart). It holds one pooled client with
+  `statement_timeout = 120s` per batch and loops
+  `DELETE … WHERE id IN (SELECT id … WHERE "time" < now() - N days ORDER BY id LIMIT batch)`
+  (each statement autocommits; child log rows go by `ON DELETE CASCADE`), sleeping `pauseMs`
+  between batches so a `db.t3.micro` keeps its EBS burst balance. Afterwards an optional
+  plain `VACUUM (ANALYZE)` (no exclusive lock, does not shrink files). Production (by host or
+  `x-env`) requires `confirmation === 'CLEAN PRODUCTION LOGS'`.
+- `GET /api/log-cleanup/status` (view polls every 2 s), `POST /api/log-cleanup/cancel`
+  (stops after the current batch; not during VACUUM).
+
 ## PMS Invitations (`/api/pms-invitations/*`, view `#pms-invitations`)
 
 Read-only view of `app_user_pms_invitation` and `app_user_pms_auto_link_log`. Core writes both
@@ -666,6 +692,13 @@ query) and joined to Core's `email_template_id` for the name and `CoreEmailType`
 `routes/message-outbox.js` is byIndex and must follow Core's `email_template_type.spy.yaml` order. One Brevo
 template can back several types. `GET /api/message-outbox/templates` lists Core's templates plus Brevo ids
 seen in the last 90 days that have no mapping, with counts; `?templateId=` filters the list.
+
+**Template test** (`GET /api/message-outbox/template-test/sample`, `POST …/template-test/send`, panel in the view,
+`public/js/views/message-outbox-test.js`, prefix `mot`): loads the payload of a *sent* email with that template
+(newest first, `offset` steps back), lets the params be edited, and sends one copy straight to Brevo
+(`BREVO_API_KEY`, tag `lc-helper-template-test`), not via the outbox. Only `sender`, `subject`, `replyTo`,
+`templateId`, `params` are carried over (cc/bcc/messageVersions/scheduledAt are dropped; attachments only on
+opt-in). The recipient is typed in and the server refuses any address that was on the original to/cc/bcc.
 
 ## Principa SideCar (`/api/sidecar/*`, view `#sidecar`, `scripts/sidecar_smoke_test.js`)
 
@@ -688,3 +721,57 @@ hosted by NT AG, for the Helu sync). NT AG allows exactly one source IP, **10.0.
   test subnets) sends `172.16.2.16/28` via NAT gateway `nat-04d27c791bf19e0ed`, so NT AG sees source
   `10.0.4.131`, not 10.0.13.173 → port 5432 times out. Fix is either NT AG whitelisting 10.0.4.131 or a
   `/32` route to the VGW (Terraform) — see the SideCar notes in the helper's history/PR.
+
+## Duplicate Accounts (`/api/duplicate-accounts/*`, view `#duplicate-accounts`)
+
+Cleans up app users who have two `app_user_info` rows with one email: a **legacy** account (`authUserId` NULL,
+`userId` = `serverpod_user_info.id`, login in `serverpod_email_auth`) and a **new** one (`authUserId` set, login in
+`serverpod_auth_idp_email_account`). Core's EmailIdpEndpoint didn't check the legacy tables on registration, and login
+only migrates a legacy account when no new email account exists, so the legacy account is unreachable.
+Classify by `authUserId`, never by `userId`: new accounts get ids from `LegacyUserIdAllocator`, which overlap the legacy range.
+
+- **The new account is always kept.** The legacy account's rows in `DA_USER_TABLES` (everything that references
+  `app_user_info.id`) are moved to it. Push tokens and the OTP record (`app_user_verification` holds the MFA secret,
+  not an identity check) are deleted. Then the legacy profile, the legacy auth rows in `DA_LEGACY_AUTH_TABLES` and
+  `serverpod_user_info` are deleted. `admin_audit_log` is kept. When Core adds a table that references
+  `app_user_info.id`, add it to `DA_USER_TABLES` (`data` / `unique: 'choose' | true` / `delete` flags).
+- **PMS identity:** Principa knows a patient by `lcAccountId` (bookings send it; appointments and documents from
+  Principa are matched by it). The kept account takes over the legacy `lcAccountId` when it has none. If only the legacy account is known to the PMS (it has a `pmsPatientId`, appointments or
+  document requests), the kept account takes over the legacy `lcAccountId`, plus `pmsPatientId` and the verified fields
+  when it has none. If both are known, the legacy `lcAccountId` stops resolving; the pair shows a warning.
+- **Plan per pair:** `delete-legacy` (legacy has no data) and `move-delete-legacy` (only legacy has data) run in one
+  batch. `manual` is merged one pair at a time from a review panel: both have data, name or date of birth differ, or
+  both have insurance (the operator picks which one to keep; the numbers are compared server-side as md5, never sent).
+  When name or date of birth differ, the operator also picks whose profile to keep (`keep.profile`). With `legacy`,
+  the kept account (new login) gets the legacy `DA_PROFILE_FIELDS` (name, dob, gender, phone, address, praxis code)
+  and `praxisId`. The legacy verification is carried only when the kept profile is the legacy person's.
+  `blocked` is never touched: wrong shape, both have a praxis device, the accounts are linked to different PMS patients,
+  a legacy `serverpod_user_info` shared with an admin, or a new account with no email login.
+- **Safety:** one transaction per pair. The plan is recomputed under `FOR UPDATE` and must match the `expect` the user
+  reviewed. Dry run = apply + ROLLBACK. Real runs need `x-allow-destructive: yes` and a typed confirmation
+  (`CLEAN UP <n> ACCOUNTS` / `MERGE <legacyId>`, plus ` ON PRODUCTION` when the host is production). A JSON backup of
+  every changed row is written to `backups/<env>/duplicate-accounts/<ts>/<legacyId>.json` before COMMIT. Each
+  committed pair is appended to `backups/<env>/duplicate-accounts/log.csv` (contains emails, gitignored, 0600).
+
+## Incomplete Registrations (`/api/incomplete-registrations/*`, view `#incomplete-registrations`)
+
+Lists people who started registering but never got an `app_user_info` row (the Users view only shows that table),
+and deletes them so they can register again. Linked from the Users page header. Kinds:
+
+- `request`: `serverpod_auth_idp_email_account_request`. The code was sent, and maybe verified (`createAccountChallengeId`), but `finishRegistration` never ran.
+- `account`: `serverpod_auth_core_user` with no `app_user_info` and no `admin_user_info` by `authUserId`. The email
+  login exists but the app's `createUser` never ran. A legacy (old-app) signup without a profile shows up here too,
+  because the auth migration gave every legacy user an auth user (`oldUserId` from `serverpod_auth_migration_migrated_user`).
+- `legacy`: an un-migrated `serverpod_user_info` that no profile uses. `legacy-request`: `serverpod_email_create_request`. It has no timestamp, so its age is unknown and it can always be deleted.
+
+- **Delete:** a request takes its secret challenges and its `auth_email_code_outbox` row with it. Deleting an account
+  deletes `serverpod_auth_core_user`, which cascades to every `serverpod_auth_*` table. For a legacy account it also
+  deletes the legacy rows (`IR_LEGACY_AUTH_TABLES`) and `serverpod_user_info`. Rows keyed by email (code outbox,
+  legacy create requests, failed sign-ins) are deleted only when no profile uses that email.
+- **Blocked:** any other table with an `authUserId` column that points at the user, or an app or admin profile that uses the legacy `userId`.
+- **Age:** last activity is the creation time or the last session or refresh token. For a migrated account it is the
+  legacy `created`, because the auth user's `createdAt` is the time of the migration. Only items older than the
+  chosen cutoff (at least 1 h) can be deleted. Timestamps are selected `AT TIME ZONE 'UTC'`.
+- **Safety:** same as Duplicate Accounts. One transaction per item, reloaded under `FOR UPDATE`. A dry run rolls back.
+  A real run needs `x-allow-destructive: yes` and `DELETE <n> REGISTRATIONS` (plus ` ON PRODUCTION`). Backups go to
+  `backups/<env>/incomplete-registrations/<ts>/<kind>-<id>.json`, and every item is logged in `log.csv` (gitignored, 0600).

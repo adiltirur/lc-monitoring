@@ -408,6 +408,32 @@ section.lc-destructive.opacity-40 { opacity: .78; }
 .mo-pre { margin: 0; max-height: 360px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
 .mo-kv { margin-top: var(--s-3); }
 
+/* ── Duplicate accounts ──────────────────────────────────────── */
+.da-table td { vertical-align: top; height: auto; padding-top: 10px; padding-bottom: 10px; }
+.da-counts { font-size: 12px; line-height: 1.5; }
+.da-data { font-weight: 700; color: var(--ink); }
+.da-err { color: var(--red); font-size: 12.5px; }
+.da-warn { margin-top: 4px; color: rgb(var(--tw-amber-700)); font-size: 12px; }
+.da-note { margin-top: var(--s-3); font-size: 12.5px; color: var(--ink-2); }
+.da-dry { margin-top: var(--s-3); padding: var(--s-3); background: var(--surface-2); border-radius: var(--r); font-size: 12.5px; line-height: 1.6; }
+.mot-pick { display: grid; grid-template-columns: minmax(0, 420px) auto; gap: var(--s-3); align-items: end; }
+.mot-source { display: flex; justify-content: space-between; align-items: center; gap: var(--s-3); margin-top: var(--s-4); padding: var(--s-3); background: var(--surface-2); border-radius: var(--r); word-break: break-word; }
+.mot-form { margin-top: var(--s-4); }
+.mot-to { display: grid; grid-template-columns: repeat(2, minmax(0, 320px)); gap: var(--s-3); margin-bottom: var(--s-4); }
+.mot-params { display: flex; flex-direction: column; gap: 6px; }
+.mot-param { display: grid; grid-template-columns: 220px minmax(0, 1fr) 30px; gap: var(--s-2); align-items: start; }
+.mot-hint { font-size: 11px; margin-top: 2px; }
+.mot-note { font-size: 12.5px; margin-top: var(--s-3); }
+.mot-error { margin-top: var(--s-3); color: var(--red); font-size: 12.5px; }
+.mot-check { margin-top: var(--s-3); font-size: 12.5px; }
+.mot-actions { display: flex; justify-content: flex-end; margin-top: var(--s-4); }
+
+/* ── Incomplete registrations ────────────────────────────────── */
+.ir-table td { vertical-align: top; height: auto; padding-top: 10px; padding-bottom: 10px; }
+.ir-table tr.ir-recent td { opacity: .6; }
+.ir-block { margin-top: 4px; color: var(--red); font-size: 12px; }
+.ir-warn { margin-top: 4px; color: rgb(var(--tw-amber-700)); font-size: 12px; }
+
 /* ─── FHIR Scrubber ─────────────────────────────────────────────────────── */
 .fs-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-4); }
 @media (max-width: 900px) { .fs-grid { grid-template-columns: 1fr; } }

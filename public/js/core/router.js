@@ -22,8 +22,10 @@ function navigate(view) {
   else if (view === 'message-outbox') renderMessageOutbox(content);
   else if (view === 'analytics') renderAnalytics(content);
   else if (view === 'users') renderUsers(content);
+  else if (view === 'incomplete-registrations') renderIncompleteRegistrations(content);
   else if (view === 'bookings') renderBookings(content);
   else if (view === 'pms-invitations') renderPmsInvitations(content);
+  else if (view === 'duplicate-accounts') renderDuplicateAccounts(content);
   else if (view === 'query-runner') renderQueryRunner(content);
   else if (view === 'ai-query') renderAIQuery(content);
   else if (view === 'investigations') renderInvestigations(content);
@@ -36,6 +38,7 @@ function navigate(view) {
   else if (view === 'future-calls') renderFutureCalls(content);
   else if (view === 'health') renderHealth(content);
   else if (view === 'db-diagnostics') renderDbDiagnostics(content);
+  else if (view === 'log-cleanup') renderLogCleanup(content);
   else if (view === 'api-keys') renderApiKeys(content);
   else if (view === 'google-business') renderGoogleBusiness(content);
   else if (view === 'monitoring') renderMonitoring(content);
