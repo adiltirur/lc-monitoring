@@ -222,6 +222,119 @@ router.get('/api/message-outbox/templates', async (req, res) => {
   }
 });
 
+// ─── Helpers: template test ───────────────────────────────────────────────────
+// A test send reuses the Brevo payload of an email Core already sent with that
+// template, so the params have the real shape. Only these keys are carried over;
+// anything that could reach another person (cc, bcc, messageVersions) or carries
+// Core-specific headers is dropped. The recipient must be typed in and may not
+// be any of the original recipients.
+const TEST_KEEP_KEYS = ['sender', 'subject', 'replyTo', 'templateId', 'params'];
+const TEST_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function payloadRecipients(payload) {
+  return ['to', 'cc', 'bcc']
+    .flatMap(k => (Array.isArray(payload?.[k]) ? payload[k] : []))
+    .concat((payload?.messageVersions || []).flatMap(v => [...(v.to || []), ...(v.cc || []), ...(v.bcc || [])]))
+    .map(r => String(r?.email || '').trim().toLowerCase())
+    .filter(Boolean);
+}
+
+async function loadSentSample(req, templateId, { offset = 0, id = null } = {}) {
+  const params = [templateId];
+  let where = 'o.channel = 0 AND o.status = 2 AND tpl.id = $1';
+  if (id) { params.push(id); where += ` AND o.id = $${params.length}`; }
+  const rows = await query(
+    req,
+    `SELECT o.id, o.payload, o."sentAt", o."createdAt", count(*) OVER ()::int AS total
+     FROM core_message_outbox o ${TEMPLATE_JOIN}
+     WHERE ${where}
+     ORDER BY o."sentAt" DESC NULLS LAST, o."createdAt" DESC
+     OFFSET ${Math.max(0, parseInt(offset) || 0)} LIMIT 1`,
+    params
+  );
+  if (!rows.length) return null;
+  let payload;
+  try { payload = JSON.parse(rows[0].payload); } catch { payload = null; }
+  return { ...rows[0], payload };
+}
+
+// Latest sent email for a template (offset steps back through older ones).
+router.get('/api/message-outbox/template-test/sample', async (req, res) => {
+  try {
+    const templateId = parseInt(req.query.templateId);
+    if (!Number.isInteger(templateId)) return res.status(400).json({ error: 'templateId required' });
+    const offset = Math.max(0, parseInt(req.query.offset) || 0);
+    const s = await loadSentSample(req, templateId, { offset });
+    if (!s) return res.json({ sample: null, total: 0, offset });
+    if (!s.payload || typeof s.payload !== 'object') return res.status(422).json({ error: `Outbox row ${s.id} has a payload that is not JSON` });
+    const p = s.payload;
+    res.json({
+      total: s.total,
+      offset,
+      sample: {
+        id: s.id,
+        sentAt: s.sentAt,
+        createdAt: s.createdAt,
+        to: p.to || [],
+        sender: p.sender || null,
+        subject: p.subject || null,
+        replyTo: p.replyTo || null,
+        params: p.params && typeof p.params === 'object' ? p.params : {},
+        attachments: (p.attachment || []).map(a => a.name || a.url || 'attachment'),
+        droppedKeys: Object.keys(p).filter(k => !TEST_KEEP_KEYS.includes(k) && k !== 'to' && k !== 'attachment'),
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Sends one test email straight through Brevo (not via the outbox).
+router.post('/api/message-outbox/template-test/send', async (req, res) => {
+  const key = process.env.BREVO_API_KEY;
+  if (!key) return res.status(500).json({ error: 'BREVO_API_KEY is not set in helper/.env' });
+  try {
+    const { sourceId = null, to = {}, params = {}, includeAttachments = false } = req.body || {};
+    const templateId = parseInt(req.body?.templateId);
+    if (!Number.isInteger(templateId)) return res.status(400).json({ error: 'templateId required' });
+    const email = String(to.email || '').trim();
+    if (!TEST_EMAIL_RE.test(email)) return res.status(400).json({ error: 'Enter a valid recipient email' });
+    if (params === null || typeof params !== 'object' || Array.isArray(params)) return res.status(400).json({ error: 'params must be an object' });
+
+    let source = null;
+    if (sourceId) {
+      source = await loadSentSample(req, templateId, { id: sourceId });
+      if (!source || !source.payload) return res.status(404).json({ error: `Sent outbox row ${sourceId} for template ${templateId} not found` });
+      if (payloadRecipients(source.payload).includes(email.toLowerCase())) {
+        return res.status(400).json({ error: 'The recipient must be changed — this address received the original email' });
+      }
+    }
+
+    const payload = {};
+    for (const k of TEST_KEEP_KEYS) if (source?.payload?.[k] !== undefined) payload[k] = source.payload[k];
+    payload.templateId = templateId;
+    payload.to = [{ email, ...(to.name ? { name: String(to.name) } : {}) }];
+    if (Object.keys(params).length) payload.params = params; else delete payload.params;
+    if (includeAttachments && Array.isArray(source?.payload?.attachment) && source.payload.attachment.length) {
+      payload.attachment = source.payload.attachment;
+    }
+    payload.tags = ['lc-helper-template-test'];
+
+    const r = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: { 'api-key': key, 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const text = await r.text();
+    let parsed;
+    try { parsed = JSON.parse(text); } catch (_) { parsed = { raw: text }; }
+    if (!r.ok) return res.status(r.status).json({ error: `Brevo ${r.status}: ${parsed.message || text}`, brevo: parsed });
+    res.json({ ok: true, messageId: parsed.messageId || null });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get('/api/message-outbox/:id', async (req, res) => {
   try {
     const rows = await query(
