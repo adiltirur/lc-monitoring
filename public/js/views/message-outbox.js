@@ -192,6 +192,7 @@ async function renderMessageOutbox(el, page = 1) {
       apiFetch(`/api/message-outbox/templates`).then(r => r.templates || []).catch(() => []),
     ]);
     setConnStatus('connected');
+    window._moTemplates = templates;
 
     const statusOpts = [{value:'',label:'All Statuses'}, ...MO_STATUSES.map(s => ({value:s, label:s}))];
     const channelOpts = [{value:'',label:'All Channels'}, ...MO_CHANNELS.map(c => ({value:c, label:c}))];
@@ -248,9 +249,11 @@ async function renderMessageOutbox(el, page = 1) {
       pageHero('Message Outbox', {
         sub: 'Brevo email/SMS durable queue — monitor, retry, kill',
         live: true,
-        actions: (moPendingTotal(stats) ? btnGhost(`Send all pending (${moPendingTotal(stats)})`, 'sendAllPendingMessageOutbox()', { icon: 'send' }) : '') +
+        actions: btnGhost('Test template', 'motToggle()', { icon: 'science' }) +
+          (moPendingTotal(stats) ? btnGhost(`Send all pending (${moPendingTotal(stats)})`, 'sendAllPendingMessageOutbox()', { icon: 'send' }) : '') +
           `<button class="btn btn-ghost" onclick="renderMessageOutbox(document.getElementById('content'))" title="Refresh"><span class="material-symbols-outlined">refresh</span></button>`,
       }) +
+      '<div id="motPanel"></div>' +
       moStatsBanner(stats) +
       moBrevoStats(stats && stats.brevo) +
       filterCard(filterHtml, 6) +
@@ -261,6 +264,7 @@ async function renderMessageOutbox(el, page = 1) {
       tr.addEventListener('click', () => toggleMessageOutboxDetail(tr, tr.dataset.id));
     });
 
+    motRender();
     renderPagination(document.getElementById('moPaging'), data, (p) => renderMessageOutbox(document.getElementById('content'), p));
   } catch (e) {
     setConnStatus('error');
